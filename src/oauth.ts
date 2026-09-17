@@ -42,11 +42,13 @@ export class GoogleOAuth {
     });
     if (!response.ok) throw new Error('Google authorization could not be completed.');
     const tokens = await response.json() as any;
+    const expires = Number(tokens.expires_in);
+    const scopes = String(tokens.scope ?? '').split(/[\s+,]+/).filter(Boolean);
     const payload = await this.verify(tokens.id_token, this.config.GOOGLE_CLIENT_ID);
     if (payload.nonce !== login.nonce || payload.email_verified !== true || typeof payload.hd !== 'string' || !this.config.domains.includes(payload.hd.toLowerCase()) || typeof payload.email !== 'string' || !payload.sub) throw new Error('A verified account in your allowed Google Workspace organization is required.');
-    if (!tokens.access_token || !tokens.refresh_token || !Number.isFinite(tokens.expires_in) || !String(tokens.scope).split(' ').includes('https://www.googleapis.com/auth/gmail.modify')) throw new Error('Gmail access was not fully granted.');
+    if (!tokens.access_token || !tokens.refresh_token || !Number.isFinite(expires) || expires <= 0 || (scopes.length > 0 && !scopes.includes('https://www.googleapis.com/auth/gmail.modify'))) throw new Error('Gmail access was not fully granted.');
     const connection: Connection = { id: uid(), subject: payload.sub, email: payload.email,
-      encryptedTokens: this.vault.seal({ access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_at: Date.now() + tokens.expires_in * 1000 }, ownerKey(login.actor)) };
+      encryptedTokens: this.vault.seal({ access_token: tokens.access_token, refresh_token: tokens.refresh_token, expires_at: Date.now() + expires * 1000 }, ownerKey(login.actor)) };
     return { actor: login.actor, connection };
   }
 }

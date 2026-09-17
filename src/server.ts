@@ -55,7 +55,12 @@ export function createServer(config: Pick<Config, 'SLACK_SIGNING_SECRET' | 'SLAC
       const result = await oauth.finish(params.state, params.code, cookie);
       await store.enqueue(`connection:${result.connection.id}`, result.actor, { type: 'connection', connection: result.connection });
       return reply.type('text/plain').send('Return to your private Slack conversation and confirm the mailbox address to finish connecting.');
-    } catch { return reply.code(400).type('text/plain').send('Gmail connection failed or was cancelled. Request a new connection link in Slack.'); }
+    } catch (error) {
+      const known = error instanceof Error ? error.message : '';
+      const safe = ['Incomplete authorization', 'Authorization state is expired or already used.', 'Authorization must finish in the browser where it started.', 'Google authorization could not be completed.', 'A verified account in your allowed Google Workspace organization is required.', 'Gmail access was not fully granted.'].includes(known)
+        ? known : 'Gmail connection failed or was cancelled. Request a new connection link in Slack.';
+      return reply.code(400).type('text/plain').send(`${safe} Request a new connection link in Slack.`);
+    }
   });
   return app;
 }

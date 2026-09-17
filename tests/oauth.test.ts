@@ -49,3 +49,12 @@ it('rejects an ID token with the wrong nonce', async () => {
   const h = setup({ nonce: 'other-login' }), flow = await h.begin();
   await expect(h.oauth.finish(flow.state, 'code', flow.cookie)).rejects.toThrow();
 });
+it('accepts a Google token response that omits scope or sends expires_in as a string', async () => {
+  const vault = new Vault(randomBytes(32)); let nonce = '';
+  const fetcher = (async () => Response.json({ id_token: 'jwt', access_token: 'access', refresh_token: 'refresh', expires_in: '3600' })) as typeof fetch;
+  const oauth = new GoogleOAuth(config, store, vault, fetcher, async () => ({ sub: 'google-alice', email: 'alice@example.com', email_verified: true, hd: 'example.com', nonce }));
+  const invitation = await oauth.invitation(actor), start = await oauth.start(new URL(invitation).searchParams.get('ticket')!);
+  nonce = new URL(start.url).searchParams.get('nonce')!;
+  const result = await oauth.finish(new URL(start.url).searchParams.get('state')!, 'code', start.cookie);
+  expect(result.connection.email).toBe('alice@example.com');
+});
