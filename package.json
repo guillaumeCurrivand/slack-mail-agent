@@ -1,0 +1,33 @@
+{
+  "name": "slack-mail-agent",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "dev": "tsx watch src/main.ts",
+    "build": "tsc -p tsconfig.json",
+    "start": "node dist/main.js",
+    "test": "vitest run",
+    "check": "tsc --noEmit -p tsconfig.json",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "fastify": "^5.0.0",
+    "html-to-text": "^9.0.0",
+    "jose": "^6.0.0",
+    "pg": "^8.0.0",
+    "zod": "^4.0.0"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "^0.3.0",
+    "@types/html-to-text": "^9.0.0",
+    "@types/node": "^24.0.0",
+    "@types/pg": "^8.0.0",
+    "tsx": "^4.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^4.1.11"
+  }
+}
