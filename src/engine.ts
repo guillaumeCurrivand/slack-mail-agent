@@ -29,6 +29,7 @@ export class Engine {
       state.handled.push(eventId); await this.d.store.save(actor, state);
     } catch (error) {
       // Do not expose provider payloads, tokens, email content, database errors, or raw stack traces.
+      console.error('job failed', error instanceof Error ? error.message : 'unknown');
       const message = error instanceof BudgetExceeded ? error.message : 'This request could not finish. No additional changes will be attempted automatically. Use report to inspect any completed or uncertain actions, then try again or reconnect if authorization expired.';
       await this.send(actor, message);
       state.handled.push(eventId); await this.d.store.save(actor, state);

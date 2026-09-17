@@ -66,7 +66,7 @@ export class OpenAI implements Intelligence {
     if (Buffer.byteLength(body.input, 'utf8') > 120_000) throw new Error('This request is too large. Please shorten it or reduce the rule set.');
     const headers = { Authorization: `Bearer ${this.key}`, 'Content-Type': 'application/json' };
     const countResponse = await this.fetcher('https://api.openai.com/v1/responses/input_tokens', { method: 'POST', headers, body: JSON.stringify(body), signal: AbortSignal.timeout(30_000) });
-    if (!countResponse.ok) throw new Error('Unable to verify AI input size. Please try again later.');
+    if (!countResponse.ok) throw new Error(`Unable to verify AI input size (${countResponse.status}). Please try again later.`);
     const counted = await countResponse.json() as { input_tokens: number };
     if (!Number.isSafeInteger(counted.input_tokens) || counted.input_tokens < 0) throw new Error('Invalid AI token count');
     // Reserve exact input plus bounded output before a paid generation. A failed/ambiguous call keeps its reservation.
@@ -75,7 +75,7 @@ export class OpenAI implements Intelligence {
       method: 'POST', headers, signal: AbortSignal.timeout(90_000),
       body: JSON.stringify({ ...body, store: false, max_output_tokens: maxOutput, service_tier: 'default', truncation: 'disabled' }),
     });
-    if (!response.ok) throw new Error('The AI request failed; its allowance remains reserved until usage can be reconciled.');
+    if (!response.ok) throw new Error(`The AI request failed (${response.status}); its allowance remains reserved until usage can be reconciled.`);
     const result = await response.json() as any;
     if (Number.isSafeInteger(result.usage?.input_tokens) && Number.isSafeInteger(result.usage?.output_tokens) && result.usage.input_tokens >= 0 && result.usage.output_tokens >= 0) {
       await this.budget.settle(reservation, costMicro(result.usage.input_tokens, result.usage.output_tokens));
