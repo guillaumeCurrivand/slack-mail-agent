@@ -77,3 +77,30 @@ it('keeps existing buttons on a Reply', async () => {
     elements: [{ type: 'button', text: { type: 'plain_text', text: 'Disconnect Gmail' }, action_id: 'disconnect', value: 'none', style: 'danger' }],
   });
 });
+
+it('encodes a Card as a plain-text kind header plus markdown body', async () => {
+  const body = await post({ kind: 'Help', text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' });
+  expect(body.blocks.find((block: { type: string }) => block.type === 'header')).toMatchObject({
+    type: 'header',
+    text: { type: 'plain_text', text: 'Help' },
+  });
+  expect(body.blocks.find((block: { type: string }) => block.type === 'markdown')).toEqual({
+    type: 'markdown',
+    text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.',
+  });
+  expect(body.blocks.some((block: { type: string }) => block.type === 'section')).toBe(false);
+  expect(JSON.stringify(body.blocks)).not.toMatch(/mrkdwn/);
+});
+
+it('keeps existing buttons on a Card after the kind header and markdown body', async () => {
+  const body = await post({
+    kind: 'Help',
+    text: 'Disconnect Gmail and cancel all pending previews?',
+    buttons: [{ label: 'Disconnect Gmail', action: 'disconnect', value: 'none', style: 'danger' }],
+  });
+  expect(body.blocks.map((block: { type: string }) => block.type)).toEqual(['header', 'markdown', 'actions']);
+  expect(body.blocks[2]).toEqual({
+    type: 'actions',
+    elements: [{ type: 'button', text: { type: 'plain_text', text: 'Disconnect Gmail' }, action_id: 'disconnect', value: 'none', style: 'danger' }],
+  });
+});

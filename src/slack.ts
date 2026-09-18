@@ -32,10 +32,11 @@ const plainReading = (text: string) => text
 export class Slack implements Messenger {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
   async send(actor: Actor, message: AgentMessage) {
-    const text = sanitizeReply(message.text);
+    const text = message.kind ? message.text : sanitizeReply(message.text);
     const buttons = message.buttons ?? [];
     const blocks: any[] = [];
-    // Sanitized markdown, not mrkdwn: mentions and invented links must not survive as clickable or notifyable markup.
+    // Sanitized markdown, not mrkdwn. Cards add a plain-text kind header; Replies have none.
+    if (message.kind) blocks.push({ type: 'header', text: { type: 'plain_text', text: message.kind } });
     if (text) blocks.push({ type: 'markdown', text: text.slice(0, 12_000) });
     if (buttons.length) blocks.push({ type: 'actions', elements: buttons.map(b => ({ type: 'button', text: { type: 'plain_text', text: b.label.slice(0, 75) }, action_id: b.action, value: b.value, ...(b.style ? { style: b.style } : {}) })) });
     const response = await this.fetcher('https://slack.com/api/chat.postMessage', {

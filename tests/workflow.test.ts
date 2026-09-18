@@ -178,6 +178,38 @@ describe('shared AI allowance', () => {
   });
 });
 
+describe('Help Card', () => {
+  const expectHelpCard = (message: AgentMessage) => {
+    expect(message.kind).toBe('Help');
+    expect(message.text).toMatch(/connect/i);
+    expect(message.text).toMatch(/starters/i);
+    expect(message.text).toMatch(/rules/i);
+    expect(message.text).toMatch(/sort/i);
+    expect(message.text).toMatch(/report/i);
+    expect(message.text).toMatch(/budget/i);
+    expect(message.text).toMatch(/disconnect/i);
+    expect(message.text).toMatch(/approv/i);
+  };
+
+  it('sends hi and help as a Card with kind header Help', async () => {
+    for (const text of ['hi', 'help']) {
+      const h = harness();
+      await h.engine.handle(alice, { type: 'text', text }, uid());
+      expectHelpCard(h.messages.at(-1)!);
+    }
+  });
+
+  it('falls back to the Help Card when the model Reply is empty or missing', async () => {
+    const empty = harness(undefined, 'yes', { converse: async () => ({ intent: 'reply', reply: '', rule: null, ruleId: null, runId: null, messageId: null, correction: null }) });
+    await empty.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
+    expectHelpCard(empty.messages.at(-1)!);
+
+    const missing = harness(undefined, 'yes', { converse: async () => ({ intent: 'reply', reply: undefined as unknown as string, rule: null, ruleId: null, runId: null, messageId: null, correction: null }) });
+    await missing.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
+    expectHelpCard(missing.messages.at(-1)!);
+  });
+});
+
 describe('Agent Replies', () => {
   it('posts talk as a Reply with no kind header and stores the model string', async () => {
     const h = harness();

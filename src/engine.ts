@@ -16,6 +16,7 @@ const HELP = 'I can sort your latest 100 inbox messages after you approve a prev
 export class Engine {
   constructor(private d: EngineDependencies) {}
   private send(actor: Actor, text: string, buttons?: Button[]) { return this.d.messenger.send(actor, { text, buttons }); }
+  private sendHelp(actor: Actor) { return this.d.messenger.send(actor, { kind: 'Help', text: HELP }); }
   async handle(actor: Actor, event: Event, eventId: string) {
     const state = await this.d.store.load(actor); prune(state);
     if (state.handled.includes(eventId)) return;
@@ -41,7 +42,7 @@ export class Engine {
   }
   private async text(actor: Actor, state: UserState, event: Extract<Event, { type: 'text' }>, eventId: string) {
     const text = event.text.trim(), command = text.toLowerCase();
-    if (command === 'help' || command === 'hi' || command === 'hello') return this.send(actor, HELP);
+    if (command === 'help' || command === 'hi' || command === 'hello') return this.sendHelp(actor);
     if (command === 'disconnect') {
       return this.send(actor, 'Disconnect Gmail and cancel all pending previews? Saved rules remain. You can also revoke the app from your Google account.', [{ label: 'Disconnect Gmail', action: 'disconnect', value: state.connection?.id ?? 'none', style: 'danger' }]);
     }
@@ -83,7 +84,7 @@ export class Engine {
       case 'correction': return this.correction(actor, state, intent);
       default:
         state.history.push({ role: 'assistant', content: intent.reply, at: new Date().toISOString() });
-        return this.send(actor, intent.reply || HELP);
+        return intent.reply ? this.send(actor, intent.reply) : this.sendHelp(actor);
     }
   }
   private async propose(actor: Actor, state: UserState, value: Omit<Draft, 'id' | 'created'>) {
