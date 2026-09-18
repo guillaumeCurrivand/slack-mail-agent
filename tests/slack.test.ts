@@ -119,6 +119,22 @@ it('keeps the engine-owned Connect URL as a clickable https link after sanitizin
   expect(body.unfurl_links).toBe(false);
 });
 
+it('posts escaped email interpolation as literal markdown under a Details kind header', async () => {
+  const body = await post({
+    kind: 'Details',
+    text: 'Run abc\\-123 — page 1/1\n\n1. \\*\\*FREE\\*\\*\nFrom: \\[click\\]\\(http://evil\\)\nMessage: \\*\\*id\\*\\*',
+  });
+  expect(body.blocks[0]).toEqual({ type: 'header', text: { type: 'plain_text', text: 'Details' } });
+  expect(body.blocks[1]).toEqual({
+    type: 'markdown',
+    text: 'Run abc\\-123 — page 1/1\n\n1. \\*\\*FREE\\*\\*\nFrom: \\[click\\]\\(http://evil\\)\nMessage: \\*\\*id\\*\\*',
+  });
+  expect(body.blocks.some((block: { type: string }) => block.type === 'section')).toBe(false);
+  expect(body.blocks.some((block: { type: string }) => block.type === 'table')).toBe(false);
+  expect(JSON.stringify(body.blocks)).not.toMatch(/mrkdwn/);
+  expect(body.text).toBe('Run abc-123 — page 1/1\n\n1. **FREE**\nFrom: [click](http://evil)\nMessage: **id**');
+});
+
 it('posts escaped rule interpolation as literal markdown under a Your rules kind header', async () => {
   const body = await post({
     kind: 'Your rules',

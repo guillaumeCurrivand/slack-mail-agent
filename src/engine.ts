@@ -178,7 +178,8 @@ export class Engine {
   }
   private preview(actor: Actor, run: Run) {
     const actionable = run.items.filter(i => !i.plan.needsDecision && i.status === 'pending');
-    return this.send(actor, `Preview ${run.id}\n${run.items.length} messages reviewed.\nLabels proposed on ${actionable.filter(i => i.plan.labels.length || i.plan.removeLabels?.length).length}; archive ${actionable.filter(i => i.plan.disposition === 'archive').length}; TRASH ${actionable.filter(i => i.plan.disposition === 'trash').length}.\nNeeds your decision: ${run.items.filter(i => i.plan.needsDecision && i.status === 'pending').length}. These are excluded unless you explicitly include them.\nNew labels: ${run.newLabels?.join(', ') || 'none'}.\nReview message details before confirming. No changes yet.`, [
+    const newLabelText = run.newLabels?.length ? run.newLabels.map(escapeCardValue).join(', ') : 'none';
+    return this.sendCard(actor, 'Preview', `Run ${escapeCardValue(run.id)}\n\n- ${run.items.length} messages reviewed\n- Labels proposed on ${actionable.filter(i => i.plan.labels.length || i.plan.removeLabels?.length).length}\n- archive ${actionable.filter(i => i.plan.disposition === 'archive').length}\n- TRASH ${actionable.filter(i => i.plan.disposition === 'trash').length}\n- Needs your decision: ${run.items.filter(i => i.plan.needsDecision && i.status === 'pending').length}. These are excluded unless you explicitly include them.\n- New labels: ${newLabelText}\n\nReview message details before confirming. No changes yet.`, [
       { label: 'Review messages', action: 'details', value: `${run.id}:0` },
       { label: 'Confirm proposed changes', action: 'confirm_run', value: run.id, style: 'primary' },
       { label: 'Cancel', action: 'cancel_run', value: run.id },
@@ -191,12 +192,12 @@ export class Engine {
     const items = run.items.slice(page * 5, page * 5 + 5), buttons: Button[] = [];
     const text = items.map((i, n) => {
       if (run.status === 'preview' && i.plan.needsDecision && i.status === 'pending') buttons.push({ label: `Include proposal ${n + 1}`, action: 'accept_item', value: `${id}:${i.id}:${page}` }, { label: `Leave ${n + 1} unchanged`, action: 'skip_item', value: `${id}:${i.id}:${page}` });
-      return `${n + 1}. ${i.subject || '(no subject)'}\nFrom: ${i.from}\nMessage: ${i.id}\n${i.plan.needsDecision ? 'NEEDS YOUR DECISION — ' : ''}${i.plan.disposition.toUpperCase()}; add labels: ${i.plan.labels.join(', ') || 'none'}; remove: ${i.plan.removeLabels?.join(', ') || 'none'}\n${i.plan.reasons.join('\n')}\nStatus: ${i.status}${i.note ? ` — ${i.note}` : ''}`;
+      return `${n + 1}. ${escapeCardValue(i.subject) || '(no subject)'}\nFrom: ${escapeCardValue(i.from)}\nMessage: ${escapeCardValue(i.id)}\n${i.plan.needsDecision ? 'NEEDS YOUR DECISION — ' : ''}${escapeCardValue(i.plan.disposition.toUpperCase())}; add labels: ${i.plan.labels.length ? i.plan.labels.map(escapeCardValue).join(', ') : 'none'}; remove: ${i.plan.removeLabels?.length ? i.plan.removeLabels.map(escapeCardValue).join(', ') : 'none'}\n${i.plan.reasons.map(escapeCardValue).join('\n')}\nStatus: ${escapeCardValue(i.status)}${i.note ? ` — ${escapeCardValue(i.note)}` : ''}`;
     }).join('\n\n');
     if (page > 0) buttons.push({ label: 'Previous', action: 'details', value: `${id}:${page - 1}` });
     if ((page + 1) * 5 < run.items.length) buttons.push({ label: 'Next', action: 'details', value: `${id}:${page + 1}` });
     if (run.status === 'preview') buttons.push({ label: 'Confirm reviewed proposal', action: 'confirm_run', value: id, style: 'primary' });
-    return this.send(actor, `Run ${id} — page ${page + 1}/${Math.max(1, Math.ceil(run.items.length / 5))}\n\n${text || 'No messages.'}`, buttons);
+    return this.sendCard(actor, 'Details', `Run ${escapeCardValue(id)} — page ${page + 1}/${Math.max(1, Math.ceil(run.items.length / 5))}\n\n${text || 'No messages.'}`, buttons);
   }
   private async apply(actor: Actor, state: UserState, run: Run) {
     if (!['preview', 'applying'].includes(run.status)) return this.report(actor, state, run.id);
@@ -252,7 +253,7 @@ export class Engine {
     const run = state.runs.find(r => r.id === id);
     if (!run) return this.send(actor, 'No retained run is available.');
     const counts = new Map<string, number>(); for (const item of run.items) counts.set(item.status, (counts.get(item.status) ?? 0) + 1);
-    return this.send(actor, `Run ${run.id}: ${run.status}\n${[...counts].map(([s, n]) => `${s}: ${n}`).join('\n')}\nUnknown outcomes require inspecting Gmail. Undo skips messages changed since the agent acted.`, [
+    return this.sendCard(actor, 'Report', `Run ${escapeCardValue(run.id)}: ${escapeCardValue(run.status)}\n${[...counts].map(([s, n]) => `- ${escapeCardValue(s)}: ${n}`).join('\n')}\nUnknown outcomes require inspecting Gmail. Undo skips messages changed since the agent acted.`, [
       { label: 'Details', action: 'details', value: `${run.id}:0` },
       ...(run.status === 'done' ? [{ label: 'Undo this run', action: 'undo_run', value: run.id } as Button] : []),
     ]);

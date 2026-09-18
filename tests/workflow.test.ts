@@ -5,7 +5,7 @@ import { emptyState, starterRules, uid, type Actor, type Mail, type Rule } from 
 import { Engine } from '../src/engine.js';
 import type { Mailbox, Mutation } from '../src/gmail.js';
 import { schema, Store, type Sql } from '../src/store.js';
-import type { AgentMessage, Messenger } from '../src/slack.js';
+import { escapeCardValue, type AgentMessage, type Messenger } from '../src/slack.js';
 
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
@@ -403,6 +403,178 @@ describe('Rules Cards', () => {
     await saved.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
     await action(saved, 'approve_draft', (await store.load(alice)).drafts[0]!.id);
     expect(saved.messages.at(-1)).toEqual({ actor: alice, text: 'Your rule changes are saved. Send sort to create a mailbox preview.', buttons: undefined });
+  });
+});
+
+describe('Run Cards', () => {
+  it('sends Preview as a Card titled Preview with counts as a list and the existing Review, Confirm, and Cancel buttons', async () => {
+    await seed();
+    const h = harness();
+    const run = await scan(h);
+    const message = h.messages.at(-1)!;
+    expect(message.kind).toBe('Preview');
+    expect(message.text).toContain(escapeCardValue(run.id));
+    expect(message.text).toMatch(/^- /m);
+    expect(message.text).toMatch(/1 messages reviewed/);
+    expect(message.text).toMatch(/Labels proposed on 1/);
+    expect(message.text).toMatch(/archive 0/);
+    expect(message.text).toMatch(/TRASH 0/);
+    expect(message.text).toMatch(/Needs your decision: 0/);
+    expect(message.text).toMatch(/excluded unless you explicitly include them/);
+    expect(message.text).toMatch(/New labels: none/);
+    expect(message.text).toMatch(/No changes yet/);
+    expect(message.buttons).toEqual([
+      { label: 'Review messages', action: 'details', value: `${run.id}:0` },
+      { label: 'Confirm proposed changes', action: 'confirm_run', value: run.id, style: 'primary' },
+      { label: 'Cancel', action: 'cancel_run', value: run.id },
+    ]);
+  });
+
+  it('keeps scanning unlabeled and follows it with the Preview Card', async () => {
+    await seed();
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'sort' }, uid());
+    expect(h.messages[0]).toMatchObject({ text: expect.stringMatching(/^Checking 1 inbox messages/) });
+    expect(h.messages[0]!.kind).toBeUndefined();
+    expect(h.messages[1]!.kind).toBe('Preview');
+  });
+
+  it('sends Details as a Card titled Details with at most five numbered items and the existing include, skip, prev, next, and confirm buttons', async () => {
+    await seed();
+    const mailbox = new FakeMailbox();
+    for (let n = 2; n <= 6; n++) mailbox.mails.set(`m${n}`, { id: `m${n}`, from: 'alex@example.com', subject: `Mail ${n}`, body: 'Please act today.', labels: ['INBOX'], historyId: '1' });
+    const h = harness(mailbox, 'uncertain');
+    const run = await scan(h);
+    await action(h, 'details', `${run.id}:0`);
+    const first = h.messages.at(-1)!;
+    expect(first.kind).toBe('Details');
+    expect(first.text).toMatch(/^1\. /m);
+    expect(first.text).toMatch(/^5\. /m);
+    expect(first.text).not.toMatch(/^6\. /m);
+    expect(first.buttons).toEqual([
+      { label: 'Include proposal 1', action: 'accept_item', value: `${run.id}:m1:0` },
+      { label: 'Leave 1 unchanged', action: 'skip_item', value: `${run.id}:m1:0` },
+      { label: 'Include proposal 2', action: 'accept_item', value: `${run.id}:m2:0` },
+      { label: 'Leave 2 unchanged', action: 'skip_item', value: `${run.id}:m2:0` },
+      { label: 'Include proposal 3', action: 'accept_item', value: `${run.id}:m3:0` },
+      { label: 'Leave 3 unchanged', action: 'skip_item', value: `${run.id}:m3:0` },
+      { label: 'Include proposal 4', action: 'accept_item', value: `${run.id}:m4:0` },
+      { label: 'Leave 4 unchanged', action: 'skip_item', value: `${run.id}:m4:0` },
+      { label: 'Include proposal 5', action: 'accept_item', value: `${run.id}:m5:0` },
+      { label: 'Leave 5 unchanged', action: 'skip_item', value: `${run.id}:m5:0` },
+      { label: 'Next', action: 'details', value: `${run.id}:1` },
+      { label: 'Confirm reviewed proposal', action: 'confirm_run', value: run.id, style: 'primary' },
+    ]);
+
+    await action(h, 'details', `${run.id}:1`);
+    const second = h.messages.at(-1)!;
+    expect(second.kind).toBe('Details');
+    expect(second.text).toMatch(/^1\. /m);
+    expect(second.text).not.toMatch(/^2\. /m);
+    expect(second.buttons).toEqual([
+      { label: 'Include proposal 1', action: 'accept_item', value: `${run.id}:m6:1` },
+      { label: 'Leave 1 unchanged', action: 'skip_item', value: `${run.id}:m6:1` },
+      { label: 'Previous', action: 'details', value: `${run.id}:0` },
+      { label: 'Confirm reviewed proposal', action: 'confirm_run', value: run.id, style: 'primary' },
+    ]);
+  });
+
+  it('puts run id and page number in the Details body, not the kind header', async () => {
+    await seed();
+    const h = harness();
+    const run = await scan(h);
+    await action(h, 'details', `${run.id}:0`);
+    const message = h.messages.at(-1)!;
+    expect(message.kind).toBe('Details');
+    expect(message.text).toContain(escapeCardValue(run.id));
+    expect(message.text).toMatch(/page 1\/1/i);
+    expect(message.text).toContain('From:');
+    expect(message.text).toContain('Please act today');
+    expect(message.text).toContain('alex@example\\.com');
+    expect(message.text).toContain('m1');
+  });
+
+  it('sends Report as a Card titled Report with status counts and the existing Details and Undo buttons when those actions are valid', async () => {
+    await seed();
+    const h = harness();
+    const run = await scan(h);
+    await h.engine.handle(alice, { type: 'text', text: 'report' }, uid());
+    const previewReport = h.messages.at(-1)!;
+    expect(previewReport.kind).toBe('Report');
+    expect(previewReport.text).toContain(escapeCardValue(run.id));
+    expect(previewReport.text).toContain('preview');
+    expect(previewReport.text).toMatch(/^- /m);
+    expect(previewReport.text).toMatch(/pending: 1/);
+    expect(previewReport.buttons).toEqual([
+      { label: 'Details', action: 'details', value: `${run.id}:0` },
+    ]);
+
+    await action(h, 'confirm_run', run.id);
+    const done = h.messages.at(-1)!;
+    expect(done.kind).toBe('Report');
+    expect(done.text).toContain('done');
+    expect(done.text).toMatch(/applied: 1/);
+    expect(done.text).toMatch(/Unknown outcomes require inspecting Gmail/);
+    expect(done.text).toMatch(/Undo skips messages changed since the agent acted/);
+    expect(done.buttons).toEqual([
+      { label: 'Details', action: 'details', value: `${run.id}:0` },
+      { label: 'Undo this run', action: 'undo_run', value: run.id },
+    ]);
+
+    await action(h, 'undo_run', run.id);
+    const undone = h.messages.at(-1)!;
+    expect(undone.kind).toBe('Report');
+    expect(undone.text).toContain('undone');
+    expect(undone.buttons).toEqual([
+      { label: 'Details', action: 'details', value: `${run.id}:0` },
+    ]);
+  });
+
+  it('sends a correction as a Preview Card, then an unlabeled does-not-change-future-behavior line', async () => {
+    await seed();
+    const h = harness();
+    const run = await scan(h);
+    const before = h.messages.length;
+    await h.engine.handle(alice, { type: 'text', text: 'keep this', resolved: { intent: 'correction', reply: '', rule: null, ruleId: null, runId: run.id, messageId: 'm1', correction: { addLabels: [], removeLabels: [], disposition: 'keep' } } }, uid());
+    const sent = h.messages.slice(before);
+    expect(sent[0]!.kind).toBe('Preview');
+    expect(sent[1]).toEqual({
+      actor: alice,
+      text: 'This correction does not change future behavior. Tell me how the rule should change and I will propose it separately for approval.',
+      buttons: undefined,
+    });
+    expect(sent[1]!.kind).toBeUndefined();
+  });
+
+  it('escapes email subject, from, and id so markdown stays literal', async () => {
+    const mailbox = new FakeMailbox();
+    mailbox.mails.clear();
+    mailbox.mails.set('**id**', {
+      id: '**id**', from: '[click](http://evil)', subject: '**FREE**',
+      body: 'Please act today.', labels: ['INBOX'], historyId: '1',
+    });
+    const state = emptyState();
+    state.connection = { id: 'connection-a', email: 'alice@example.com', subject: 'google-alice', encryptedTokens: 'sealed' };
+    state.rules = [{ ...starterRules()[0]!, id: 'urgent', labels: ['**Promo**'] }];
+    await store.save(alice, state);
+
+    const h = harness(mailbox);
+    const run = await scan(h);
+    const preview = h.messages.find(m => m.kind === 'Preview')!.text;
+    expect(preview).toContain('\\*\\*Promo\\*\\*');
+    expect(preview).not.toContain('**Promo**');
+
+    await action(h, 'details', `${run.id}:0`);
+    const details = h.messages.at(-1)!.text;
+    expect(details).toMatch(/^1\. /m);
+    expect(details).toContain('\\*\\*FREE\\*\\*');
+    expect(details).not.toContain('**FREE**');
+    expect(details).toContain('From: \\[click\\]\\(http://evil\\)');
+    expect(details).not.toContain('[click](http://evil)');
+    expect(details).toContain('\\*\\*id\\*\\*');
+    expect(details).not.toContain('**id**');
+    expect(details).toContain('\\*\\*Promo\\*\\*');
+    expect(details).toMatch(/^From:/m);
   });
 });
 
