@@ -15,7 +15,7 @@ const HELP = 'I can sort your latest 100 inbox messages after you approve a prev
 
 export class Engine {
   constructor(private d: EngineDependencies) {}
-  private send(actor: Actor, text: string, buttons?: Button[]) { return this.d.messenger.send(actor, text, buttons); }
+  private send(actor: Actor, text: string, buttons?: Button[]) { return this.d.messenger.send(actor, { text, buttons }); }
   async handle(actor: Actor, event: Event, eventId: string) {
     const state = await this.d.store.load(actor); prune(state);
     if (state.handled.includes(eventId)) return;

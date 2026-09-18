@@ -1,0 +1,79 @@
+import { expect, it } from 'vitest';
+import { Slack, type AgentMessage } from '../src/slack.js';
+
+const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+
+async function post(message: AgentMessage) {
+  const posts: any[] = [];
+  const slack = new Slack('token', (async (_url, options: any) => {
+    posts.push(JSON.parse(options.body as string));
+    return Response.json({ ok: true });
+  }) as typeof fetch);
+  await slack.send(actor, message);
+  return posts[0];
+}
+
+it('posts a conversational Reply as a markdown block with no kind header', async () => {
+  const body = await post({ text: 'I can **sort** after you approve a preview.' });
+  expect(body.channel).toBe('DALICE');
+  expect(body.blocks).toEqual([{ type: 'markdown', text: 'I can **sort** after you approve a preview.' }]);
+  expect(body.blocks.some((block: { type: string }) => block.type === 'header')).toBe(false);
+  expect(body.parse).toBe('none');
+  expect(body.unfurl_links).toBe(false);
+  expect(body.unfurl_media).toBe(false);
+});
+
+it('keeps allowed Reply markup', async () => {
+  const text = [
+    '# Heading',
+    '**bold** and *italic* and ~~strike~~',
+    '- list item',
+    '1. numbered',
+    '> a quote',
+    '`code` and',
+    '```',
+    'block',
+    '```',
+  ].join('\n');
+  const body = await post({ text });
+  expect(body.blocks[0]).toEqual({ type: 'markdown', text });
+});
+
+it('strips Slack mentions, images, markdown links, autolinks, and raw URL sequences from Reply text', async () => {
+  const body = await post({
+    text: 'Hi <@U123> <!channel> <!here> <!everyone> <#C99|inbox>. See ![logo](https://evil.example/x.png) and [docs](https://evil.example/docs) plus https://evil.example/bare www.evil.example/site [ref][1] <https://evil.example/auto> <http://evil.example/raw> <mailto:phish@evil.example>.\n[1]: https://evil.example/ref',
+  });
+  const posted = body.blocks[0].text as string;
+  expect(posted).not.toMatch(/<@/);
+  expect(posted).not.toMatch(/<!channel>/);
+  expect(posted).not.toMatch(/<!here>/);
+  expect(posted).not.toMatch(/<!everyone>/);
+  expect(posted).not.toMatch(/<#/);
+  expect(posted).not.toMatch(/!\[[^\]]*\]\(/);
+  expect(posted).not.toMatch(/\[[^\]]*\]\(/);
+  expect(posted).not.toMatch(/https?:\/\//i);
+  expect(posted).not.toMatch(/<http/i);
+  expect(posted).not.toMatch(/mailto:/i);
+  expect(posted).not.toMatch(/\bwww\./i);
+  expect(posted).not.toMatch(/\[[^\]]*]\[[^\]]*]/);
+  expect(posted).toContain('Hi');
+  expect(posted).toContain('See');
+  expect(posted).toContain('logo');
+  expect(posted).toContain('docs');
+});
+
+it('uses a plain reading of the Reply as fallback text', async () => {
+  const body = await post({ text: '# Hello\nThis is **bold** and *italic*.' });
+  expect(body.text).toBe('Hello\nThis is bold and italic.');
+});
+
+it('keeps existing buttons on a Reply', async () => {
+  const body = await post({
+    text: 'Disconnect Gmail?',
+    buttons: [{ label: 'Disconnect Gmail', action: 'disconnect', value: 'none', style: 'danger' }],
+  });
+  expect(body.blocks[1]).toEqual({
+    type: 'actions',
+    elements: [{ type: 'button', text: { type: 'plain_text', text: 'Disconnect Gmail' }, action_id: 'disconnect', value: 'none', style: 'danger' }],
+  });
+});

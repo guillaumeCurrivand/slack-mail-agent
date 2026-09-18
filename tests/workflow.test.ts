@@ -5,7 +5,7 @@ import { emptyState, starterRules, uid, type Actor, type Mail, type Rule } from 
 import { Engine } from '../src/engine.js';
 import type { Mailbox, Mutation } from '../src/gmail.js';
 import { schema, Store, type Sql } from '../src/store.js';
-import type { Button, Messenger } from '../src/slack.js';
+import type { AgentMessage, Messenger } from '../src/slack.js';
 
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
@@ -29,17 +29,20 @@ class FakeMailbox implements Mailbox {
     return this.snapshot(id);
   }
 }
-function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'yes') {
-  const messages: { actor: Actor; text: string; buttons?: Button[] }[] = [];
-  const messenger: Messenger = { async send(actor, text, buttons) { messages.push({ actor, text, buttons }); } };
+function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'yes', extras: { converse?: Intelligence['converse']; alertMicro?: number } = {}) {
+  const messages: Array<AgentMessage & { actor: Actor }> = [];
+  const messenger: Messenger = { async send(actor, message) { messages.push({ actor, ...message }); } };
   const seen: unknown[] = [];
   const intelligence: Intelligence = {
-    async converse(_actor, text, context) { seen.push(context); return { intent: 'reply', reply: `Received ${text}`, rule: null, ruleId: null, runId: null, messageId: null, correction: null }; },
+    async converse(actor, text, context) {
+      if (extras.converse) return extras.converse(actor, text, context);
+      seen.push(context); return { intent: 'reply', reply: `Received ${text}`, rule: null, ruleId: null, runId: null, messageId: null, correction: null };
+    },
     async classify(_actor, _mail, rules) { return rules.map(r => ({ ruleId: r.id, decision, reason: 'Time-sensitive request' })); },
   };
   const budget = new Budget(sql);
-  const engine = new Engine({ store, messenger, intelligence, budget, mailbox: () => mailbox, connectUrl: async () => 'https://agent.example.com/auth/google?ticket=test' });
-  return { engine, mailbox, messages, seen };
+  const engine = new Engine({ store, messenger, intelligence, budget, mailbox: () => mailbox, connectUrl: async () => 'https://agent.example.com/auth/google?ticket=test', alertMicro: extras.alertMicro });
+  return { engine, mailbox, messages, seen, budget };
 }
 async function seed(rules?: Rule[]) {
   const state = emptyState(); state.connection = { id: 'connection-a', email: 'alice@example.com', subject: 'google-alice', encryptedTokens: 'sealed' };
@@ -144,6 +147,12 @@ describe('shared AI allowance', () => {
     expect(requests[1].store).toBe(false);
     expect(requests[1].text.format.strict).toBe(true);
     expect(requests[1].text).toEqual(requests[0].text);
+    expect(requests[0].instructions).toMatch(/standard markdown in reply/i);
+    expect(requests[0].instructions).toMatch(/not Slack mrkdwn/i);
+    expect(requests[0].instructions).toMatch(/Do not mention people or channels/i);
+    expect(requests[0].instructions).toMatch(/do not include links/i);
+    expect(requests[0].instructions).toMatch(/never claim actions were executed/i);
+    expect(requests[0].instructions).toMatch(/Never layout a Preview, Details, Report/i);
     expect(await budget.usage()).toEqual({ charged: 0.000128, reserved: 0 });
   });
   it('accounts for unsettled reservations across users and settles only once', async () => {
@@ -166,5 +175,51 @@ describe('shared AI allowance', () => {
     const ai = new OpenAI('fake', 'gpt-4.1-mini-2025-04-14', budget, fakeFetch);
     await expect(ai.classify(alice, { id: 'x', from: 'a', subject: '', body: 'text', historyId: '1', labels: [] }, [{ ...starterRules()[0]!, id: 'urgent' }])).rejects.toBeInstanceOf(BudgetExceeded);
     expect(calls).toBe(1);
+  });
+});
+
+describe('Agent Replies', () => {
+  it('posts talk as a Reply with no kind header and stores the model string', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'How do I sort?' }, uid());
+    expect(h.messages).toEqual([{ actor: alice, text: 'Received How do I sort?', buttons: undefined }]);
+    expect((await store.load(alice)).history.map(turn => turn.content)).toEqual(['How do I sort?', 'Received How do I sort?']);
+  });
+  it('posts unlabeled engine messages as Replies, not Cards', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'budget' }, uid());
+    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^Team AI usage this UTC calendar month:/) });
+    expect(h.messages.at(-1)!.kind).toBeUndefined();
+
+    await seed();
+    await h.engine.handle(alice, { type: 'text', text: 'sort' }, uid());
+    expect(h.messages.find(m => m.text.startsWith('Checking '))!.kind).toBeUndefined();
+
+    await h.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
+    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringContaining('Project template:') });
+    expect(h.messages.at(-1)!.kind).toBeUndefined();
+    const draftId = (await store.load(alice)).drafts[0]!.id;
+    await action(h, 'cancel_draft', draftId);
+    expect(h.messages.at(-1)).toEqual({ actor: alice, text: 'Proposal cancelled.', buttons: undefined });
+
+    const run = (await store.load(alice)).runs.at(-1)!;
+    await action(h, 'not_a_real_action', run.id);
+    expect(h.messages.at(-1)).toEqual({ actor: alice, text: 'Unsupported action.', buttons: undefined });
+
+    await h.engine.handle(alice, { type: 'text', text: 'keep this', resolved: { intent: 'correction', reply: '', rule: null, ruleId: null, runId: run.id, messageId: 'm1', correction: { addLabels: [], removeLabels: [], disposition: 'keep' } } }, uid());
+    expect(h.messages.at(-1)).toMatchObject({ text: 'This correction does not change future behavior. Tell me how the rule should change and I will propose it separately for approval.' });
+    expect(h.messages.at(-1)!.kind).toBeUndefined();
+  });
+  it('posts errors and the spend alert as unlabeled Replies', async () => {
+    const failing = harness(undefined, 'yes', { converse: async () => { throw new Error('provider exploded'); } });
+    await failing.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
+    expect(failing.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^This request could not finish/) });
+    expect(failing.messages.at(-1)!.kind).toBeUndefined();
+
+    const h = harness(undefined, 'yes', { alertMicro: 0 });
+    await h.budget.reserve(alice, 1);
+    await h.engine.handle(alice, { type: 'text', text: 'budget' }, uid());
+    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringContaining('The team AI allowance has reached its alert threshold') });
+    expect(h.messages.at(-1)!.kind).toBeUndefined();
   });
 });
