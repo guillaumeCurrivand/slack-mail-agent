@@ -270,6 +270,142 @@ describe('Connection Cards', () => {
   });
 });
 
+describe('Rules Cards', () => {
+  it('lists rules, including an empty list, as a Card titled Your rules', async () => {
+    const empty = harness();
+    await empty.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
+    expect(empty.messages.at(-1)).toMatchObject({
+      kind: 'Your rules',
+      text: 'You have no approved rules. Send starters or describe your first rule.',
+    });
+
+    await seed();
+    const listed = harness();
+    await listed.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
+    expect(listed.messages.at(-1)!.kind).toBe('Your rules');
+    expect(listed.messages.at(-1)!.text).toContain('Urgent');
+    expect(listed.messages.at(-1)!.text).toContain('urgent');
+  });
+
+  const proposalRule = {
+    name: 'Alpha', kind: 'sender' as const, category: 'project' as const, condition: 'Sender is Alex',
+    senders: ['alex@example.com'], labels: ['Projects/Alpha'], action: 'keep' as const, examples: ['Alex matches'],
+  };
+
+  it('sends an add or replace Proposal as a Card titled Rule proposal with the existing Approve and Cancel buttons', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'label mail from alex as Projects/Alpha', resolved: { intent: 'propose_rule', reply: '', rule: proposalRule, ruleId: null, runId: null, messageId: null, correction: null } }, uid());
+    const message = h.messages.at(-1)!;
+    expect(message.kind).toBe('Rule proposal');
+    expect(message.text).toContain('Alpha');
+    expect(message.text).toMatch(/No rule changes until you approve/);
+    expect(message.buttons).toEqual([
+      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+    ]);
+    expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);
+
+    await seed();
+    const replace = harness();
+    await replace.engine.handle(alice, { type: 'text', text: 'replace urgent', resolved: { intent: 'propose_rule', reply: '', rule: { ...starterRules()[0]!, name: 'Urgent mail' }, ruleId: 'urgent', runId: null, messageId: null, correction: null } }, uid());
+    expect(replace.messages.at(-1)!.kind).toBe('Rule proposal');
+    expect(replace.messages.at(-1)!.text).toMatch(/Replace existing rule/);
+    expect(replace.messages.at(-1)!.buttons).toEqual([
+      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+    ]);
+  });
+
+  it('sends a delete Proposal as a Card titled Remove rule with the existing Approve and Cancel buttons', async () => {
+    await seed();
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'delete urgent', resolved: { intent: 'delete_rule', reply: '', rule: null, ruleId: 'urgent', runId: null, messageId: null, correction: null } }, uid());
+    const message = h.messages.at(-1)!;
+    expect(message.kind).toBe('Remove rule');
+    expect(message.text).toContain('Urgent');
+    expect(message.buttons).toEqual([
+      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+    ]);
+    expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);
+  });
+
+  it('sends starters as a Rule proposal Card and then an unlabeled mapping follow-up', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
+    expect(h.messages).toHaveLength(2);
+    expect(h.messages[0]).toMatchObject({
+      kind: 'Rule proposal',
+      text: expect.stringMatching(/No rule changes until you approve/),
+      buttons: [
+        { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
+        { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+      ],
+    });
+    expect(h.messages[1]).toEqual({
+      actor: alice,
+      text: 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Tell me the project name and sender email addresses to create your mapping.',
+      buttons: undefined,
+    });
+    expect(h.messages[1]!.kind).toBeUndefined();
+  });
+
+  it('escapes interpolated rule name, condition, senders, labels, and examples so markdown stays literal', async () => {
+    const state = emptyState();
+    state.rules = [{
+      id: 'promo', name: '**FREE**', category: 'custom', kind: 'sender',
+      condition: 'See [click](http://evil)', senders: ['*alerts*@example.com'],
+      labels: ['**Promo**'], action: 'keep', examples: ['[docs](http://evil)'],
+    }];
+    await store.save(alice, state);
+
+    const listed = harness();
+    await listed.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
+    const listedText = listed.messages.at(-1)!.text;
+    expect(listedText).toContain('\\*\\*FREE\\*\\*');
+    expect(listedText).not.toContain('**FREE**');
+    expect(listedText).toContain('\\[click\\]\\(http://evil\\)');
+    expect(listedText).not.toContain('[click](http://evil)');
+    expect(listedText).toContain('\\*alerts\\*@example\\.com');
+    expect(listedText).toContain('\\*\\*Promo\\*\\*');
+    expect(listedText).not.toContain('**Promo**');
+
+    const proposed = harness();
+    await proposed.engine.handle(alice, { type: 'text', text: 'add promo rule', resolved: {
+      intent: 'propose_rule', reply: '',
+      rule: {
+        name: '**FREE**', category: 'custom', kind: 'semantic', condition: 'See [click](http://evil)',
+        senders: [], labels: ['**Promo**'], action: 'keep', examples: ['[docs](http://evil)'],
+      },
+      ruleId: null, runId: null, messageId: null, correction: null,
+    } }, uid());
+    const proposedText = proposed.messages.at(-1)!.text;
+    expect(proposedText).toContain('\\*\\*FREE\\*\\*');
+    expect(proposedText).not.toContain('**FREE**');
+    expect(proposedText).toContain('\\[click\\]\\(http://evil\\)');
+    expect(proposedText).toContain('\\*\\*Promo\\*\\*');
+    expect(proposedText).toContain('\\[docs\\]\\(http://evil\\)');
+    expect(proposedText).not.toContain('[docs](http://evil)');
+
+    const removed = harness();
+    await removed.engine.handle(alice, { type: 'text', text: 'delete promo', resolved: { intent: 'delete_rule', reply: '', rule: null, ruleId: 'promo', runId: null, messageId: null, correction: null } }, uid());
+    expect(removed.messages.at(-1)!.text).toContain('\\*\\*FREE\\*\\*');
+    expect(removed.messages.at(-1)!.text).not.toContain('**FREE**');
+  });
+
+  it('keeps Proposal cancelled and rule-changes-saved acks as unlabeled Replies', async () => {
+    const cancelled = harness();
+    await cancelled.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
+    await action(cancelled, 'cancel_draft', (await store.load(alice)).drafts[0]!.id);
+    expect(cancelled.messages.at(-1)).toEqual({ actor: alice, text: 'Proposal cancelled.', buttons: undefined });
+
+    const saved = harness();
+    await saved.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
+    await action(saved, 'approve_draft', (await store.load(alice)).drafts[0]!.id);
+    expect(saved.messages.at(-1)).toEqual({ actor: alice, text: 'Your rule changes are saved. Send sort to create a mailbox preview.', buttons: undefined });
+  });
+});
+
 describe('Agent Replies', () => {
   it('posts talk as a Reply with no kind header and stores the model string', async () => {
     const h = harness();

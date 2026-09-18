@@ -4,6 +4,8 @@ export type Button = { label: string; action: string; value: string; style?: 'pr
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[] };
 export interface Messenger { send(actor: Actor, message: AgentMessage): Promise<void> }
 export const escapeSlack = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
+const CARD_MARKUP = /[\\`*_{}[\]()#+.!&~>-]/g;
+export const escapeCardValue = (value: string) => value.replace(CARD_MARKUP, '\\$&');
 
 const sanitizeReply = (text: string) => text
   .replace(/!\[([^\]]*)]\([^)]*\)/g, '$1')
@@ -24,17 +26,22 @@ const withMintedConnectUrl = (text: string) => {
   return url ? `${body}\n[${url}](${url})` : body;
 };
 
-const plainReading = (text: string) => text
-  .replace(/```[\s\S]*?```/g, chunk => chunk.replace(/^```\w*\r?\n?/, '').replace(/```$/, ''))
-  .replace(/`([^`]+)`/g, '$1')
-  .replace(/^#{1,6}\s+/gm, '')
-  .replace(/\*\*([^*]+)\*\*/g, '$1')
-  .replace(/__([^_]+)__/g, '$1')
-  .replace(/\*([^*]+)\*/g, '$1')
-  .replace(/_([^_]+)_/g, '$1')
-  .replace(/~~([^~]+)~~/g, '$1')
-  .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
-  .replace(/^>\s?/gm, '');
+const plainReading = (text: string) => {
+  const tokens: string[] = [];
+  return text
+    .replace(/\\([\\`*_{}[\]()#+.!&~>-])/g, (_, ch: string) => { tokens.push(ch); return `\uE000${tokens.length - 1}\uE001`; })
+    .replace(/```[\s\S]*?```/g, chunk => chunk.replace(/^```\w*\r?\n?/, '').replace(/```$/, ''))
+    .replace(/`([^`]+)`/g, '$1')
+    .replace(/^#{1,6}\s+/gm, '')
+    .replace(/\*\*([^*]+)\*\*/g, '$1')
+    .replace(/__([^_]+)__/g, '$1')
+    .replace(/\*([^*]+)\*/g, '$1')
+    .replace(/_([^_]+)_/g, '$1')
+    .replace(/~~([^~]+)~~/g, '$1')
+    .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
+    .replace(/^>\s?/gm, '')
+    .replace(/\uE000(\d+)\uE001/g, (_, i: string) => tokens[Number(i)]!);
+};
 
 export class Slack implements Messenger {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}

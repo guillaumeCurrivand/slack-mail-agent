@@ -1,7 +1,7 @@
 import { Budget, BudgetExceeded, type Intelligence, type Intent } from './ai.js';
 import { labelSchema, ownerKey, planMessage, sameLabels, starterRules, uid, validateRule, type Actor, type Connection, type Draft, type Item, type Run, type UserState } from './domain.js';
 import type { Mailbox } from './gmail.js';
-import type { Button, Messenger } from './slack.js';
+import { escapeCardValue, type Button, type Messenger } from './slack.js';
 import { prune, Store } from './store.js';
 
 export type Event = { type: 'text'; text: string; resolved?: Intent } | { type: 'action'; action: string; value: string } | { type: 'connection'; connection: Connection };
@@ -69,7 +69,7 @@ export class Engine {
         await this.propose(actor, state, { kind: 'rules', rules: starterRules() });
         return this.send(actor, 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Tell me the project name and sender email addresses to create your mapping.');
       }
-      case 'rules': return this.send(actor, state.rules.length ? state.rules.map(r => `${r.name} [${r.id}]\n${r.condition}\nSenders: ${r.senders.join(', ') || 'semantic matching'}\nLabels: ${r.labels.join(', ') || 'none'}; action: ${r.action}`).join('\n\n') : 'You have no approved rules. Send starters or describe your first rule.');
+      case 'rules': return this.sendCard(actor, 'Your rules', state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nSenders: ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : 'semantic matching'}\nLabels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}`).join('\n\n') : 'You have no approved rules. Send starters or describe your first rule.');
       case 'budget': { const usage = await this.d.budget.usage(); return this.send(actor, `Team AI usage this UTC calendar month: $${usage.charged.toFixed(4)} recorded, $${usage.reserved.toFixed(4)} reserved. Hosting is billed separately. Uncertain requests retain their reservation.`); }
       case 'sort': return this.scan(actor, state, eventId);
       case 'report': return this.report(actor, state, intent.runId ?? state.runs.at(-1)?.id);
@@ -91,9 +91,9 @@ export class Engine {
   private async propose(actor: Actor, state: UserState, value: Omit<Draft, 'id' | 'created'>) {
     const draft: Draft = { ...value, id: uid(), created: new Date().toISOString() };
     state.drafts.push(draft); await this.d.store.save(actor, state);
-    const description = draft.kind === 'delete' ? `Remove rule ${state.rules.find(r => r.id === draft.ruleId)?.name}?` :
-      `${draft.replaceId ? 'Replace existing rule with' : 'Proposed rules'}:\n\n${draft.rules!.map(r => `${r.name}\n${r.condition}\n${r.senders.length ? `Senders: ${r.senders.join(', ')}\n` : ''}Labels: ${r.labels.join(', ') || 'none'}; action: ${r.action}\nExamples: ${r.examples.join(' | ')}`).join('\n\n')}`;
-    return this.send(actor, `${description}\n\nNo rule changes until you approve.`, [{ label: 'Approve rule changes', action: 'approve_draft', value: draft.id, style: 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
+    const description = draft.kind === 'delete' ? `Remove rule ${escapeCardValue(state.rules.find(r => r.id === draft.ruleId)?.name ?? '')}?` :
+      `${draft.replaceId ? 'Replace existing rule with' : 'Proposed rules'}:\n\n${draft.rules!.map(r => `${escapeCardValue(r.name)}\n${escapeCardValue(r.condition)}\n${r.senders.length ? `Senders: ${r.senders.map(escapeCardValue).join(', ')}\n` : ''}Labels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}\nExamples: ${r.examples.map(escapeCardValue).join(' | ')}`).join('\n\n')}`;
+    return this.sendCard(actor, draft.kind === 'delete' ? 'Remove rule' : 'Rule proposal', `${description}\n\nNo rule changes until you approve.`, [{ label: 'Approve rule changes', action: 'approve_draft', value: draft.id, style: 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
   }
   private async action(actor: Actor, state: UserState, action: string, value: string) {
     if (action === 'approve_draft' || action === 'cancel_draft') {

@@ -118,3 +118,14 @@ it('keeps the engine-owned Connect URL as a clickable https link after sanitizin
   expect(body.parse).toBe('none');
   expect(body.unfurl_links).toBe(false);
 });
+
+it('posts escaped rule interpolation as literal markdown under a Your rules kind header', async () => {
+  const body = await post({
+    kind: 'Your rules',
+    text: '\\*\\*FREE\\*\\*\nSee \\[click\\]\\(http://evil\\)',
+  });
+  expect(body.blocks[0]).toEqual({ type: 'header', text: { type: 'plain_text', text: 'Your rules' } });
+  expect(body.blocks[1]).toEqual({ type: 'markdown', text: '\\*\\*FREE\\*\\*\nSee \\[click\\]\\(http://evil\\)' });
+  expect(body.blocks.some((block: { type: string }) => block.type === 'section')).toBe(false);
+  expect(body.text).toBe('**FREE**\nSee [click](http://evil)');
+});
