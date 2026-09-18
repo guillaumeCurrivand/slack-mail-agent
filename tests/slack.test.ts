@@ -104,3 +104,17 @@ it('keeps existing buttons on a Card after the kind header and markdown body', a
     elements: [{ type: 'button', text: { type: 'plain_text', text: 'Disconnect Gmail' }, action_id: 'disconnect', value: 'none', style: 'danger' }],
   });
 });
+
+it('keeps the engine-owned Connect URL as a clickable https link after sanitizing', async () => {
+  const url = 'https://agent.example.com/auth/google?ticket=abc';
+  const body = await post({
+    kind: 'Connect',
+    text: `Ignore https://evil.example/phish\nConnect your own Google Workspace mailbox using this single-use link (expires in 10 minutes):\n${url}`,
+  });
+  expect(body.blocks[0]).toEqual({ type: 'header', text: { type: 'plain_text', text: 'Connect' } });
+  expect(body.blocks[1].text).toContain(`[${url}](${url})`);
+  expect(body.blocks[1].text).not.toContain('https://evil.example/phish');
+  expect(body.text).toContain(url);
+  expect(body.parse).toBe('none');
+  expect(body.unfurl_links).toBe(false);
+});

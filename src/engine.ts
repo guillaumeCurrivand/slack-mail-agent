@@ -16,7 +16,8 @@ const HELP = 'I can sort your latest 100 inbox messages after you approve a prev
 export class Engine {
   constructor(private d: EngineDependencies) {}
   private send(actor: Actor, text: string, buttons?: Button[]) { return this.d.messenger.send(actor, { text, buttons }); }
-  private sendHelp(actor: Actor) { return this.d.messenger.send(actor, { kind: 'Help', text: HELP }); }
+  private sendCard(actor: Actor, kind: string, text: string, buttons?: Button[]) { return this.d.messenger.send(actor, { kind, text, buttons }); }
+  private sendHelp(actor: Actor) { return this.sendCard(actor, 'Help', HELP); }
   async handle(actor: Actor, event: Event, eventId: string) {
     const state = await this.d.store.load(actor); prune(state);
     if (state.handled.includes(eventId)) return;
@@ -24,7 +25,7 @@ export class Engine {
       if (event.type === 'connection') {
         const draft: Draft = { id: uid(), created: new Date().toISOString(), kind: 'connection', connection: event.connection };
         state.drafts.push(draft); await this.d.store.save(actor, state);
-        await this.send(actor, `Confirm that ${event.connection.email} is YOUR Google Workspace mailbox. Connecting replaces any previous connection and invalidates old previews.`, [{ label: 'Connect this mailbox', action: 'approve_draft', value: draft.id, style: 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
+        await this.sendCard(actor, 'Confirm mailbox', `Confirm that ${event.connection.email} is YOUR Google Workspace mailbox. Connecting replaces any previous connection and invalidates old previews.`, [{ label: 'Connect this mailbox', action: 'approve_draft', value: draft.id, style: 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
       } else if (event.type === 'action') await this.action(actor, state, event.action, event.value);
       else await this.text(actor, state, event, eventId);
       state.handled.push(eventId); await this.d.store.save(actor, state);
@@ -44,7 +45,7 @@ export class Engine {
     const text = event.text.trim(), command = text.toLowerCase();
     if (command === 'help' || command === 'hi' || command === 'hello') return this.sendHelp(actor);
     if (command === 'disconnect') {
-      return this.send(actor, 'Disconnect Gmail and cancel all pending previews? Saved rules remain. You can also revoke the app from your Google account.', [{ label: 'Disconnect Gmail', action: 'disconnect', value: state.connection?.id ?? 'none', style: 'danger' }]);
+      return this.sendCard(actor, 'Disconnect Gmail', 'Disconnect Gmail and cancel all pending previews? Saved rules remain. You can also revoke the app from your Google account.', [{ label: 'Disconnect Gmail', action: 'disconnect', value: state.connection?.id ?? 'none', style: 'danger' }]);
     }
     if (/^details [\w-]+(?: \d+)?$/.test(command)) {
       const [, id, page] = command.split(' '); return this.details(actor, state, id!, Number(page ?? 0));
@@ -63,7 +64,7 @@ export class Engine {
     }
     state.history.push({ role: 'user', content: text.slice(0, 4000), at: new Date().toISOString() });
     switch (intent.intent) {
-      case 'connect': return this.send(actor, `Connect your own Google Workspace mailbox using this single-use link (expires in 10 minutes):\n${await this.d.connectUrl(actor)}`);
+      case 'connect': return this.sendCard(actor, 'Connect', `Connect your own Google Workspace mailbox using this single-use link (expires in 10 minutes):\n${await this.d.connectUrl(actor)}`);
       case 'starters': {
         await this.propose(actor, state, { kind: 'rules', rules: starterRules() });
         return this.send(actor, 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Tell me the project name and sender email addresses to create your mapping.');

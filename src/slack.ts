@@ -18,6 +18,12 @@ const sanitizeReply = (text: string) => text
   .replace(/\bmailto:[^\s<]+/gi, '')
   .replace(/\bwww\.[^\s<]+/gi, '');
 
+const withMintedConnectUrl = (text: string) => {
+  const url = text.match(/\bhttps:\/\/[^\s<]+/gi)?.at(-1);
+  const body = sanitizeReply(text).trimEnd();
+  return url ? `${body}\n[${url}](${url})` : body;
+};
+
 const plainReading = (text: string) => text
   .replace(/```[\s\S]*?```/g, chunk => chunk.replace(/^```\w*\r?\n?/, '').replace(/```$/, ''))
   .replace(/`([^`]+)`/g, '$1')
@@ -27,12 +33,13 @@ const plainReading = (text: string) => text
   .replace(/\*([^*]+)\*/g, '$1')
   .replace(/_([^_]+)_/g, '$1')
   .replace(/~~([^~]+)~~/g, '$1')
+  .replace(/\[([^\]]*)]\([^)]*\)/g, '$1')
   .replace(/^>\s?/gm, '');
 
 export class Slack implements Messenger {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
   async send(actor: Actor, message: AgentMessage) {
-    const text = message.kind ? message.text : sanitizeReply(message.text);
+    const text = message.kind === 'Connect' ? withMintedConnectUrl(message.text) : message.kind ? message.text : sanitizeReply(message.text);
     const buttons = message.buttons ?? [];
     const blocks: any[] = [];
     // Sanitized markdown, not mrkdwn. Cards add a plain-text kind header; Replies have none.

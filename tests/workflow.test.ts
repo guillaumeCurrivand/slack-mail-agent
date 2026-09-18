@@ -210,6 +210,66 @@ describe('Help Card', () => {
   });
 });
 
+describe('Connection Cards', () => {
+  it('sends connect as a Card titled Connect with the minted https authorization URL', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'connect' }, uid());
+    expect(h.messages.at(-1)).toMatchObject({
+      kind: 'Connect',
+      text: expect.stringContaining('https://agent.example.com/auth/google?ticket=test'),
+    });
+  });
+
+  it('sends Confirm mailbox after OAuth with the existing Connect-this-mailbox and Cancel buttons', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'connection', connection: { id: 'c1', subject: 'google-alice', email: 'alice@example.com', encryptedTokens: 'sealed' } }, uid());
+    const message = h.messages.at(-1)!;
+    expect(message.kind).toBe('Confirm mailbox');
+    expect(message.text).toContain('alice@example.com');
+    expect(message.buttons).toEqual([
+      { label: 'Connect this mailbox', action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+    ]);
+    expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);
+  });
+
+  it('sends disconnect as a Card titled Disconnect Gmail with the existing danger button', async () => {
+    await seed();
+    const h = harness();
+    await h.engine.handle(alice, { type: 'text', text: 'disconnect' }, uid());
+    expect(h.messages.at(-1)).toEqual({
+      actor: alice,
+      kind: 'Disconnect Gmail',
+      text: 'Disconnect Gmail and cancel all pending previews? Saved rules remain. You can also revoke the app from your Google account.',
+      buttons: [{ label: 'Disconnect Gmail', action: 'disconnect', value: 'connection-a', style: 'danger' }],
+    });
+  });
+
+  it('keeps connected, cancelled, and disconnected acks as unlabeled Replies', async () => {
+    const h = harness();
+    await h.engine.handle(alice, { type: 'connection', connection: { id: 'c1', subject: 'google-alice', email: 'alice@example.com', encryptedTokens: 'sealed' } }, uid());
+    const draftId = (await store.load(alice)).drafts[0]!.id;
+    await action(h, 'approve_draft', draftId);
+    expect(h.messages.at(-1)).toEqual({
+      actor: alice,
+      text: 'Connected alice@example.com. Send starters to review initial rules, or sort if your rules are ready.',
+      buttons: undefined,
+    });
+
+    const cancelled = harness();
+    await cancelled.engine.handle(alice, { type: 'connection', connection: { id: 'c2', subject: 'google-alice', email: 'alice@example.com', encryptedTokens: 'sealed' } }, uid());
+    const cancelId = (await store.load(alice)).drafts[0]!.id;
+    await action(cancelled, 'cancel_draft', cancelId);
+    expect(cancelled.messages.at(-1)).toEqual({ actor: alice, text: 'Proposal cancelled.', buttons: undefined });
+
+    await seed();
+    const disconnect = harness();
+    await disconnect.engine.handle(alice, { type: 'text', text: 'disconnect' }, uid());
+    await action(disconnect, 'disconnect', 'connection-a');
+    expect(disconnect.messages.at(-1)).toEqual({ actor: alice, text: 'Gmail disconnected here. Your saved rules remain.', buttons: undefined });
+  });
+});
+
 describe('Agent Replies', () => {
   it('posts talk as a Reply with no kind header and stores the model string', async () => {
     const h = harness();
