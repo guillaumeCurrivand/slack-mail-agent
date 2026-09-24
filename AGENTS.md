@@ -6,7 +6,7 @@
 - Adding a module or changing routing, jobs, persistence, or spending: read [Adding a module](docs/adding-a-module.md). It defines the extension contract and ownership conventions.
 - Naming domain concepts: use [CONTEXT.md](CONTEXT.md), which is a glossary, not an implementation plan.
 - Changing an architectural decision: read the relevant [ADR](docs/adr/). Record the reason for a consequential trade-off there; keep current behavior in the specification.
-- Planning Tasks: read [the future Tasks brief](docs/future/tasks-module.md). Its open questions are unresolved, not requirements to implement.
+- Implementing or changing Slack Unanswered: read [its approved feature contract](docs/slack-unanswered.md). Channel selection is implemented; message search and live Slack access setup are still pending.
 - Running, configuring, or upgrading the application: use [README.md](README.md). Completed plans in `docs/archive/` provide historical context and do not override current documentation.
 - Preparing a production update: use [Updating production](docs/deployment.md). Production uses Docker Compose; preserve the existing environment and database volume.
 
@@ -25,3 +25,17 @@ Check that the active Node version satisfies `package.json` before running its s
 Review the complete intended diff, including newly added files. Report whether work is local, committed, or pushed, and include the commit identifier after committing. State any checks skipped or live integrations not exercised.
 
 Every ready-to-deploy handoff must include the target branch/commit, copy-paste server commands to fetch the change and rebuild/restart the app, required environment or migration changes (or explicitly none), and post-deploy checks. Update and link the deployment guide when the procedure changes. Use the confirmed server setup; label unknown paths as placeholders. For documentation-only changes, say that pulling the commit is sufficient and no app restart is required. Distinguish locally verified release candidates from a successful production deployment; only report deployment success after observing it.
+
+## Agent skills
+
+### Issue tracker
+
+Issues and specs live as local Markdown under `.scratch/`. See `docs/agents/issue-tracker.md`.
+
+### Triage labels
+
+Use the default five labels: `needs-triage`, `needs-info`, `ready-for-agent`, `ready-for-human`, and `wontfix`. See `docs/agents/triage-labels.md`.
+
+### Domain docs
+
+This is a single-context repo: use root `CONTEXT.md` and `docs/adr/`. See `docs/agents/domain.md`.

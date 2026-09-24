@@ -4,11 +4,15 @@ Status: approved by the user after the design interview. An initial local implem
 
 ## Approved module extension
 
-The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter is the only implemented module. Its Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
+The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter and the first channel-selection slice of Slack Unanswered are implemented. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
 
 Modules are maintained in this repository and deployed together, with independent enablement, connection requirements, and user data. All modules share the existing $10 monthly AI ceiling, with usage tracked by module. Disabled modules do not execute work; saved state and pending jobs remain for re-enablement. Existing queued mail work and previously posted mail buttons retain their approval and ownership safeguards.
 
-Tasks remains future work. Its agreed direction and unresolved decisions live in [the future Tasks brief](future/tasks-module.md); it is not part of the current implementation scope. See [the architecture decision](adr/0002-private-assistant-modules.md) for rationale and [module guide](adding-a-module.md) for implementation conventions.
+The Slack Unanswered channel-selection workflow is implemented but disabled by default; searching for unanswered messages is still pending. Its approved full behavior is specified in [the Slack Unanswered feature contract](slack-unanswered.md). See [the architecture decision](adr/0002-private-assistant-modules.md) for rationale and [module guide](adding-a-module.md) for implementation conventions.
+
+## Slack Unanswered module
+
+The `slack` module provides `slack channels` to manage each user's selected public and private channels shared with the bot. It starts with no selections, preserves them when access is temporarily lost, and allows only that user to remove them. It does not need Gmail. The module is disabled by default; when enabled, `slack unanswered` explains that searching is not available yet. The approved matching rules, channel access boundaries, result format, AI behavior, and remaining work are defined in the [feature contract](slack-unanswered.md).
 
 ## Audience and access
 
@@ -85,7 +89,7 @@ The user will choose the provider. No Render or other host commitment remains.
 These are engineering consequences, not additional user-facing capabilities:
 
 - Enforce user and workspace ownership in application/database access, not only in prompts.
-- Keep Gmail tokens out of AI prompts. Treat email text as data to classify, never as instructions authorizing actions or rule changes.
+- Keep Gmail tokens out of AI prompts. Treat retrieved email and Slack text as data to classify, never as instructions authorizing actions or rule changes.
 - Persist pending work and execution checkpoints so restarts do not lose runs. Handle duplicate events and confirmations without repeating mailbox changes.
 - Bind approval to the saved preview and rule version. Recheck affected message state before changes, reporting messages that changed or became unavailable.
 - Store enough before/after state for targeted undo and partial-failure reporting.
@@ -93,6 +97,8 @@ These are engineering consequences, not additional user-facing capabilities:
 
 ## Before implementation and release
 
-The interview's final shared-understanding confirmation has been received. Release still needs model evaluation, live integration verification, and a concrete hosting configuration when the user selects infrastructure. Slack/Google application setup and credentials have not been created or requested, and no real mailbox has been accessed.
+The interview's final shared-understanding confirmation has been received. Release still needs model evaluation, live integration verification, and a concrete hosting configuration when the user selects infrastructure. Slack channel permissions and application setup, Google application setup, and credentials have not been created or requested, and no real mailbox or channel history has been accessed.
+
+Evaluate urgency, newsletters versus transactional mail, project ambiguity, Slack Unanswered matching, and adversarial message text on representative consented or synthetic messages. Unit tests establish workflow safeguards; they do not establish model accuracy.
 
 Supporting research: [TypeSafe](research/typesafe-evaluation.md), [OpenAI](research/openai-fit.md), and [previous hosting comparison](research/hosting-options.md). The prior hosting comparison is background research, not a current provider decision.

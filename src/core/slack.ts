@@ -3,6 +3,8 @@ import type { Actor } from './identity.js';
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger' };
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[] };
 export interface Messenger { send(actor: Actor, message: AgentMessage): Promise<void> }
+/** Slack explicitly rejected the message, so delivery can be retried. */
+export class SlackDeliveryRejected extends Error {}
 export const escapeSlack = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const CARD_MARKUP = /[\\`*_{}[\]()#+.!&~>-]/g;
 export const escapeCardValue = (value: string) => value.replace(CARD_MARKUP, '\\$&');
@@ -57,6 +59,12 @@ export class Slack implements Messenger {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: actor.channel, text: escapeSlack(plainReading(text).slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
     });
-    if (!response.ok || !(await response.json() as any).ok) throw new Error('Slack delivery failed.');
+    const result = await response.json() as { ok?: boolean; error?: string };
+    if (!response.ok || !result.ok) {
+      // Transient internal errors can occur after Slack accepted a message.
+      const rejected = new Set(['access_denied', 'channel_not_found', 'ekm_access_denied', 'invalid_auth', 'invalid_blocks', 'is_archived', 'missing_scope', 'no_permission', 'not_in_channel', 'rate_limited', 'ratelimited', 'token_expired', 'token_revoked']);
+      if (result.ok === false && result.error && rejected.has(result.error)) throw new SlackDeliveryRejected('Slack delivery was rejected.');
+      throw new Error('Slack delivery failed.');
+    }
   }
 }

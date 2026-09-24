@@ -17,8 +17,14 @@ The name at the beginning of a User message that explicitly selects the Module h
 **Mail Sorter**:
 The Module that sorts a person's connected Gmail using their approved rules.
 
-**Tasks**:
-A future Module that identifies requests addressed to a person in selected Slack channels they can access, with or without an @mention, and presents their task list privately.
+**Slack Unanswered**:
+A Module that privately lists unanswered messages from a person's selected Slack channels.
+
+**Unanswered message**:
+A channel message containing a mention, request, or question for which the listed person has not yet replied in the same thread.
+
+**Possibly for you**:
+A group of unanswered messages whose thread context suggests they may concern the recipient, though it does not establish that clearly.
 
 **User message**:
 A Slack DM the person typed.

@@ -1,14 +1,14 @@
 # Adding a built-in module
 
-Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Only Mail Sorter ships today.
+Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter and the channel-selection slice of Slack Unanswered ship today.
 
 ## Interface and routing
 
 Implement `AssistantModule` from `src/core/modules.ts`. Required fields are a stable lowercase `id`, a short `description` for shared help, and `handle(actor, payload, eventId, context)`.
 
-Each new DM request starts with the module ID. The core removes the prefix and queues the request with an immutable module identifier. For example, `tasks list` would reach the Tasks module as `{ type: 'text', text: 'list' }`. A prefix by itself becomes the module's `help` request. Unknown prefixes and unprefixed requests receive shared guidance without paid AI routing. `help` and `budget` are reserved shared commands; `core` is reserved for internal routing.
+Each new DM request starts with the module ID. The core removes the prefix and queues the request with an immutable module identifier. For example, `slack unanswered` reaches the Slack module as `{ type: 'text', text: 'unanswered' }`. A prefix by itself becomes the module's `help` request. Unknown prefixes and unprefixed requests receive shared guidance without paid AI routing. `help` and `budget` are reserved shared commands; `core` is reserved for internal routing.
 
-The handler receives the authenticated Slack actor, a durable event ID, the current database connection, a budget attributed to this module, and a messenger. Pass local button action IDs, such as `complete`, to that messenger: it emits `tasks:complete` automatically. The router removes the namespace when the button is clicked. Verify that every referenced object and approval belongs to the actor; a namespaced action is not authorization.
+The handler receives the authenticated Slack actor, a durable event ID, the current database connection, a budget attributed to this module, and a messenger. Pass local button action IDs to that messenger: it adds the module namespace automatically. The router removes the namespace when the button is clicked. Verify that every referenced object and approval belongs to the actor; a namespaced action is not authorization.
 
 `legacyActions` exists solely for exact pre-module button IDs already posted to Slack. New modules should not use it. Duplicate module IDs, reserved IDs, and ambiguous legacy action registrations are rejected.
 
@@ -28,7 +28,7 @@ Only enabled modules are constructed, initialized, and registered. Disabled modu
 
 ## Configuration and paid AI work
 
-Write a module-local configuration reader and call it inside the factory in `src/app/modules.ts`. This ensures missing credentials for a disabled module cannot prevent startup. Register the factory and add its ID to the deployment's comma-separated `ENABLED_MODULES`, then restart. Do not instantiate Gmail, Google OAuth, or a mail store for another module.
+For module-specific configuration, write a module-local reader and call it inside the factory in `src/app/modules.ts`. This ensures missing credentials for a disabled module cannot prevent startup. Modules may use already-validated shared configuration, such as the Slack bot token, directly. Register the factory and add its ID to the deployment's comma-separated `ENABLED_MODULES`, then restart. Do not instantiate Gmail, Google OAuth, or a mail store for another module.
 
 Use `context.budget` for all paid AI work: reserve an upper bound before making a request and settle verified usage afterward. Uncertain calls retain their reservation. This budget is already tagged with the module ID and enforces the shared monthly ceiling and per-user ceiling across all modules. Do not create independent spending ledgers. Shared alerts and the `budget` command operate across the whole assistant.
 
