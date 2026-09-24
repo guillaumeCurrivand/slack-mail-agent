@@ -120,6 +120,8 @@ Run `npm run check` and `npm run build` for TypeScript validation and production
 
 Set `POSTGRES_PASSWORD` in `.env` to a strong URL-safe random value. `docker compose up --build -d` starts the app and database, binding the app to `127.0.0.1:3000`; put your HTTPS reverse proxy in front of it. PostgreSQL uses a named persistent volume and is not publicly published. Arrange automated encrypted database backups and test restoring them. This repository does not select or provision a hosting provider.
 
+For an existing production server, follow [Updating production](docs/deployment.md) for the copy-paste update/restart commands, database backup, readiness check, and release-specific migration notes. Production uses Docker Compose; preserve the existing checkout's `.env` and Compose project settings.
+
 ## Remaining release checks
 
 - Configure the real Slack app, Google OAuth client, allowed Workspace domains, and OpenAI project.

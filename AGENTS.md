@@ -8,6 +8,7 @@
 - Changing an architectural decision: read the relevant [ADR](docs/adr/). Record the reason for a consequential trade-off there; keep current behavior in the specification.
 - Planning Tasks: read [the future Tasks brief](docs/future/tasks-module.md). Its open questions are unresolved, not requirements to implement.
 - Running, configuring, or upgrading the application: use [README.md](README.md). Completed plans in `docs/archive/` provide historical context and do not override current documentation.
+- Preparing a production update: use [Updating production](docs/deployment.md). Production uses Docker Compose; preserve the existing environment and database volume.
 
 ## Change discipline
 
@@ -22,3 +23,5 @@ Update the authoritative document when its contract changes, then update example
 Check that the active Node version satisfies `package.json` before running its scripts; some Windows shells select an older Node installation. Run the relevant tests and the project's `test`, `check`, and `build` scripts for runtime changes. Real PostgreSQL locking tests need `TEST_DATABASE_URL`; report skipped tests separately from passes. For documentation-only edits, verify local links and consistency with the implementation.
 
 Review the complete intended diff, including newly added files. Report whether work is local, committed, or pushed, and include the commit identifier after committing. State any checks skipped or live integrations not exercised.
+
+Every ready-to-deploy handoff must include the target branch/commit, copy-paste server commands to fetch the change and rebuild/restart the app, required environment or migration changes (or explicitly none), and post-deploy checks. Update and link the deployment guide when the procedure changes. Use the confirmed server setup; label unknown paths as placeholders. For documentation-only changes, say that pulling the commit is sufficient and no app restart is required. Distinguish locally verified release candidates from a successful production deployment; only report deployment success after observing it.
