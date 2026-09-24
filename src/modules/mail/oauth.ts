@@ -1,7 +1,7 @@
 import { createRemoteJWKSet, jwtVerify, type JWTPayload } from 'jose';
-import { digest, opaque, Vault } from './crypto.js';
+import { digest, opaque, Vault } from '../../core/crypto.js';
 import { ownerKey, uid, type Actor, type Connection } from './domain.js';
-import type { Config } from './config.js';
+import type { MailConfig } from './config.js';
 import type { Store } from './store.js';
 
 const keys = createRemoteJWKSet(new URL('https://www.googleapis.com/oauth2/v3/certs'));
@@ -9,7 +9,7 @@ type VerifyIdentity = (token: string, audience: string) => Promise<JWTPayload>;
 const verifyIdentity: VerifyIdentity = async (token, audience) => (await jwtVerify(token, keys, { issuer: ['https://accounts.google.com', 'accounts.google.com'], audience, algorithms: ['RS256'] })).payload;
 type Login = { actor: Actor; verifier: string; nonce: string; cookie: string };
 export class GoogleOAuth {
-  constructor(private config: Config, private store: Store, private vault: Vault, private fetcher: typeof fetch = fetch, private verify: VerifyIdentity = verifyIdentity) {}
+  constructor(private config: MailConfig & { PUBLIC_URL: string }, private store: Store, private vault: Vault, private fetcher: typeof fetch = fetch, private verify: VerifyIdentity = verifyIdentity) {}
   async invitation(actor: Actor) {
     const ticket = opaque();
     await this.store.putState(digest(ticket), 'ticket', this.vault.seal(actor, 'oauth-ticket'));

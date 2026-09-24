@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { Slack, type AgentMessage } from '../src/slack.js';
+import { Slack, type AgentMessage } from '../src/core/slack.js';
 
 const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 

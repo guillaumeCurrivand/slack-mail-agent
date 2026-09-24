@@ -1,11 +1,15 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
-import { Vault, verifySlack } from '../src/crypto.js';
-import { parseMail } from '../src/gmail.js';
-import { createServer } from '../src/server.js';
-import { schema, Store } from '../src/store.js';
-import type { GoogleOAuth } from '../src/oauth.js';
+import { Vault, verifySlack } from '../src/core/crypto.js';
+import { parseMail } from '../src/modules/mail/gmail.js';
+import { createServer } from '../src/core/server.js';
+import { schema } from '../src/app/schema.js';
+import { Store } from '../src/modules/mail/store.js';
+import type { GoogleOAuth } from '../src/modules/mail/oauth.js';
+import { registerMailRoutes } from '../src/modules/mail/routes.js';
+import { ModuleRegistry } from '../src/core/modules.js';
+import { JobStore } from '../src/core/store.js';
 
 it('rejects tampered Slack payloads and old or future signatures', () => {
   const raw = '{"event":"x"}', timestamp = String(Math.floor(Date.now() / 1000));
@@ -32,23 +36,30 @@ it('reads text bodies without attachments or fetching linked content', () => {
 let db: PGlite, store: Store;
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); store = new Store({ query: (q, p) => db.query(q, p) }); });
 afterAll(async () => db.close());
+function server(oauth?: GoogleOAuth) {
+  const jobs = new JobStore(store.sql);
+  const modules = new ModuleRegistry([{ id: 'mail', description: 'Mail', async handle() {},
+    registerRoutes: oauth ? app => registerMailRoutes(app, 'https://agent.example.com', jobs, oauth) : undefined }]);
+  return createServer({ SLACK_SIGNING_SECRET: 'secret', SLACK_TEAM_ID: 'TTEAM' }, jobs, modules);
+}
 it('durably deduplicates signed DM events and ignores channels and other workspaces', async () => {
-  const app = createServer({ SLACK_SIGNING_SECRET: 'secret', SLACK_TEAM_ID: 'TTEAM', PUBLIC_URL: 'https://agent.example.com' }, store, {} as GoogleOAuth);
+  const app = server();
   const request = async (body: unknown) => {
     const raw = JSON.stringify(body), ts = String(Math.floor(Date.now() / 1000));
     return app.inject({ method: 'POST', url: '/slack/events', payload: raw, headers: { 'content-type': 'application/json', 'x-slack-request-timestamp': ts, 'x-slack-signature': `v0=${createHmac('sha256', 'secret').update(`v0:${ts}:${raw}`).digest('hex')}` } });
   };
-  const event = { type: 'event_callback', event_id: 'Ev1', team_id: 'TTEAM', event: { type: 'message', channel_type: 'im', channel: 'DALICE', user: 'UALICE', text: 'sort' } };
+  const event = { type: 'event_callback', event_id: 'Ev1', team_id: 'TTEAM', event: { type: 'message', channel_type: 'im', channel: 'DALICE', user: 'UALICE', text: 'mail sort' } };
   expect((await request(event)).statusCode).toBe(200); expect((await request(event)).statusCode).toBe(200);
   expect((await request({ ...event, team_id: 'TOTHER' })).statusCode).toBe(403);
   expect((await request({ ...event, event_id: 'Ev2', event: { ...event.event, channel_type: 'channel', channel: 'CGENERAL' } })).statusCode).toBe(200);
   expect((await db.query('SELECT * FROM jobs')).rows).toHaveLength(1);
+  expect((await db.query('SELECT module,payload FROM jobs')).rows[0]).toEqual({ module: 'mail', payload: { type: 'text', text: 'sort' } });
   expect((await app.inject({ method: 'POST', url: '/slack/events', payload: '{}', headers: { 'content-type': 'application/json' } })).statusCode).toBe(401);
   await app.close();
 });
 it('returns a safe Gmail callback reason without provider payloads', async () => {
   const oauth = { finish: async () => { throw new Error('Authorization must finish in the browser where it started.'); } } as unknown as GoogleOAuth;
-  const app = createServer({ SLACK_SIGNING_SECRET: 'secret', SLACK_TEAM_ID: 'TTEAM', PUBLIC_URL: 'https://agent.example.com' }, store, oauth);
+  const app = server(oauth);
   const res = await app.inject({ method: 'GET', url: '/auth/google/callback?state=s&code=c', headers: { cookie: 'gmail_oauth=x' } });
   expect(res.statusCode).toBe(400);
   expect(res.body).toBe('Authorization must finish in the browser where it started. Request a new connection link in Slack.');

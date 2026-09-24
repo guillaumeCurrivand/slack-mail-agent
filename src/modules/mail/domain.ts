@@ -1,4 +1,5 @@
-import { randomUUID } from 'node:crypto';
+import type { Actor } from '../../core/identity.js';
+export { ownerKey, uid, type Actor } from '../../core/identity.js';
 import { z } from 'zod';
 
 export const labelSchema = z.string().min(1).max(100).refine(v => !/[\x00-\x1f]/.test(v) && !/^(INBOX|TRASH|SPAM|UNREAD|STARRED|IMPORTANT|SENT|DRAFT|CATEGORY_.*)$/i.test(v), 'Use a custom Gmail label');
@@ -10,7 +11,6 @@ export const ruleSchema = z.object({
 });
 export type RuleInput = z.infer<typeof ruleSchema>;
 export type Rule = RuleInput & { id: string };
-export type Actor = { team: string; user: string; channel: string };
 export type Mail = { id: string; from: string; subject: string; body: string; labels: string[]; historyId: string; oversized?: boolean };
 export type Match = { ruleId: string; decision: 'yes' | 'no' | 'uncertain'; reason: string };
 export type Plan = { labels: string[]; removeLabels?: string[]; disposition: 'keep' | 'archive' | 'trash'; needsDecision: boolean; reasons: string[] };
@@ -24,9 +24,7 @@ export type Connection = { id: string; subject: string; email: string; encrypted
 export type Draft = { id: string; created: string; kind: 'rules' | 'delete' | 'connection'; rules?: RuleInput[]; replaceId?: string; ruleId?: string; connection?: Connection };
 export type UserState = { rules: Rule[]; ruleVersion: number; drafts: Draft[]; runs: Run[]; history: { role: 'user' | 'assistant'; content: string; at: string }[]; connection?: Connection; handled: string[] };
 export const emptyState = (): UserState => ({ rules: [], ruleVersion: 0, drafts: [], runs: [], history: [], handled: [] });
-export const ownerKey = (a: Pick<Actor, 'team' | 'user'>) => `${a.team}:${a.user}`;
 export const sameLabels = (a: string[], b: string[]) => [...a].sort().join('\0') === [...b].sort().join('\0');
-export const uid = () => randomUUID();
 export const senderAddress = (from: string) => (from.match(/<([^<>]+)>/)?.[1] ?? from).trim().toLowerCase();
 
 export function validateRule(value: unknown): RuleInput {

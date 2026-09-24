@@ -1,12 +1,20 @@
-# Slack Gmail sorting agent — version one
+# Private Slack assistant — current product specification
 
 Status: approved by the user after the design interview. An initial local implementation and automated tests are available; live integration and model-quality validation remain release requirements. Deployment and purchasing services are not authorized by this document.
+
+## Approved module extension
+
+The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter is the only implemented module. Its Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
+
+Modules are maintained in this repository and deployed together, with independent enablement, connection requirements, and user data. All modules share the existing $10 monthly AI ceiling, with usage tracked by module. Disabled modules do not execute work; saved state and pending jobs remain for re-enablement. Existing queued mail work and previously posted mail buttons retain their approval and ownership safeguards.
+
+Tasks remains future work. Its agreed direction and unresolved decisions live in [the future Tasks brief](future/tasks-module.md); it is not part of the current implementation scope. See [the architecture decision](adr/0002-private-assistant-modules.md) for rationale and [module guide](adding-a-module.md) for implementation conventions.
 
 ## Audience and access
 
 - One Slack workspace, serving the user's team of 10.
 - Interaction exclusively in private messages with the bot.
-- Each Slack user connects exactly one personal-to-them Google Workspace Gmail account.
+- Each Mail Sorter user connects at most one personal-to-them Google Workspace Gmail account; connecting Gmail is not required to use the assistant's shared commands or future independent modules.
 - Each user has separate Gmail authorization, rules, project mappings, conversation history, previews, and action records.
 - No shared team rules in version one. Team administrators may manage availability and connection health through the product but cannot browse other users' mail, rules, or conversations through it.
 - Application-level isolation is required; this is not a promise that infrastructure operators or external platform administrators have no technical access.
@@ -45,7 +53,7 @@ Templates are offered during onboarding; each user approves their own copy befor
 ## Memory and undo
 
 - Retain approved rules and mappings until the user removes them.
-- Retain application conversation history and action records for 30 days.
+- For enabled modules, prune application conversation history and action records older than 30 days. Disabling a module pauses its cleanup and preserves its state for re-enablement, so records can remain beyond 30 days while disabled. Cleanup resumes when the module is enabled again.
 - Fetch email content when needed rather than retaining a permanent mailbox copy. Conversation history may itself contain excerpts discussed by the user; it follows the conversation retention policy.
 - Undo concerns only changes performed by this agent. It must avoid overwriting unrelated later mailbox changes and report changes that cannot be restored.
 - Gmail's Trash lifecycle limits recovery: messages are normally permanently deleted after 30 days in Trash, and may be deleted sooner by the user. [Google documentation](https://support.google.com/mail/answer/7401?hl=en)

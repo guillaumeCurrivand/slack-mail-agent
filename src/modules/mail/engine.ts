@@ -1,7 +1,8 @@
-import { Budget, BudgetExceeded, type Intelligence, type Intent } from './ai.js';
+import { Budget, BudgetExceeded, budgetReport } from '../../core/budget.js';
+import type { Intelligence, Intent } from './ai.js';
 import { labelSchema, ownerKey, planMessage, sameLabels, starterRules, uid, validateRule, type Actor, type Connection, type Draft, type Item, type Run, type UserState } from './domain.js';
 import type { Mailbox } from './gmail.js';
-import { escapeCardValue, type Button, type Messenger } from './slack.js';
+import { escapeCardValue, type Button, type Messenger } from '../../core/slack.js';
 import { prune, Store } from './store.js';
 
 export type Event = { type: 'text'; text: string; resolved?: Intent } | { type: 'action'; action: string; value: string } | { type: 'connection'; connection: Connection };
@@ -9,9 +10,8 @@ export type EngineDependencies = {
   store: Store; intelligence: Intelligence; messenger: Messenger; budget: Budget;
   mailbox: (actor: Actor, state: UserState) => Mailbox;
   connectUrl: (actor: Actor) => Promise<string>;
-  alertMicro?: number; adminUser?: string;
 };
-const HELP = 'I can sort your latest 100 inbox messages after you approve a preview.\nCommands: connect, starters, rules, sort, report, budget, disconnect.\nDescribe a rule naturally, such as “Label emails from alex@example.com as Projects/Alpha.” Rule changes also need approval. Use the buttons on a preview to confirm, cancel, inspect or undo.';
+const HELP = 'I can sort your latest 100 inbox messages after you approve a preview.\nCommands: mail connect, mail starters, mail rules, mail sort, mail report, mail details <run-id> <page>, mail disconnect.\nStart every request with mail, including natural language: “mail Label emails from alex@example.com as Projects/Alpha.” Rule changes also need approval. Use the buttons on a preview to confirm, cancel, inspect or undo. Shared commands: help, budget.';
 
 export class Engine {
   constructor(private d: EngineDependencies) {}
@@ -32,13 +32,9 @@ export class Engine {
     } catch (error) {
       // Do not expose provider payloads, tokens, email content, database errors, or raw stack traces.
       console.error('job failed', error instanceof Error ? error.message : 'unknown');
-      const message = error instanceof BudgetExceeded ? error.message : 'This request could not finish. No additional changes will be attempted automatically. Use report to inspect any completed or uncertain actions, then try again or reconnect if authorization expired.';
+      const message = error instanceof BudgetExceeded ? error.message : 'This request could not finish. No additional changes will be attempted automatically. Use mail report to inspect any completed or uncertain actions, then try again or reconnect if authorization expired.';
       await this.send(actor, message);
       state.handled.push(eventId); await this.d.store.save(actor, state);
-    }
-    if (await this.d.budget.claimAlert(this.d.alertMicro ?? 8_000_000)) {
-      try { await this.send(this.d.adminUser ? { ...actor, user: this.d.adminUser, channel: this.d.adminUser } : actor, 'The team AI allowance has reached its alert threshold, including pending or uncertain requests. Use budget for current totals. New paid work will stop at the configured limit.'); }
-      catch { await this.d.budget.releaseAlert(); }
     }
   }
   private async text(actor: Actor, state: UserState, event: Extract<Event, { type: 'text' }>, eventId: string) {
@@ -67,14 +63,14 @@ export class Engine {
       case 'connect': return this.sendCard(actor, 'Connect', `Connect your own Google Workspace mailbox using this single-use link (expires in 10 minutes):\n${await this.d.connectUrl(actor)}`);
       case 'starters': {
         await this.propose(actor, state, { kind: 'rules', rules: starterRules() });
-        return this.send(actor, 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Tell me the project name and sender email addresses to create your mapping.');
+        return this.send(actor, 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Start your reply with mail, then give the project name and sender email addresses to create your mapping.');
       }
-      case 'rules': return this.sendCard(actor, 'Your rules', state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nSenders: ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : 'semantic matching'}\nLabels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}`).join('\n\n') : 'You have no approved rules. Send starters or describe your first rule.');
-      case 'budget': { const usage = await this.d.budget.usage(); return this.send(actor, `Team AI usage this UTC calendar month: $${usage.charged.toFixed(4)} recorded, $${usage.reserved.toFixed(4)} reserved. Hosting is billed separately. Uncertain requests retain their reservation.`); }
+      case 'rules': return this.sendCard(actor, 'Your rules', state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nSenders: ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : 'semantic matching'}\nLabels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}`).join('\n\n') : 'You have no approved rules. Send mail starters or describe your first rule after the mail prefix.');
+      case 'budget': return this.send(actor, await budgetReport(this.d.budget));
       case 'sort': return this.scan(actor, state, eventId);
       case 'report': return this.report(actor, state, intent.runId ?? state.runs.at(-1)?.id);
       case 'propose_rule': {
-        if (!intent.rule) return this.send(actor, 'Please describe the condition, labels, action and any exceptions.');
+        if (!intent.rule) return this.send(actor, 'Please start your reply with mail and describe the condition, labels, action and any exceptions.');
         if (intent.ruleId && !state.rules.some(r => r.id === intent.ruleId)) return this.send(actor, 'That rule is not in your saved rules.');
         return this.propose(actor, state, { kind: 'rules', rules: [validateRule(intent.rule)], ...(intent.ruleId ? { replaceId: intent.ruleId } : {}) });
       }
@@ -116,7 +112,7 @@ export class Engine {
       }
       state.drafts = state.drafts.filter(d => d.id !== value);
       await this.d.store.save(actor, state);
-      return this.send(actor, action === 'cancel_draft' ? 'Proposal cancelled.' : draft.kind === 'connection' ? `Connected ${state.connection!.email}. Send starters to review initial rules, or sort if your rules are ready.` : 'Your rule changes are saved. Send sort to create a mailbox preview.');
+      return this.send(actor, action === 'cancel_draft' ? 'Proposal cancelled.' : draft.kind === 'connection' ? `Connected ${state.connection!.email}. Send mail starters to review initial rules, or mail sort if your rules are ready.` : 'Your rule changes are saved. Send mail sort to create a mailbox preview.');
     }
     if (action === 'disconnect') {
       if (value !== state.connection?.id) return this.send(actor, 'This disconnect request is no longer current.');
@@ -152,8 +148,8 @@ export class Engine {
     return this.d.mailbox(actor, state);
   }
   private async scan(actor: Actor, state: UserState, sourceId: string) {
-    if (!state.connection) return this.send(actor, 'Connect Gmail first: send connect.');
-    if (!state.rules.length) return this.send(actor, 'Approve at least one rule first: send starters or describe a rule.');
+    if (!state.connection) return this.send(actor, 'Connect Gmail first: send mail connect.');
+    if (!state.rules.length) return this.send(actor, 'Approve at least one rule first: send mail starters or describe a rule after the mail prefix.');
     const mailbox = this.connected(actor, state);
     let run = state.runs.find(r => r.sourceId === sourceId);
     if (!run) {
@@ -203,7 +199,7 @@ export class Engine {
     if (!['preview', 'applying'].includes(run.status)) return this.report(actor, state, run.id);
     if (run.connectionId !== state.connection?.id || run.ruleVersion !== state.ruleVersion || Date.parse(run.created) < Date.now() - 86400_000) {
       run.status = 'cancelled'; await this.d.store.save(actor, state);
-      return this.send(actor, 'This preview expired or its connection/rules changed. Send sort for a new preview.');
+      return this.send(actor, 'This preview expired or its connection/rules changed. Send mail sort for a new preview.');
     }
     const mailbox = this.connected(actor, state);
     run.status = 'applying'; await this.d.store.save(actor, state);
@@ -269,6 +265,6 @@ export class Engine {
     const existing = await this.connected(actor, state).labels(); run.newLabels = labels.filter(name => !existing.some(l => l.name === name));
     state.runs.push(run); await this.d.store.save(actor, state);
     await this.preview(actor, run);
-    return this.send(actor, 'This correction does not change future behavior. Tell me how the rule should change and I will propose it separately for approval.');
+    return this.send(actor, 'This correction does not change future behavior. Start your reply with mail and describe how the rule should change; I will propose it separately for approval.');
   }
 }

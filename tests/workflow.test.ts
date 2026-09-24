@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import { PGlite } from '@electric-sql/pglite';
-import { Budget, BudgetExceeded, OpenAI, costMicro, type Intelligence } from '../src/ai.js';
-import { emptyState, starterRules, uid, type Actor, type Mail, type Rule } from '../src/domain.js';
-import { Engine } from '../src/engine.js';
-import type { Mailbox, Mutation } from '../src/gmail.js';
-import { schema, Store, type Sql } from '../src/store.js';
-import { escapeCardValue, type AgentMessage, type Messenger } from '../src/slack.js';
+import { Budget, BudgetExceeded, costMicro } from '../src/core/budget.js';
+import { OpenAI, type Intelligence } from '../src/modules/mail/ai.js';
+import { emptyState, starterRules, uid, type Actor, type Mail, type Rule } from '../src/modules/mail/domain.js';
+import { Engine } from '../src/modules/mail/engine.js';
+import type { Mailbox, Mutation } from '../src/modules/mail/gmail.js';
+import { schema } from '../src/app/schema.js';
+import { Store } from '../src/modules/mail/store.js';
+import type { Sql } from '../src/core/store.js';
+import { escapeCardValue, type AgentMessage, type Messenger } from '../src/core/slack.js';
 
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
@@ -29,7 +32,7 @@ class FakeMailbox implements Mailbox {
     return this.snapshot(id);
   }
 }
-function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'yes', extras: { converse?: Intelligence['converse']; alertMicro?: number } = {}) {
+function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'yes', extras: { converse?: Intelligence['converse'] } = {}) {
   const messages: Array<AgentMessage & { actor: Actor }> = [];
   const messenger: Messenger = { async send(actor, message) { messages.push({ actor, ...message }); } };
   const seen: unknown[] = [];
@@ -41,7 +44,7 @@ function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'y
     async classify(_actor, _mail, rules) { return rules.map(r => ({ ruleId: r.id, decision, reason: 'Time-sensitive request' })); },
   };
   const budget = new Budget(sql);
-  const engine = new Engine({ store, messenger, intelligence, budget, mailbox: () => mailbox, connectUrl: async () => 'https://agent.example.com/auth/google?ticket=test', alertMicro: extras.alertMicro });
+  const engine = new Engine({ store, messenger, intelligence, budget, mailbox: () => mailbox, connectUrl: async () => 'https://agent.example.com/auth/google?ticket=test' });
   return { engine, mailbox, messages, seen, budget };
 }
 async function seed(rules?: Rule[]) {
@@ -252,7 +255,7 @@ describe('Connection Cards', () => {
     await action(h, 'approve_draft', draftId);
     expect(h.messages.at(-1)).toEqual({
       actor: alice,
-      text: 'Connected alice@example.com. Send starters to review initial rules, or sort if your rules are ready.',
+      text: 'Connected alice@example.com. Send mail starters to review initial rules, or mail sort if your rules are ready.',
       buttons: undefined,
     });
 
@@ -276,7 +279,7 @@ describe('Rules Cards', () => {
     await empty.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
     expect(empty.messages.at(-1)).toMatchObject({
       kind: 'Your rules',
-      text: 'You have no approved rules. Send starters or describe your first rule.',
+      text: 'You have no approved rules. Send mail starters or describe your first rule after the mail prefix.',
     });
 
     await seed();
@@ -344,7 +347,7 @@ describe('Rules Cards', () => {
     });
     expect(h.messages[1]).toEqual({
       actor: alice,
-      text: 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Tell me the project name and sender email addresses to create your mapping.',
+      text: 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Start your reply with mail, then give the project name and sender email addresses to create your mapping.',
       buttons: undefined,
     });
     expect(h.messages[1]!.kind).toBeUndefined();
@@ -402,7 +405,7 @@ describe('Rules Cards', () => {
     const saved = harness();
     await saved.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
     await action(saved, 'approve_draft', (await store.load(alice)).drafts[0]!.id);
-    expect(saved.messages.at(-1)).toEqual({ actor: alice, text: 'Your rule changes are saved. Send sort to create a mailbox preview.', buttons: undefined });
+    expect(saved.messages.at(-1)).toEqual({ actor: alice, text: 'Your rule changes are saved. Send mail sort to create a mailbox preview.', buttons: undefined });
   });
 });
 
@@ -540,7 +543,7 @@ describe('Run Cards', () => {
     expect(sent[0]!.kind).toBe('Preview');
     expect(sent[1]).toEqual({
       actor: alice,
-      text: 'This correction does not change future behavior. Tell me how the rule should change and I will propose it separately for approval.',
+      text: 'This correction does not change future behavior. Start your reply with mail and describe how the rule should change; I will propose it separately for approval.',
       buttons: undefined,
     });
     expect(sent[1]!.kind).toBeUndefined();
@@ -607,19 +610,14 @@ describe('Agent Replies', () => {
     expect(h.messages.at(-1)).toEqual({ actor: alice, text: 'Unsupported action.', buttons: undefined });
 
     await h.engine.handle(alice, { type: 'text', text: 'keep this', resolved: { intent: 'correction', reply: '', rule: null, ruleId: null, runId: run.id, messageId: 'm1', correction: { addLabels: [], removeLabels: [], disposition: 'keep' } } }, uid());
-    expect(h.messages.at(-1)).toMatchObject({ text: 'This correction does not change future behavior. Tell me how the rule should change and I will propose it separately for approval.' });
+    expect(h.messages.at(-1)).toMatchObject({ text: 'This correction does not change future behavior. Start your reply with mail and describe how the rule should change; I will propose it separately for approval.' });
     expect(h.messages.at(-1)!.kind).toBeUndefined();
   });
-  it('posts errors and the spend alert as unlabeled Replies', async () => {
+  it('posts errors as unlabeled Replies', async () => {
     const failing = harness(undefined, 'yes', { converse: async () => { throw new Error('provider exploded'); } });
     await failing.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
     expect(failing.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^This request could not finish/) });
     expect(failing.messages.at(-1)!.kind).toBeUndefined();
 
-    const h = harness(undefined, 'yes', { alertMicro: 0 });
-    await h.budget.reserve(alice, 1);
-    await h.engine.handle(alice, { type: 'text', text: 'budget' }, uid());
-    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringContaining('The team AI allowance has reached its alert threshold') });
-    expect(h.messages.at(-1)!.kind).toBeUndefined();
   });
 });

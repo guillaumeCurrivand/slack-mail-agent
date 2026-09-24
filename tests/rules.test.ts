@@ -1,5 +1,5 @@
 import { expect, it } from 'vitest';
-import { planMessage, starterRules, validateRule, type Rule } from '../src/domain.js';
+import { planMessage, starterRules, validateRule, type Rule } from '../src/modules/mail/domain.js';
 
 const mail = { id: 'm', from: 'Alex <alex@example.com>', subject: 'Project', body: '', labels: ['INBOX'], historyId: '1' };
 const project = (id: string): Rule => ({ id, name: id, category: 'project', kind: 'sender', condition: 'Sender is Alex', senders: ['alex@example.com'], labels: [`Projects/${id}`], action: 'keep', examples: ['Alex matches'] });

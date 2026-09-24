@@ -1,4 +1,4 @@
-import type { Actor } from './domain.js';
+import type { Actor } from './identity.js';
 
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger' };
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[] };

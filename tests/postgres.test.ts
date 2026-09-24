@@ -1,8 +1,9 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { Budget } from '../src/ai.js';
-import { schema, withOwner } from '../src/store.js';
-import { uid } from '../src/domain.js';
+import { Budget } from '../src/core/budget.js';
+import { schema } from '../src/app/schema.js';
+import { withOwner } from '../src/core/store.js';
+import { uid } from '../src/modules/mail/domain.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)('real PostgreSQL concurrency', () => {
@@ -17,8 +18,8 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     const a = await pool.connect(), b = await pool.connect();
     try {
       const results = await Promise.allSettled([
-        new Budget(a).reserve({ team: 'T', user: 'A', channel: 'D' }, 6_000_000),
-        new Budget(b).reserve({ team: 'T', user: 'B', channel: 'D' }, 6_000_000),
+        new Budget(a, 10_000_000, 10_000_000, 'mail').reserve({ team: 'T', user: 'A', channel: 'D' }, 6_000_000),
+        new Budget(b, 10_000_000, 10_000_000, 'probe').reserve({ team: 'T', user: 'B', channel: 'D' }, 6_000_000),
       ]);
       expect(results.filter(r => r.status === 'fulfilled')).toHaveLength(1);
       expect(results.filter(r => r.status === 'rejected')).toHaveLength(1);

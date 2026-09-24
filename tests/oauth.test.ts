@@ -1,13 +1,14 @@
 import { randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
-import { Vault } from '../src/crypto.js';
-import { GoogleOAuth } from '../src/oauth.js';
-import { Store, schema } from '../src/store.js';
-import type { Config } from '../src/config.js';
+import { Vault } from '../src/core/crypto.js';
+import { GoogleOAuth } from '../src/modules/mail/oauth.js';
+import { schema } from '../src/app/schema.js';
+import { Store } from '../src/modules/mail/store.js';
+import type { MailConfig } from '../src/modules/mail/config.js';
 
 let db: PGlite, store: Store;
-const config = { PUBLIC_URL: 'https://agent.example.com', GOOGLE_CLIENT_ID: 'client-id', GOOGLE_CLIENT_SECRET: 'secret', domains: ['example.com'] } as Config;
+const config = { PUBLIC_URL: 'https://agent.example.com', GOOGLE_CLIENT_ID: 'client-id', GOOGLE_CLIENT_SECRET: 'secret', domains: ['example.com'] } as MailConfig & { PUBLIC_URL: string };
 const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); store = new Store({ query: (q, p) => db.query(q, p) }); });
 beforeEach(async () => { await db.exec('TRUNCATE oauth_states'); });
