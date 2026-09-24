@@ -8,7 +8,7 @@ For a documentation-only change, pulling the commit is sufficient if the running
 
 ## Update and restart
 
-Run this in Bash on the production server, as the account that owns the checkout and can run Docker. PostgreSQL must already be running. The host needs Git, Docker Compose, and curl. The checkout must be clean and on `main`; the checks stop the procedure if local changes need attention. Preserve the existing `.env`, particularly `ENCRYPTION_KEY` and database credentials.
+Run this in Bash on the production server, as the account that owns the checkout and can run Docker. PostgreSQL must already be running. The host needs Git, Docker Compose, and curl **7.71.0 or newer** (check with `curl --version`). The readiness check uses [`--retry-all-errors`](https://curl.se/docs/manpage.html#--retry-all-errors) to retry connection resets as well as refused connections while Node starts behind Docker's published port. The checkout must be clean and on `main`; the checks stop the procedure if local changes need attention. Preserve the existing `.env`, particularly `ENCRYPTION_KEY` and database credentials.
 
 The deployment procedure is implemented in [`scripts/deploy.sh`](../scripts/deploy.sh). On your first update, pull to obtain the script, then run it:
 

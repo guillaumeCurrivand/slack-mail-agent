@@ -70,7 +70,7 @@ main() {
   docker compose up -d --no-deps app
   deployment_stage='readiness check'
   local readiness
-  readiness="$(curl --fail --silent --show-error --retry 12 --retry-connrefused \
+  readiness="$(curl --fail --silent --show-error --retry 12 --retry-all-errors \
     --retry-delay 2 --max-time 5 "${DEPLOY_READY_URL:-http://127.0.0.1:3001/ready}")"
   [[ "${readiness//[[:space:]]/}" == '{"ok":true}' ]] || fail "Unexpected readiness response. Inspect docker compose logs --tail 50 app."
 

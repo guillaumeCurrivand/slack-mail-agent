@@ -76,6 +76,8 @@ describe.skipIf(!existsSync(bash))('production deployment script (fake external 
       'docker compose up -d --no-deps app',
     ]);
     expect(operations[5]).toContain('http://127.0.0.1:3001/ready');
+    expect(operations[5]).toContain('--retry 12 --retry-all-errors');
+    expect(operations[5]).not.toContain('--retry-connrefused');
     expect(result.files).toHaveLength(1);
     expect(result.files[0]).toMatch(/\.dump$/);
     expect(readFileSync(path.join(result.backups, result.files[0]!), 'utf8')).toBe('fake database dump');
