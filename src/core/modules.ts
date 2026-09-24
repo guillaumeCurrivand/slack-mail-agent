@@ -7,7 +7,7 @@ import type { Sql } from './store.js';
 
 export type JobPayload = Record<string, unknown>;
 export type RoutedJob = { module: string; payload: JobPayload };
-export type ModuleContext = { sql: Sql; budget: Budget; messenger: Messenger };
+export type ModuleContext = { sql: Sql; budget: Budget; messenger: Messenger; requestedAt: Date };
 export interface AssistantModule {
   id: string;
   description: string;

@@ -4,15 +4,15 @@ Status: approved by the user after the design interview. An initial local implem
 
 ## Approved module extension
 
-The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter and the first channel-selection slice of Slack Unanswered are implemented. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
+The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter and Slack Unanswered's channel-selection and direct-mention search slices are implemented. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
 
 Modules are maintained in this repository and deployed together, with independent enablement, connection requirements, and user data. All modules share the existing $10 monthly AI ceiling, with usage tracked by module. Disabled modules do not execute work; saved state and pending jobs remain for re-enablement. Existing queued mail work and previously posted mail buttons retain their approval and ownership safeguards.
 
-The Slack Unanswered channel-selection workflow is implemented but disabled by default; searching for unanswered messages is still pending. Its approved full behavior is specified in [the Slack Unanswered feature contract](slack-unanswered.md). See [the architecture decision](adr/0002-private-assistant-modules.md) for rationale and [module guide](adding-a-module.md) for implementation conventions.
+The Slack Unanswered channel-selection and direct-mention search workflows are implemented but disabled by default; contextual question matching is still pending. Its approved full behavior is specified in [the Slack Unanswered feature contract](slack-unanswered.md). See [the architecture decision](adr/0002-private-assistant-modules.md) for rationale and [module guide](adding-a-module.md) for implementation conventions.
 
 ## Slack Unanswered module
 
-The `slack` module provides `slack channels` to manage each user's selected public and private channels shared with the bot. It starts with no selections, preserves them when access is temporarily lost, and allows only that user to remove them. It does not need Gmail. The module is disabled by default; when enabled, `slack unanswered` explains that searching is not available yet. The approved matching rules, channel access boundaries, result format, AI behavior, and remaining work are defined in the [feature contract](slack-unanswered.md).
+The `slack` module provides `slack channels` to manage each user's selected public and private channels shared with the bot. It starts with no selections, preserves them when access is temporarily lost, and allows only that user to remove them. It does not need Gmail. The module is disabled by default; when enabled, `slack unanswered` searches on demand for direct @mentions and profile-name matches posted in the rolling 48 hours before the command. It excludes messages after the user replies later in their thread, groups linked results by channel, and privately reports inaccessible selected channels. Contextual question and uncertain matching remain pending. The approved full behavior is in the [feature contract](slack-unanswered.md).
 
 ## Audience and access
 

@@ -6,7 +6,7 @@
 - Adding a module or changing routing, jobs, persistence, or spending: read [Adding a module](docs/adding-a-module.md). It defines the extension contract and ownership conventions.
 - Naming domain concepts: use [CONTEXT.md](CONTEXT.md), which is a glossary, not an implementation plan.
 - Changing an architectural decision: read the relevant [ADR](docs/adr/). Record the reason for a consequential trade-off there; keep current behavior in the specification.
-- Implementing or changing Slack Unanswered: read [its approved feature contract](docs/slack-unanswered.md). Channel selection is implemented; message search and live Slack access setup are still pending.
+- Implementing or changing Slack Unanswered: read [its approved feature contract](docs/slack-unanswered.md).
 - Running, configuring, or upgrading the application: use [README.md](README.md). Completed plans in `docs/archive/` provide historical context and do not override current documentation.
 - Preparing a production update: use [Updating production](docs/deployment.md). Production uses Docker Compose; preserve the existing environment and database volume.
 

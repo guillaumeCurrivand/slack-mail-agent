@@ -22,13 +22,13 @@ Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specifi
 - `src/app/`: configuration, built-in module composition, startup, and compatibility migrations.
 - `src/core/`: Slack transport, explicit routing, durable jobs, identity and locking, messaging, and shared AI budget.
 - `src/modules/mail/`: mail commands, Gmail/OAuth, rules, previews, undo, mail AI, state, and retention.
-- `src/modules/slack/`: per-user Slack channel choices and shared-channel discovery.
+- `src/modules/slack/`: per-user Slack channel choices, shared-channel discovery, and on-demand direct unanswered-message search.
 
 `ENABLED_MODULES=mail` is the default. An empty value starts only shared help, budget, and health endpoints; Gmail, encryption, and AI credentials are then unnecessary. Unknown or duplicate module identifiers fail startup. Availability is deployment-wide; each user still owns their connections and data. Restart to apply a module configuration change.
 
 Disabled modules expose no routes and execute no queued work. Their pending jobs and state are retained for re-enablement, and their module-specific retention cleanup is paused while disabled. Other modules and shared commands continue processing. Modules are trusted code deployed together, not sandboxed plugins.
 
-The first Slack Unanswered slice is implemented but disabled by default. Set `ENABLED_MODULES=mail,slack` (or `slack` without Mail Sorter) to offer `slack channels` in private DMs. This lets each user select shared public and private channels; it does not read channel history. If Slack does not show a response after a delivery error, repeat `slack channels` to see the saved choice. `slack unanswered` is not available yet. See the [feature contract](docs/slack-unanswered.md) for the remaining behavior and the [architecture decision](docs/adr/0002-private-assistant-modules.md).
+Slack Unanswered's direct matching slice is implemented but disabled by default. Set `ENABLED_MODULES=mail,slack` (or `slack` without Mail Sorter) to offer `slack channels` and `slack unanswered` in private DMs. Each user first selects shared public and private channels with `slack channels`; the module does not read channel history until `slack unanswered` is requested. That command privately lists direct @mentions and profile-name matches posted in the preceding 48 hours if the user has not replied later in the thread. Contextual question and uncertain matching remain planned. If Slack does not show a response after a delivery error, repeat the command to see current state. See the [feature contract](docs/slack-unanswered.md) for the remaining behavior and the [architecture decision](docs/adr/0002-private-assistant-modules.md).
 
 ### Upgrading an existing installation
 
@@ -55,9 +55,9 @@ For a single server running both app and database, start with 1 vCPU, 2 GB RAM a
 
 Create a Slack app for your workspace using [slack-manifest.json](slack-manifest.json). Replace `https://YOUR_HOST` with your public origin. The endpoints are `/slack/events` and `/slack/actions`. Enable the app's Messages tab so users can DM the bot.
 
-The app uses `message.im` events and the bot scopes `im:history`, `chat:write`, `channels:read`, and `groups:read`. The last two allow `slack channels` to list public and private channels shared by the bot and requesting user. Update the app's scopes and reinstall it to grant them before enabling `slack`; invite the bot to channels users should be able to choose. Put the installed bot token, signing secret, and workspace ID in `.env`. Set `SLACK_ADMIN_USER_ID` if one person should receive private operational spending alerts; it grants no access to other users' rules or mail. Otherwise the user whose request crosses the threshold receives the alert.
+The app uses `message.im` events and the bot scopes `im:history`, `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, and `users:read`. The read scopes support listing shared channels, reading selected channel histories and threads, and matching Slack profile names. Update the app's scopes and reinstall it to grant them before enabling `slack`; invite the bot to channels users should be able to choose. Put the installed bot token, signing secret, and workspace ID in `.env`. Set `SLACK_ADMIN_USER_ID` if one person should receive private operational spending alerts; it grants no access to other users' rules or mail. Otherwise the user whose request crosses the threshold receives the alert.
 
-Slack requests must be signed and belong to the configured workspace. Incoming channel-message events, bot messages, edited-message events, unsigned requests and replayed timestamps are excluded from event dispatch. `slack channels` lists only shared channels, using a bot token; on-demand channel-history reads for `slack unanswered` are not implemented yet. Events are acknowledged after durable enqueue, before module processing.
+Slack requests must be signed and belong to the configured workspace. Incoming channel-message events, bot messages, edited-message events, unsigned requests and replayed timestamps are excluded from event dispatch. `slack channels` lists only shared channels using a bot token; `slack unanswered` reads selected channel history only on command. Searching long-lived channels may take time or encounter Slack rate limits because older roots must be inspected for recent thread replies. Events are acknowledged after durable enqueue, before module processing.
 
 ## Google Workspace setup
 

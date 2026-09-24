@@ -66,10 +66,12 @@ async function harness() {
       return messages.at(-1)!;
     } finally { await stop(); }
   };
-  const dm = async (text: string, actor = alice) => {
-    const raw = JSON.stringify({ type: 'event_callback', team_id: actor.team, event_id: `event-${crypto.randomUUID()}`,
+  const dm = async (text: string, actor = alice, requestedAt?: Date) => {
+    const eventId = `event-${crypto.randomUUID()}`;
+    const raw = JSON.stringify({ type: 'event_callback', team_id: actor.team, event_id: eventId,
       event: { type: 'message', channel_type: 'im', user: actor.user, channel: actor.channel, text } });
     expect((await post('/slack/events', raw, 'application/json')).statusCode).toBe(200);
+    if (requestedAt) await sql.query('UPDATE jobs SET created_at=$1 WHERE id=$2', [requestedAt, `slack:${eventId}`]);
     return receive();
   };
   const postAction = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice) => {
@@ -217,5 +219,138 @@ it('retries a private response when Slack definitely rejects the first delivery'
     await h.drain();
     expect(h.messages).toHaveLength(delivered + 1);
     expect(h.messages.at(-1)!.message.text).toContain('Selected channels: 1');
+  } finally { await h.close(); }
+});
+
+it('lists an unanswered direct mention from a selected channel in a private reply', async () => {
+  const messageTs = `${Math.floor(Date.now() / 1000) - 60}.000001`;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url);
+    const channel = { id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false };
+    if (request.pathname.endsWith('/users.conversations')) return { ok: true, json: async () => ({ ok: true, channels: [channel], response_metadata: { next_cursor: '' } }) };
+    if (request.pathname.endsWith('/users.info')) return { ok: true, json: async () => ({ ok: true, user: request.searchParams.get('user') === 'UALICE'
+      ? { id: 'UALICE', profile: { display_name: 'Alice', real_name: 'Alice Smith', first_name: 'Alice' } }
+      : { id: 'UBOB', profile: { display_name: 'Bob', real_name: 'Bob Jones', first_name: 'Bob' } } }) };
+    if (request.pathname.endsWith('/conversations.history')) return { ok: true, json: async () => ({ ok: true, messages: [
+      { type: 'message', user: 'UBOB', ts: messageTs, text: 'Hi <@UALICE>, the report is ready.', reply_count: 0 },
+    ], response_metadata: { next_cursor: '' } }) };
+    if (request.pathname.endsWith('/conversations.replies')) return { ok: true, json: async () => ({ ok: true, messages: [
+      { type: 'message', user: 'UBOB', ts: messageTs, text: 'Hi <@UALICE>, the report is ready.' },
+    ], response_metadata: { next_cursor: '' } }) };
+    if (request.pathname.endsWith('/chat.getPermalink')) return { ok: true, json: async () => ({ ok: true, permalink: 'https://example.slack.com/archives/CPUBLIC/p123' }) };
+    throw new Error(`Unexpected Slack API: ${request.pathname}`);
+  }));
+  const h = await harness();
+  try {
+    const channels = await h.dm('slack channels');
+    await h.click(channels.message.buttons![0]!);
+    const result = await h.dm('slack unanswered');
+    expect(result.actor).toEqual(alice);
+    expect(result.message.kind).toBe('Unanswered for you');
+    expect(result.message.text).toContain('general');
+    expect(result.message.text).toContain('Bob');
+    expect(result.message.text).toContain('the report is ready');
+    expect(result.message.text).toContain('https://example.slack.com/archives/CPUBLIC/p123');
+  } finally { await h.close(); }
+});
+
+it('uses the command time and full threads for name matches, collisions, and later replies', async () => {
+  const anchor = Math.floor(Date.now() / 1000) - 10;
+  const stamp = (seconds: number) => `${seconds}.000001`;
+  const cutoff = anchor - 48 * 3600;
+  const root = (seconds: number, text: string, user = 'UAUTHOR', extra = {}) => ({ type: 'message', ts: stamp(seconds), text, user, ...extra });
+  const shared = root(anchor - 20, 'Hello Alice, please look');
+  const display = root(anchor - 21, 'Ali: any update?');
+  const full = root(anchor - 22, 'Alice Cooper needs to see this');
+  const mention = root(anchor - 23, '<@UALICE> can you review?');
+  const boundary = root(cutoff, 'Alice at the boundary');
+  const expired = root(cutoff - 1, 'Alice too old');
+  const future = root(anchor + 1, 'Alice after command');
+  const own = root(anchor - 24, 'Alice wrote this', 'UALICE');
+  const unrelated = root(anchor - 25, 'Anyone have an update?');
+  const answered = root(anchor - 26, 'Alice, please answer', 'UAUTHOR', { reply_count: 1, latest_reply: stamp(anchor - 3) });
+  const answeredFile = root(anchor - 27, 'Alice, please inspect the file', 'UAUTHOR', { reply_count: 1, latest_reply: stamp(anchor - 2) });
+  const oldRoot = root(cutoff - 7200, 'An old thread', 'UAUTHOR', { reply_count: 1, latest_reply: stamp(anchor - 4) });
+  const recentReply = root(anchor - 4, 'Alice, check the old thread', 'UAUTHOR', { subtype: 'thread_broadcast' });
+  const roots = [shared, display, full, mention, boundary, expired, future, own, unrelated, answered, answeredFile, oldRoot];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (method === 'users.conversations') return { ok: true, json: async () => ({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } }) };
+    if (method === 'users.info') {
+      const user = request.searchParams.get('user');
+      const profile = user === 'UALICE' ? { display_name: 'Ali', real_name: 'Alice Cooper', first_name: 'Alice' }
+        : user === 'UBOB' ? { display_name: 'Bobby', real_name: 'Alice Brown', first_name: 'Alice' }
+          : { display_name: 'Author', real_name: 'Author Person', first_name: 'Author' };
+      return { ok: true, json: async () => ({ ok: true, user: { id: user, profile } }) };
+    }
+    if (method === 'conversations.history') return { ok: true, json: async () => ({ ok: true, messages: roots, response_metadata: { next_cursor: '' } }) };
+    if (method === 'conversations.replies') {
+      const ts = request.searchParams.get('ts');
+      return { ok: true, json: async () => ({ ok: true, messages: ts === answered.ts
+        ? [answered, root(anchor - 3, 'I replied', 'UALICE', { subtype: 'me_message' })]
+        : ts === answeredFile.ts ? [answeredFile, { type: 'message', ts: stamp(anchor - 2), user: 'UALICE', subtype: 'file_share' }]
+          : [oldRoot, recentReply], response_metadata: { next_cursor: '' } }) };
+    }
+    if (method === 'chat.getPermalink') return { ok: true, json: async () => ({ ok: true, permalink: `https://example.slack.com/archives/CPUBLIC/p${request.searchParams.get('message_ts')?.replace('.', '')}` }) };
+    throw new Error(`Unexpected Slack API: ${method}`);
+  }));
+  const h = await harness();
+  try {
+    const channels = await h.dm('slack channels');
+    await h.click(channels.message.buttons![0]!);
+    const result = await h.dm('slack unanswered', alice, new Date(anchor * 1000));
+    const text = result.message.text;
+    for (const expected of ['Hello Alice', 'Ali: any update', 'Alice Cooper', 'can you review', 'at the boundary', 'check the old thread']) expect(text).toContain(expected);
+    for (const excluded of ['too old', 'after command', 'wrote this', 'please answer', 'inspect the file', 'Anyone have']) expect(text).not.toContain(excluded);
+    expect(text.indexOf('Hello Alice')).toBeLessThan(text.indexOf('at the boundary'));
+    const bobBefore = await h.dm('slack unanswered', bob, new Date(anchor * 1000));
+    expect(bobBefore.actor).toEqual(bob);
+    expect(bobBefore.message.text).toContain('Choose sources with slack channels');
+    expect(bobBefore.message.text).not.toContain('Hello Alice');
+    const bobChannels = await h.dm('slack channels', bob);
+    await h.click(bobChannels.message.buttons![0]!, bob);
+    const bobAfter = await h.dm('slack unanswered', bob, new Date(anchor * 1000));
+    expect(bobAfter.actor).toEqual(bob);
+    expect(bobAfter.message.text).toContain('Hello Alice');
+  } finally { await h.close(); }
+});
+
+it('groups and paginates private results while reporting inaccessible selected channels', async () => {
+  let privateVisible = true;
+  const stamp = (offset: number) => `${Math.floor(Date.now() / 1000) - offset}.000001`;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (method === 'users.conversations') return { ok: true, json: async () => ({ ok: true, channels: [
+      { id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false },
+      ...(privateVisible ? [{ id: 'GPRIVATE', name: 'planning', is_group: true, is_private: true }] : []),
+    ], response_metadata: { next_cursor: '' } }) };
+    if (method === 'users.info') return { ok: true, json: async () => ({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Author' } } }) };
+    if (method === 'conversations.history') return { ok: true, json: async () => ({ ok: true, messages: request.searchParams.get('channel') === 'CPUBLIC'
+      ? Array.from({ length: 9 }, (_, i) => ({ type: 'message', ts: stamp(i + 2), user: 'UAUTHOR', text: `Alice public ${i}` }))
+      : [{ type: 'message', ts: stamp(1), user: 'UAUTHOR', text: 'Alice private result' }], response_metadata: { next_cursor: '' } }) };
+    if (method === 'chat.getPermalink') return { ok: true, json: async () => ({ ok: true, permalink: 'https://example.slack.com/archives/source' }) };
+    throw new Error(`Unexpected Slack API: ${method}`);
+  }));
+  const h = await harness();
+  try {
+    const channels = await h.dm('slack channels');
+    for (const button of channels.message.buttons!) await h.click(button);
+    const first = await h.dm('slack unanswered');
+    expect(first.actor).toEqual(alice);
+    expect(first.message.text).toContain('page 1/2');
+    expect(first.message.text).toContain('general');
+    expect(first.message.text).toContain('public 0');
+    expect(first.message.text).not.toContain('private result');
+    const second = await h.click(first.message.buttons!.find(button => button.label === 'Next')!);
+    expect(second.actor).toEqual(alice);
+    expect(second.message.text).toContain('page 2/2');
+    expect(second.message.text).toContain('planning');
+    expect(second.message.text).toContain('private result');
+    expect(second.message.text).toContain('Open message');
+    privateVisible = false;
+    const skipped = await h.dm('slack unanswered');
+    expect(skipped.message.text).toContain('Skipped inaccessible selected channels: GPRIVATE');
+    expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 2');
   } finally { await h.close(); }
 });

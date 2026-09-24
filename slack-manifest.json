@@ -8,7 +8,7 @@
     "bot_user": { "display_name": "Mail Sorter", "always_online": false },
     "app_home": { "home_tab_enabled": false, "messages_tab_enabled": true, "messages_tab_read_only_enabled": false }
   },
-  "oauth_config": { "scopes": { "bot": ["chat:write", "im:history", "channels:read", "groups:read"] } },
+  "oauth_config": { "scopes": { "bot": ["chat:write", "im:history", "channels:read", "groups:read", "channels:history", "groups:history", "users:read"] } },
   "settings": {
     "event_subscriptions": {
       "request_url": "https://YOUR_HOST/slack/events",

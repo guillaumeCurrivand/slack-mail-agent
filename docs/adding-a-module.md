@@ -1,6 +1,6 @@
 # Adding a built-in module
 
-Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter and the channel-selection slice of Slack Unanswered ship today.
+Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter and Slack Unanswered's channel selection and direct-message search ship today.
 
 ## Interface and routing
 
@@ -8,7 +8,7 @@ Implement `AssistantModule` from `src/core/modules.ts`. Required fields are a st
 
 Each new DM request starts with the module ID. The core removes the prefix and queues the request with an immutable module identifier. For example, `slack unanswered` reaches the Slack module as `{ type: 'text', text: 'unanswered' }`. A prefix by itself becomes the module's `help` request. Unknown prefixes and unprefixed requests receive shared guidance without paid AI routing. `help` and `budget` are reserved shared commands; `core` is reserved for internal routing.
 
-The handler receives the authenticated Slack actor, a durable event ID, the current database connection, a budget attributed to this module, and a messenger. Pass local button action IDs to that messenger: it adds the module namespace automatically. The router removes the namespace when the button is clicked. Verify that every referenced object and approval belongs to the actor; a namespaced action is not authorization.
+The handler receives the authenticated Slack actor, a durable event ID, the current database connection, a budget attributed to this module, a messenger, and the queued job's request time. Pass local button action IDs to that messenger: it adds the module namespace automatically. The router removes the namespace when the button is clicked. Verify that every referenced object and approval belongs to the actor; a namespaced action is not authorization.
 
 `legacyActions` exists solely for exact pre-module button IDs already posted to Slack. New modules should not use it. Duplicate module IDs, reserved IDs, and ambiguous legacy action registrations are rejected.
 

@@ -1,6 +1,6 @@
 # Slack Unanswered module spec
 
-Status: approved feature spec; channel selection is implemented but disabled by default, and message search is pending. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
+Status: approved feature spec; channel selection and direct mention/name search are implemented but disabled by default. Contextual question and uncertain matching are pending. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
 
 ## Problem Statement
 
@@ -72,4 +72,4 @@ Prior art includes `tests/modules.test.ts` for routing, durable dispatch, module
 
 ## Further Notes
 
-The app currently handles private DMs only. Channel selection is implemented locally, while channel-history permissions, live Slack-provider verification, and model-quality evaluation remain implementation and release work. Channel selection and access checks must preserve the product's user-ownership boundary. Slack platform retention and AI-provider retention remain separate from this application's retained state.
+The app currently handles private DMs only. Channel selection and direct mention/name search are implemented locally. Search scans selected channel history on demand, including older thread roots that have recent replies; large or long-lived channels can make this slow and encounter Slack rate limits. The required history/profile permissions and live Slack-provider behavior remain to be verified after installation. Contextual matching and model-quality evaluation remain implementation work. Channel selection and access checks must preserve the product's user-ownership boundary. Slack platform retention and AI-provider retention remain separate from this application's retained state.
