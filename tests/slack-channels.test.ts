@@ -12,13 +12,12 @@ import { JobStore, type Sql } from '../src/core/store.js';
 import { worker } from '../src/core/worker.js';
 
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'token', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'slack' };
-const config = readConfig(env);
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
 let db: PGlite, sql: Sql;
 
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
-beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events'); });
+beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts'); });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
@@ -35,10 +34,11 @@ function fakeChannels() {
   }));
 }
 
-async function harness() {
-  const modules = createModules(config, sql, env);
+async function harness(runtimeEnv: NodeJS.ProcessEnv = env) {
+  const runtimeConfig = readConfig(runtimeEnv);
+  const modules = createModules(runtimeConfig, sql, runtimeEnv);
   for (const module of modules.all()) await module.initialize?.(sql);
-  const app = createServer(config, new JobStore(sql), modules);
+  const app = createServer(runtimeConfig, new JobStore(sql), modules);
   const messages: Array<{ actor: Actor; message: AgentMessage }> = [];
   let failAfterDelivery = false;
   let rejectBeforeDelivery = false;
@@ -58,7 +58,7 @@ async function harness() {
   };
   const receive = async () => {
     const before = messages.length;
-    const stop = worker(pool, { ...config, WORKER_CONCURRENCY: 1 }, modules, messenger);
+    const stop = worker(pool, { ...runtimeConfig, WORKER_CONCURRENCY: 1 }, modules, messenger);
     try {
       const start = Date.now();
       while (messages.length === before && Date.now() - start < 3000) await new Promise(resolve => setTimeout(resolve, 20));
@@ -66,14 +66,14 @@ async function harness() {
       return messages.at(-1)!;
     } finally { await stop(); }
   };
-  const dm = async (text: string, actor = alice, requestedAt?: Date) => {
+  const postDm = async (text: string, actor = alice, requestedAt?: Date) => {
     const eventId = `event-${crypto.randomUUID()}`;
     const raw = JSON.stringify({ type: 'event_callback', team_id: actor.team, event_id: eventId,
       event: { type: 'message', channel_type: 'im', user: actor.user, channel: actor.channel, text } });
     expect((await post('/slack/events', raw, 'application/json')).statusCode).toBe(200);
     if (requestedAt) await sql.query('UPDATE jobs SET created_at=$1 WHERE id=$2', [requestedAt, `slack:${eventId}`]);
-    return receive();
   };
+  const dm = async (text: string, actor = alice, requestedAt?: Date) => { await postDm(text, actor, requestedAt); return receive(); };
   const postAction = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice) => {
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user },
       channel: { id: actor.channel }, actions: [{ action_id: button.action, value: button.value, action_ts: crypto.randomUUID() }] }) }).toString();
@@ -81,10 +81,10 @@ async function harness() {
   };
   const click = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice) => { await postAction(button, actor); return receive(); };
   const drain = async () => {
-    const stop = worker(pool, { ...config, WORKER_CONCURRENCY: 1 }, modules, messenger);
+    const stop = worker(pool, { ...runtimeConfig, WORKER_CONCURRENCY: 1 }, modules, messenger);
     try { await new Promise(resolve => setTimeout(resolve, 650)); } finally { await stop(); }
   };
-  return { dm, click, postAction, drain, messages, failNextDelivery: () => { failAfterDelivery = true; },
+  return { dm, postDm, click, postAction, drain, messages, failNextDelivery: () => { failAfterDelivery = true; },
     rejectNextDelivery: () => { rejectBeforeDelivery = true; }, close: () => app.close() };
 }
 
@@ -352,5 +352,137 @@ it('groups and paginates private results while reporting inaccessible selected c
     const skipped = await h.dm('slack unanswered');
     expect(skipped.message.text).toContain('Skipped inaccessible selected channels: GPRIVATE');
     expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 2');
+  } finally { await h.close(); }
+});
+
+it('finds clear requests and contextually possible replies without assigning generic channel questions', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const stamp = (seconds: number) => `${seconds}.000001`;
+  const oldClear = { type: 'message', ts: stamp(now - 60 * 60 * 60), user: 'UTHIRD', text: 'Alice owns the release report.', reply_count: 1, latest_reply: stamp(now - 30) };
+  const clear = { type: 'message', ts: stamp(now - 30), user: 'UAUTHOR', text: 'Can the report owner send the latest version?' };
+  const oldPossible = { type: 'message', ts: stamp(now - 60 * 60 * 60 - 10), user: 'UALICE', text: 'I have the handoff notes.', reply_count: 1, latest_reply: stamp(now - 20) };
+  const possible = { type: 'message', ts: stamp(now - 20), user: 'UAUTHOR', text: 'Could someone finish this handoff?' };
+  const oldGeneric = { type: 'message', ts: stamp(now - 60 * 60 * 60 - 20), user: 'UTHIRD', text: 'The office is open.', reply_count: 1, latest_reply: stamp(now - 10) };
+  const generic = { type: 'message', ts: stamp(now - 10), user: 'UAUTHOR', text: 'Can anyone help with this?' };
+  const answered = { type: 'message', ts: stamp(now - 40), user: 'UAUTHOR', text: 'Can the report owner approve this too?', reply_count: 1, latest_reply: stamp(now - 2) };
+  const direct = { type: 'message', ts: stamp(now - 5), user: 'UAUTHOR', text: '<@UALICE> here is your update.' };
+  const modelInputs: any[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (request.hostname === 'api.openai.com') {
+      const body = JSON.parse(String(options?.body));
+      modelInputs.push(body);
+      if (method === 'input_tokens') return Response.json({ input_tokens: 200 });
+      const input = JSON.parse(body.input);
+      const results = input.candidates.map((candidate: any) => ({ id: candidate.id,
+        decision: candidate.text.includes('owner') ? 'clear' : 'possible',
+        evidenceTs: candidate.text.includes('owner') ? oldClear.ts : candidate.text.includes('handoff') ? oldPossible.ts : oldGeneric.ts,
+        reason: candidate.text.includes('owner') ? 'The older thread names Alice as owner.' : candidate.text.includes('handoff') ? 'Alice offered the handoff notes earlier.' : 'The office is open.' }));
+      return Response.json({ status: 'completed', usage: { input_tokens: 200, output_tokens: 80 },
+        output: [{ content: [{ type: 'output_text', text: JSON.stringify({ results }) }] }] });
+    }
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', real_name: 'Alice Smith', first_name: 'Alice' } : { display_name: 'Author' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [oldClear, oldPossible, oldGeneric, answered, direct], response_metadata: { next_cursor: '' } });
+    if (method === 'conversations.replies') return Response.json({ ok: true, messages: request.searchParams.get('ts') === oldClear.ts ? [oldClear, clear]
+      : request.searchParams.get('ts') === oldPossible.ts ? [oldPossible, possible]
+        : request.searchParams.get('ts') === answered.ts ? [answered, { type: 'message', ts: stamp(now - 2), user: 'UALICE', text: 'Handled it.', subtype: 'me_message' }]
+          : [oldGeneric, generic], response_metadata: { next_cursor: '' } });
+    if (method === 'chat.getPermalink') return Response.json({ ok: true, permalink: `https://example.slack.com/archives/CPUBLIC/p${request.searchParams.get('message_ts')?.replace('.', '')}` });
+    throw new Error(`Unexpected provider call: ${request.pathname}`);
+  }));
+  const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
+  try {
+    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    const result = await h.dm('slack unanswered');
+    expect(result.actor).toEqual(alice);
+    expect(result.message.kind).toBe('Unanswered for you');
+    expect(result.message.text).toContain('here is your update');
+    expect(result.message.text).toContain('report owner send');
+    expect(result.message.text).toContain('Possibly for you');
+    expect(result.message.text).toContain('finish this handoff');
+    expect(result.message.text).not.toContain('Can anyone help');
+    expect(result.message.text).not.toContain('approve this too');
+    expect(result.message.text).toContain('Open message');
+    expect(JSON.stringify(modelInputs)).toContain('Alice owns the release report');
+    expect(JSON.stringify(modelInputs)).toContain('I have the handoff notes');
+    expect(JSON.stringify(modelInputs)).not.toContain('here is your update');
+    expect(JSON.stringify(modelInputs)).not.toContain('approve this too');
+    expect(modelInputs.some(input => input.instructions?.includes('untrusted'))).toBe(true);
+    expect(modelInputs.some(input => input.store === false)).toBe(true);
+    const budget = await h.dm('budget');
+    expect(budget.message.text).toContain('slack: $');
+  } finally { await h.close(); }
+});
+
+it('keeps direct matches and discloses incomplete contextual search when the shared AI budget is exhausted', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const direct = { type: 'message', ts: `${now - 10}.000001`, user: 'UAUTHOR', text: '<@UALICE> please review the draft' };
+  const contextual = { type: 'message', ts: `${now - 9}.000001`, user: 'UAUTHOR', text: 'Could the owner approve this?' };
+  let paidCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (request.hostname === 'api.openai.com') {
+      if (method === 'input_tokens') return Response.json({ input_tokens: 100 });
+      paidCalls++;
+      throw new Error('Paid generation should not run.');
+    }
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Author' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [direct, contextual], response_metadata: { next_cursor: '' } });
+    if (method === 'chat.getPermalink') return Response.json({ ok: true, permalink: 'https://example.slack.com/archives/CPUBLIC/p1' });
+    throw new Error(`Unexpected provider call: ${request.pathname}`);
+  }));
+  const h = await harness({ ...env, OPENAI_API_KEY: 'fake', AI_MONTHLY_LIMIT_USD: '0' });
+  try {
+    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    const result = await h.dm('slack unanswered');
+    expect(result.actor).toEqual(alice);
+    expect(result.message.text).toContain('please review the draft');
+    expect(result.message.text).toContain('Possibly for you could not be fully checked');
+    expect(result.message.text).not.toContain('owner approve');
+    expect(paidCalls).toBe(0);
+  } finally { await h.close(); }
+});
+
+it('does not pay for the same contextual classification again after Slack rejects its private response and the worker restarts', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const old = { type: 'message', ts: `${now - 60 * 60 * 60}.000001`, user: 'UTHIRD', text: 'Alice owns the release.', reply_count: 1, latest_reply: `${now - 10}.000001` };
+  const candidate = { type: 'message', ts: `${now - 10}.000001`, user: 'UAUTHOR', text: 'Can the owner send the release report?' };
+  let paidCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (request.hostname === 'api.openai.com') {
+      if (method === 'input_tokens') return Response.json({ input_tokens: 100 });
+      paidCalls++;
+      const id = JSON.parse(JSON.parse(String(options?.body)).input).candidates[0].id;
+      return Response.json({ status: 'completed', usage: { input_tokens: 100, output_tokens: 40 },
+        output: [{ content: [{ type: 'output_text', text: JSON.stringify({ results: [{ id, decision: 'clear', evidenceTs: old.ts, reason: 'Alice owns the release.' }] }) }] }] });
+    }
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Author' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [old], response_metadata: { next_cursor: '' } });
+    if (method === 'conversations.replies') return Response.json({ ok: true, messages: [old, candidate], response_metadata: { next_cursor: '' } });
+    if (method === 'chat.getPermalink') return Response.json({ ok: true, permalink: 'https://example.slack.com/archives/CPUBLIC/p1' });
+    throw new Error(`Unexpected provider call: ${request.pathname}`);
+  }));
+  const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
+  try {
+    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    h.rejectNextDelivery();
+    await h.postDm('slack unanswered');
+    await h.drain();
+    expect(h.messages).toHaveLength(2);
+    await sql.query("UPDATE jobs SET available_at=now() WHERE module='slack' AND status='queued'");
+    const restarted = await harness({ ...env, OPENAI_API_KEY: 'fake' });
+    try {
+      await restarted.drain();
+      expect(restarted.messages).toHaveLength(1);
+      expect(restarted.messages[0]!.message.text).toContain('owner send the release report');
+    } finally { await restarted.close(); }
+    expect(paidCalls).toBe(1);
   } finally { await h.close(); }
 });

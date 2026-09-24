@@ -3,9 +3,11 @@ import type { AssistantModule, JobPayload, ModuleContext } from '../../core/modu
 import { escapeCardValue, escapeSlack, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
 import { SlackChannelDirectory, type Channel } from './channels.js';
+import { SlackAI } from './ai.js';
+import type { readSlackConfig } from './config.js';
 import { SlackHistory } from './history.js';
-import { slackHandledSchema, slackSchema, SlackChannelSelections } from './store.js';
-import { SlackUnansweredSearch } from './unanswered.js';
+import { slackAiSchema, slackHandledSchema, slackSchema, SlackAiAttempts, SlackChannelSelections } from './store.js';
+import { SlackUnansweredSearch, type UnansweredMatch } from './unanswered.js';
 
 const PAGE_SIZE = 10;
 const RESULT_PAGE_SIZE = 8;
@@ -23,28 +25,55 @@ const parseResultsPage = (value: unknown) => {
     ? { anchorSeconds: anchor / 1000, page } : undefined;
 };
 
-export function createSlackModule(token: string, sql: Sql): AssistantModule {
+export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<typeof readSlackConfig>): AssistantModule {
   const directory = new SlackChannelDirectory(token);
   const selections = new SlackChannelSelections(sql);
+  const aiAttempts = new SlackAiAttempts(sql);
   const history = new SlackHistory(token);
   const unanswered = new SlackUnansweredSearch(directory, selections, history);
 
-  async function showUnanswered(actor: Actor, context: ModuleContext, anchorSeconds: number, requestedPage = 0) {
+  async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchorSeconds: number, requestedPage = 0) {
     let results;
     try { results = await unanswered.search(actor, anchorSeconds); }
     catch {
       await context.messenger.send(actor, { text: 'Could not search Slack channels right now. Try slack unanswered again.' });
       return;
     }
-    const pages = Math.max(1, Math.ceil(results.matches.length / RESULT_PAGE_SIZE));
+    const clear: UnansweredMatch[] = [...results.matches];
+    const possible: Array<UnansweredMatch & { reason: string }> = [];
+    let incomplete: 'budget' | 'provider' | 'config' | undefined;
+    if (results.candidates.length) {
+      if (!aiConfig.key) incomplete = 'config';
+      else {
+        const classification = await new SlackAI(aiConfig.key, aiConfig.model, context.budget, aiAttempts)
+          .classify(actor, eventId, results.names, results.candidates);
+        incomplete = classification.incomplete;
+        for (const { candidate, decision, reason } of classification.decisions) {
+          if (decision === 'clear') clear.push(candidate);
+          else possible.push({ ...candidate, reason });
+        }
+      }
+    }
+    const sort = (a: UnansweredMatch, b: UnansweredMatch) => a.channel.name.localeCompare(b.channel.name) || Number(b.message.ts) - Number(a.message.ts);
+    clear.sort(sort); possible.sort(sort);
+    const entries = [
+      ...clear.map(item => ({ ...item, group: 'clear' as const, reason: '' })),
+      ...possible.map(item => ({ ...item, group: 'possible' as const })),
+    ];
+    const pages = Math.max(1, Math.ceil(entries.length / RESULT_PAGE_SIZE));
     const page = Math.min(requestedPage, pages - 1);
-    const visible = results.matches.slice(page * RESULT_PAGE_SIZE, (page + 1) * RESULT_PAGE_SIZE);
+    const visible = entries.slice(page * RESULT_PAGE_SIZE, (page + 1) * RESULT_PAGE_SIZE);
     const lines = [`Messages from the 48 hours before your command (page ${page + 1}/${pages}):`];
-    if (!results.matches.length) lines.push('No direct unanswered messages found in your selected channels.');
-    if (!results.matches.length && !(await selections.list(actor)).length) lines.push('Choose sources with slack channels.');
+    if (!entries.length) lines.push('No confirmed unanswered messages found in your selected channels.');
+    if (!entries.length && !(await selections.list(actor)).length) lines.push('Choose sources with slack channels.');
     let previousChannel = '';
+    let previousGroup = '';
     try {
-      for (const { channel, message } of visible) {
+      for (const { channel, message, group, reason } of visible) {
+        if (group !== previousGroup) {
+          lines.push(group === 'clear' ? '*Unanswered for you*' : '*Possibly for you*');
+          previousGroup = group; previousChannel = '';
+        }
         if (channel.id !== previousChannel) lines.push(`*#${escapeCardValue(escapeSlack(channel.name))}*`);
         previousChannel = channel.id;
         const names = await history.profile(message.user).catch(() => []);
@@ -53,12 +82,16 @@ export function createSlackModule(token: string, sql: Sql): AssistantModule {
         const excerpt = escapeCardValue(escapeSlack(message.text.replace(/\s+/g, ' ').slice(0, 220)));
         const link = await history.permalink(channel.id, message.ts);
         lines.push(`• ${author} · ${time}: ${excerpt}${message.text.length > 220 ? '…' : ''} [Open message](${link})`);
+        if (group === 'possible') lines.push(`  Why it may concern you: ${escapeCardValue(escapeSlack(reason))}`);
       }
     } catch {
       await context.messenger.send(actor, { text: 'Could not load Slack message details right now. Try slack unanswered again.' });
       return;
     }
     if (results.skipped.length) lines.push(`Skipped inaccessible selected channels: ${results.skipped.join(', ')}. Your selections are saved.`);
+    if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Direct mention and name matches are still shown.');
+    if (incomplete === 'provider') lines.push('Contextual matching could not be completed right now. Direct mention and name matches are still shown.');
+    if (incomplete === 'config') lines.push('Contextual matching is not configured. Direct mention and name matches are still shown.');
     const buttons: Button[] = [];
     const anchorValue = String(Math.round(anchorSeconds * 1000));
     if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${anchorValue}|${page - 1}` });
@@ -99,18 +132,18 @@ export function createSlackModule(token: string, sql: Sql): AssistantModule {
     await context.messenger.send(actor, { kind: 'Slack channels', text, buttons });
   }
 
-  async function respond(actor: Actor, payload: JobPayload, context: ModuleContext) {
+  async function respond(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {
     if (payload.type === 'text') {
       const command = String(payload.text ?? '').trim().toLowerCase();
       if (command === 'channels') return showChannels(actor, context);
-      if (command === 'unanswered') return showUnanswered(actor, context, context.requestedAt.getTime() / 1000);
+      if (command === 'unanswered') return showUnanswered(actor, eventId, context, context.requestedAt.getTime() / 1000);
       return context.messenger.send(actor, { text: 'Use slack channels to choose your sources, then slack unanswered to search them.' });
     }
     if (payload.type !== 'action') return;
     if (payload.action === 'unanswered_page') {
       const page = parseResultsPage(payload.value);
       if (!page) return context.messenger.send(actor, { text: 'That results control is invalid. Run slack unanswered again.' });
-      return showUnanswered(actor, context, page.anchorSeconds, page.page);
+      return showUnanswered(actor, eventId, context, page.anchorSeconds, page.page);
     }
     if (payload.action === 'channel_page') {
       const value = String(payload.value ?? '');
@@ -132,9 +165,9 @@ export function createSlackModule(token: string, sql: Sql): AssistantModule {
   }
 
   return {
-    id: 'slack', description: 'Choose Slack channels for unanswered messages',
-    async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); },
-    async cleanup() { await selections.cleanup(); },
+    id: 'slack', description: 'Find unanswered messages in selected Slack channels',
+    async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); },
+    async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); },
     async handle(actor, payload, eventId, context) {
       if (await selections.handled(actor, eventId)) return;
       let responseAttempted = false;
@@ -150,7 +183,7 @@ export function createSlackModule(token: string, sql: Sql): AssistantModule {
           throw error;
         }
       } };
-      await respond(actor, payload, { ...context, messenger });
+      await respond(actor, payload, eventId, { ...context, messenger });
       if (!responseAttempted) await selections.markHandled(actor, eventId);
     },
   };

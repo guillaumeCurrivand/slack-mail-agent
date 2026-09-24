@@ -14,7 +14,7 @@ Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specifi
 - Google Workspace OAuth with PKCE, nonce and browser-state checks, hosted-domain enforcement, encrypted credentials, and a final Slack confirmation of the mailbox address.
 - Persistent previews, explicit decisions for uncertain messages, individual-message actions, reports, and conservative undo.
 - Durable PostgreSQL jobs, per-user serialization, duplicate-event protection, and mutation checkpoints.
-- A shared $10/month AI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Routine commands, approval, reports and undo do not require AI.
+- A shared $10/month AI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Channel selection, approval, reports, and undo do not require AI; contextual Slack matching and mail interpretation do.
 - For enabled modules, hourly retention cleanup removes conversations and run records older than 30 days, as well as expired login states and rule proposals. See the [retention policy](docs/product-spec.md#memory-and-undo) for the disabled-module exception.
 
 ## Modules and project structure
@@ -22,13 +22,13 @@ Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specifi
 - `src/app/`: configuration, built-in module composition, startup, and compatibility migrations.
 - `src/core/`: Slack transport, explicit routing, durable jobs, identity and locking, messaging, and shared AI budget.
 - `src/modules/mail/`: mail commands, Gmail/OAuth, rules, previews, undo, mail AI, state, and retention.
-- `src/modules/slack/`: per-user Slack channel choices, shared-channel discovery, and on-demand direct unanswered-message search.
+- `src/modules/slack/`: per-user Slack channel choices, shared-channel discovery, and on-demand unanswered-message search with contextual AI matching.
 
 `ENABLED_MODULES=mail` is the default. An empty value starts only shared help, budget, and health endpoints; Gmail, encryption, and AI credentials are then unnecessary. Unknown or duplicate module identifiers fail startup. Availability is deployment-wide; each user still owns their connections and data. Restart to apply a module configuration change.
 
 Disabled modules expose no routes and execute no queued work. Their pending jobs and state are retained for re-enablement, and their module-specific retention cleanup is paused while disabled. Other modules and shared commands continue processing. Modules are trusted code deployed together, not sandboxed plugins.
 
-Slack Unanswered's direct matching slice is implemented but disabled by default. Set `ENABLED_MODULES=mail,slack` (or `slack` without Mail Sorter) to offer `slack channels` and `slack unanswered` in private DMs. Each user first selects shared public and private channels with `slack channels`; the module does not read channel history until `slack unanswered` is requested. That command privately lists direct @mentions and profile-name matches posted in the preceding 48 hours if the user has not replied later in the thread. Contextual question and uncertain matching remain planned. If Slack does not show a response after a delivery error, repeat the command to see current state. See the [feature contract](docs/slack-unanswered.md) for the remaining behavior and the [architecture decision](docs/adr/0002-private-assistant-modules.md).
+Slack Unanswered is implemented locally but disabled by default. Set `ENABLED_MODULES=mail,slack` (or `slack` without Mail Sorter) to offer `slack channels` and `slack unanswered` in private DMs. Each user first selects shared public and private channels with `slack channels`; the module does not read channel history until `slack unanswered` is requested. That command privately lists direct @mentions, profile-name matches, and contextually directed requests posted in the preceding 48 hours if the user has not replied later in the thread. Plausible but uncertain matches appear under **Possibly for you**. The module uses `OPENAI_API_KEY` and the pinned `OPENAI_MODEL` for contextual matching through the shared AI budget; without a key or available budget, it still shows direct matches and discloses that contextual results were not checked. If Slack does not show a response after a delivery error, repeat the command to see current state. See the [feature contract](docs/slack-unanswered.md) and the [architecture decision](docs/adr/0002-private-assistant-modules.md).
 
 ### Upgrading an existing installation
 

@@ -1,6 +1,6 @@
 # Adding a built-in module
 
-Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter and Slack Unanswered's channel selection and direct-message search ship today.
+Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter and Slack Unanswered ship today.
 
 ## Interface and routing
 

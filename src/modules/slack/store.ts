@@ -12,6 +12,45 @@ export const slackHandledSchema = `CREATE TABLE IF NOT EXISTS slack_handled_even
   handled_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner, event_id)
 );`;
+export const slackAiSchema = `CREATE TABLE IF NOT EXISTS slack_ai_attempts (
+  owner text NOT NULL,
+  event_id text NOT NULL,
+  batch_index integer NOT NULL,
+  input_hash text NOT NULL,
+  status text NOT NULL CHECK (status IN ('started','complete','budget')),
+  result jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (owner,event_id,batch_index)
+);`;
+
+export class SlackAiAttempts {
+  constructor(private sql: Sql) {}
+  async start(actor: Actor, eventId: string, batch: number, hash: string) {
+    const owner = ownerKey(actor);
+    const inserted = await this.sql.query(`INSERT INTO slack_ai_attempts(owner,event_id,batch_index,input_hash,status)
+      VALUES($1,$2,$3,$4,'started') ON CONFLICT DO NOTHING RETURNING event_id`, [owner, eventId, batch, hash]);
+    const row = (await this.sql.query(`SELECT input_hash,status,result FROM slack_ai_attempts
+      WHERE owner=$1 AND event_id=$2 AND batch_index=$3`, [owner, eventId, batch])).rows[0];
+    if (!row) throw new Error('Slack AI checkpoint could not be loaded.');
+    return { created: inserted.rows.length === 1, hash: String(row.input_hash), status: String(row.status), result: row.result };
+  }
+  async complete(actor: Actor, eventId: string, batch: number, hash: string, result: unknown) {
+    const updated = await this.sql.query(`UPDATE slack_ai_attempts SET status='complete',result=$5
+      WHERE owner=$1 AND event_id=$2 AND batch_index=$3 AND input_hash=$4 AND status='started' RETURNING event_id`,
+      [ownerKey(actor), eventId, batch, hash, JSON.stringify(result)]);
+    if (updated.rows.length !== 1) throw new Error('Slack AI checkpoint could not be completed.');
+  }
+  async budget(actor: Actor, eventId: string, batch: number, hash: string) {
+    await this.sql.query(`UPDATE slack_ai_attempts SET status='budget'
+      WHERE owner=$1 AND event_id=$2 AND batch_index=$3 AND input_hash=$4 AND status='started'`,
+      [ownerKey(actor), eventId, batch, hash]);
+  }
+  async cleanup() {
+    await this.sql.query(`DELETE FROM slack_ai_attempts AS attempt
+      WHERE attempt.created_at<now()-interval '30 days'
+      AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id=attempt.event_id AND jobs.status IN ('queued','running'))`);
+  }
+}
 
 export class SlackChannelSelections {
   constructor(private sql: Sql) {}

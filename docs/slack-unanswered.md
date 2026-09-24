@@ -1,6 +1,6 @@
 # Slack Unanswered module spec
 
-Status: approved feature spec; channel selection and direct mention/name search are implemented but disabled by default. Contextual question and uncertain matching are pending. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
+Status: approved feature spec; channel selection, direct mention/name search, and contextual matching are implemented locally but disabled by default. Live Slack access and model-quality validation remain release work. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
 
 ## Problem Statement
 
@@ -48,7 +48,7 @@ Separate clear matches from **Possibly for you** messages whose thread context g
 - Use AI through the existing shared budget for requests, questions, and thread context that cannot be resolved through clear mention or name matching. Keep uncertain but contextually relevant candidates in **Possibly for you**. Exclude generic requests without a specific contextual connection.
 - Attribute paid AI calls to `slack`. If budget is unavailable, retain deterministic mention/name results and disclose that uncertain matching was not checked.
 - Build the response privately using the existing Slack messenger, grouping results by channel, newest first, and paginating when needed. Include an excerpt, author, time, and source-message link.
-- Persist per-user channel selections. Derive unanswered state from Slack at each search; do not persist a second task/message record or add done, dismiss, reopen, due-date, or reminder state.
+- Persist per-user channel selections. Derive unanswered state from Slack at each search; do not persist a second task/message record or add done, dismiss, reopen, due-date, or reminder state. Keep AI execution checkpoints keyed to the queued event so a retry never blindly repeats a paid call; these hold classification IDs, decisions, and short reasons rather than full Slack messages. Remove them after 30 days once their jobs are no longer active.
 - If a selected channel becomes unavailable, skip it for that search, explain the issue privately, and preserve the selection.
 - Do not require Gmail credentials or instantiate mail services for this module. Use only the Slack permissions needed to list eligible channels and read selected channel/thread history.
 
@@ -72,4 +72,4 @@ Prior art includes `tests/modules.test.ts` for routing, durable dispatch, module
 
 ## Further Notes
 
-The app currently handles private DMs only. Channel selection and direct mention/name search are implemented locally. Search scans selected channel history on demand, including older thread roots that have recent replies; large or long-lived channels can make this slow and encounter Slack rate limits. The required history/profile permissions and live Slack-provider behavior remain to be verified after installation. Contextual matching and model-quality evaluation remain implementation work. Channel selection and access checks must preserve the product's user-ownership boundary. Slack platform retention and AI-provider retention remain separate from this application's retained state.
+The app currently handles private DMs only. Slack Unanswered is implemented locally. Search scans selected channel history on demand, including older thread roots that have recent replies; large or long-lived channels can make this slow and encounter Slack rate limits. Contextual matching sends relevant thread text to the configured OpenAI model through the shared budget. Without `OPENAI_API_KEY` or available budget, direct results remain available and the response explains that contextual results were not fully checked. The required history/profile permissions, live Slack-provider behavior, and model quality remain to be verified after installation. Channel selection and access checks must preserve the product's user-ownership boundary. Slack platform retention and AI-provider retention remain separate from this application's retained state.
