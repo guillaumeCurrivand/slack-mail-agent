@@ -2,6 +2,8 @@
 
 Production uses Docker Compose. This procedure updates an existing server running this repository's `compose.yaml`, with its `app` and `db` services. Replace `/path/to/slack-mail-agent` with the existing server checkout; keep the same Compose project name, environment file, and any override files used for the original deployment. The actual server checkout path has not been recorded.
 
+The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to container port `3000` and explicitly sets the app's internal `PORT=3000`. The reverse proxy and host readiness check use port `3001`; no `.env` port change is required for this Compose setup.
+
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
 ## Update and restart
@@ -18,7 +20,7 @@ bash scripts/deploy.sh
 
 The script finds the checkout relative to its own location, so no server path is hardcoded in it. It checks the branch and working tree, pulls `origin/main`, confirms the local revision matches it, and verifies that the existing database is reachable. It builds before stopping the old app, backs up the database while application writes are stopped, recreates only the app, and verifies the readiness response. The database service and its volume remain in place. Errors stop deployment with the failed step identified; there is no automatic rollback.
 
-Backups default to `$HOME/slack-mail-agent-backups`. Each has a unique name; failed or unfinished dumps retain a `.partial` suffix and must not be treated as completed backups. Optional settings are `DEPLOY_BACKUP_DIR` for your protected backup location and `DEPLOY_READY_URL` if your readiness address differs from `http://127.0.0.1:3000/ready`. Use `bash scripts/deploy.sh --help` for usage.
+Backups default to `$HOME/slack-mail-agent-backups`. Each has a unique name; failed or unfinished dumps retain a `.partial` suffix and must not be treated as completed backups. Optional settings are `DEPLOY_BACKUP_DIR` for your protected backup location and `DEPLOY_READY_URL` if your readiness address differs from `http://127.0.0.1:3001/ready`. Use `bash scripts/deploy.sh --help` for usage.
 
 The dump contains application data; keep it out of the Git checkout and handle it under the existing backup retention policy. A database dump does not back up `.env` or the encryption key; preserve those separately through your existing secret-backup process.
 

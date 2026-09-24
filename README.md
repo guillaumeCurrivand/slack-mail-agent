@@ -118,7 +118,7 @@ Run `npm run check` and `npm run build` for TypeScript validation and production
 
 ## Docker deployment
 
-Set `POSTGRES_PASSWORD` in `.env` to a strong URL-safe random value. `docker compose up --build -d` starts the app and database, binding the app to `127.0.0.1:3000`; put your HTTPS reverse proxy in front of it. PostgreSQL uses a named persistent volume and is not publicly published. Arrange automated encrypted database backups and test restoring them. This repository does not select or provision a hosting provider.
+Set `POSTGRES_PASSWORD` in `.env` to a strong URL-safe random value. `docker compose up --build -d` starts the app and database, binding the app to `127.0.0.1:3001` on the host and port `3000` inside the container. Compose sets the container's `PORT=3000`; point the HTTPS reverse proxy at host port `3001`. PostgreSQL uses a named persistent volume and is not publicly published. Arrange automated encrypted database backups and test restoring them. This repository does not select or provision a hosting provider.
 
 For an existing production server, pull `main` and run `bash scripts/deploy.sh`. Follow [Updating production](docs/deployment.md) for prerequisites, database backups, readiness checks, and release-specific migration notes. Production uses Docker Compose; preserve the existing checkout's `.env` and Compose project settings.
 

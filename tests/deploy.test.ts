@@ -75,7 +75,7 @@ describe.skipIf(!existsSync(bash))('production deployment script (fake external 
       'docker compose stop --timeout 120 app', 'docker compose exec -T db pg_dump -U agent -d agent -Fc',
       'docker compose up -d --no-deps app',
     ]);
-    expect(operations[5]).toContain('http://127.0.0.1:3000/ready');
+    expect(operations[5]).toContain('http://127.0.0.1:3001/ready');
     expect(result.files).toHaveLength(1);
     expect(result.files[0]).toMatch(/\.dump$/);
     expect(readFileSync(path.join(result.backups, result.files[0]!), 'utf8')).toBe('fake database dump');

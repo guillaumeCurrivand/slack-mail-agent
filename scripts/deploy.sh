@@ -14,7 +14,7 @@ main() {
       'Updates main, builds and stops the app, backs up PostgreSQL, restarts, and checks readiness.' \
       'Run with the same Compose environment/project settings as the existing deployment.' \
       'Optional: DEPLOY_BACKUP_DIR (default: $HOME/slack-mail-agent-backups)' \
-      'Optional: DEPLOY_READY_URL (default: http://127.0.0.1:3000/ready)'
+      'Optional: DEPLOY_READY_URL (default: http://127.0.0.1:3001/ready)'
     return
   fi
   [[ "$#" == 0 ]] || fail 'Unexpected arguments. Use --help for usage.'
@@ -71,7 +71,7 @@ main() {
   deployment_stage='readiness check'
   local readiness
   readiness="$(curl --fail --silent --show-error --retry 12 --retry-connrefused \
-    --retry-delay 2 --max-time 5 "${DEPLOY_READY_URL:-http://127.0.0.1:3000/ready}")"
+    --retry-delay 2 --max-time 5 "${DEPLOY_READY_URL:-http://127.0.0.1:3001/ready}")"
   [[ "${readiness//[[:space:]]/}" == '{"ok":true}' ]] || fail "Unexpected readiness response. Inspect docker compose logs --tail 50 app."
 
   deployment_stage='status inspection'
