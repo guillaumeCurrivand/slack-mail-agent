@@ -1,11 +1,13 @@
-Status: ready-for-agent
+Status: resolved
 Category: enhancement
 
 # Slack Unanswered module spec
 
-Status: ready-for-agent for the remaining message-search tickets; channel selection is implemented locally but disabled by default.
+Status: implementation and review follow-ups resolved locally; the module remains disabled by default.
 
 This is the tracker snapshot produced by `to-spec`. The living [Slack Unanswered feature contract](../../docs/slack-unanswered.md) owns current approved behavior, and the [product specification](../../docs/product-spec.md) owns assistant-wide safeguards. This tracker copy supplies the agreed user stories and test seam for the [implementation tickets](issues/). Extension conventions are in [Adding a module](../../docs/adding-a-module.md). The module works without connecting Gmail.
+
+Review on 2026-09-25 found two follow-ups, now resolved locally: [retain handled-event markers for active jobs](issues/04-retain-handled-markers-for-active-jobs.md) and [cover disabled Slack routing through a signed DM](issues/05-test-disabled-slack-routing.md). Live Slack access and model-quality validation remain pending before release.
 
 ## Problem Statement
 

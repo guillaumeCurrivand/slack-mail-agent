@@ -75,6 +75,9 @@ export class SlackChannelSelections {
     await this.sql.query('DELETE FROM slack_handled_events WHERE owner=$1 AND event_id=$2', [ownerKey(actor), eventId]);
   }
   async cleanup(): Promise<void> {
-    await this.sql.query("DELETE FROM slack_handled_events WHERE handled_at<now()-interval '30 days'");
+    await this.sql.query(`DELETE FROM slack_handled_events AS handled
+      WHERE handled.handled_at<now()-interval '30 days'
+      AND NOT EXISTS (SELECT 1 FROM jobs WHERE jobs.id=handled.event_id AND jobs.owner=handled.owner
+        AND jobs.module='slack' AND jobs.status IN ('queued','running'))`);
   }
 }

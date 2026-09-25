@@ -1,3 +1,5 @@
+import { SlackApi, SlackApiError } from './api.js';
+
 export type SlackMessage = {
   ts: string;
   user: string;
@@ -20,42 +22,28 @@ const parseMessage = (value: any): SlackMessage | undefined => {
 export class SlackHistoryAccessLost extends Error {}
 
 export class SlackHistory {
-  constructor(private token: string, private fetcher: typeof fetch = fetch) {}
+  private api: SlackApi;
+  constructor(token: string, fetcher: typeof fetch = fetch) { this.api = new SlackApi(token, fetcher); }
 
-  private async request(method: string, params: Record<string, string>): Promise<any> {
-    const url = new URL(`https://slack.com/api/${method}`);
-    for (const [key, value] of Object.entries(params)) url.searchParams.set(key, value);
-    const response = await this.fetcher(url, { headers: { Authorization: `Bearer ${this.token}` }, signal: AbortSignal.timeout(20_000) });
-    if (!response.ok) throw new Error(`Slack ${method} failed.`);
-    const data = await response.json() as any;
-    if (!data?.ok) {
-      if (['channel_not_found', 'not_in_channel', 'no_permission', 'is_archived', 'access_denied'].includes(data?.error)) throw new SlackHistoryAccessLost();
-      throw new Error(`Slack ${method} failed.`);
+  private async withAccessCheck<T>(call: () => Promise<T>): Promise<T> {
+    try { return await call(); }
+    catch (error) {
+      if (error instanceof SlackApiError && ['channel_not_found', 'not_in_channel', 'no_permission', 'is_archived', 'access_denied'].includes(error.code ?? '')) throw new SlackHistoryAccessLost();
+      throw error;
     }
-    return data;
   }
 
-  private async pages(method: string, params: Record<string, string>): Promise<SlackMessage[]> {
-    const messages: SlackMessage[] = [];
-    const cursors = new Set<string>();
-    let cursor = '';
-    do {
-      if (cursors.has(cursor)) throw new Error(`Slack ${method} pagination failed.`);
-      cursors.add(cursor);
-      const data = await this.request(method, { ...params, limit: '200', ...(cursor ? { cursor } : {}) });
-      if (!Array.isArray(data.messages)) throw new Error(`Slack ${method} failed.`);
-      for (const raw of data.messages) {
-        const message = parseMessage(raw);
-        if (message) messages.push(message);
-      }
-      cursor = typeof data.response_metadata?.next_cursor === 'string' ? data.response_metadata.next_cursor : '';
-    } while (cursor);
-    return messages;
+  private request(method: string, params: Record<string, string>): Promise<any> {
+    return this.withAccessCheck(() => this.api.request(method, params));
+  }
+
+  private pages(method: string, params: Record<string, string>): Promise<SlackMessage[]> {
+    return this.withAccessCheck(() => this.api.pages(method, params, 'messages', parseMessage));
   }
 
   // Search older roots too: a recent reply can belong to a thread started before the window.
-  roots(channel: string, anchorSeconds: number) {
-    return this.pages('conversations.history', { channel, latest: String(anchorSeconds), inclusive: 'true' });
+  roots(channel: string, anchor: Date) {
+    return this.pages('conversations.history', { channel, latest: String(anchor.getTime() / 1000), inclusive: 'true' });
   }
 
   thread(channel: string, rootTs: string) {

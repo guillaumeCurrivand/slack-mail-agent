@@ -10,6 +10,7 @@ import { createServer } from '../src/core/server.js';
 import { SlackDeliveryRejected, type AgentMessage, type Messenger } from '../src/core/slack.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { worker } from '../src/core/worker.js';
+import { SlackChannelSelections } from '../src/modules/slack/store.js';
 
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'token', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'slack' };
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
@@ -98,6 +99,21 @@ it('lists only shared public and private channels from a signed Slack DM without
     expect(message.text).toContain('planning');
     expect(message.text).not.toContain('group-dm');
     expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select']);
+  } finally { await h.close(); }
+});
+
+it('routes a signed slack request to shared guidance without running a disabled module', async () => {
+  const provider = vi.fn(async () => { throw new Error('Disabled Slack module called a provider.'); });
+  vi.stubGlobal('fetch', provider);
+  const h = await harness({ ...env, ENABLED_MODULES: '' });
+  try {
+    const reply = await h.dm('slack unanswered');
+    expect(reply.actor).toEqual(alice);
+    expect(reply.message.kind).toBe('Help');
+    expect(reply.message.text).toContain('This request was not sent to a module.');
+    expect(reply.message.text).toContain('No modules are currently enabled.');
+    expect(provider).not.toHaveBeenCalled();
+    expect((await sql.query('SELECT module FROM jobs')).rows).toEqual([{ module: 'core' }]);
   } finally { await h.close(); }
 });
 
@@ -204,6 +220,42 @@ it('does not blindly resend a selection response after an uncertain delivery out
   } finally { await h.close(); }
 });
 
+it('retains an old handled marker while a disabled Slack job is pending, then expires it after completion', async () => {
+  fakeChannels();
+  const first = await harness();
+  let jobId = '';
+  try {
+    first.failNextDelivery();
+    await first.postDm('slack channels');
+    await first.drain();
+    expect(first.messages).toHaveLength(1);
+    const queued = (await sql.query("SELECT id FROM jobs WHERE module='slack' AND status='queued'")).rows;
+    expect(queued).toHaveLength(1);
+    jobId = String(queued[0]!.id);
+    await sql.query("UPDATE slack_handled_events SET handled_at=now()-interval '31 days' WHERE event_id=$1", [jobId]);
+    await sql.query('UPDATE jobs SET available_at=now() WHERE id=$1', [jobId]);
+  } finally { await first.close(); }
+
+  const disabled = await harness({ ...env, ENABLED_MODULES: '' });
+  try {
+    await disabled.drain();
+    expect(disabled.messages).toHaveLength(0);
+    expect((await sql.query('SELECT status FROM jobs WHERE id=$1', [jobId])).rows[0]!.status).toBe('queued');
+  } finally { await disabled.close(); }
+
+  const resumed = await harness();
+  try {
+    const selections = new SlackChannelSelections(sql);
+    await selections.cleanup();
+    expect(await selections.handled(alice, jobId)).toBe(true);
+    await resumed.drain();
+    expect(resumed.messages).toHaveLength(0);
+    expect((await sql.query('SELECT status FROM jobs WHERE id=$1', [jobId])).rows[0]!.status).toBe('done');
+    await selections.cleanup();
+    expect(await selections.handled(alice, jobId)).toBe(false);
+  } finally { await resumed.close(); }
+});
+
 it('retries a private response when Slack definitely rejects the first delivery', async () => {
   fakeChannels();
   const h = await harness();
@@ -231,9 +283,12 @@ it('lists an unanswered direct mention from a selected channel in a private repl
     if (request.pathname.endsWith('/users.info')) return { ok: true, json: async () => ({ ok: true, user: request.searchParams.get('user') === 'UALICE'
       ? { id: 'UALICE', profile: { display_name: 'Alice', real_name: 'Alice Smith', first_name: 'Alice' } }
       : { id: 'UBOB', profile: { display_name: 'Bob', real_name: 'Bob Jones', first_name: 'Bob' } } }) };
-    if (request.pathname.endsWith('/conversations.history')) return { ok: true, json: async () => ({ ok: true, messages: [
-      { type: 'message', user: 'UBOB', ts: messageTs, text: 'Hi <@UALICE>, the report is ready.', reply_count: 0 },
-    ], response_metadata: { next_cursor: '' } }) };
+    if (request.pathname.endsWith('/conversations.history')) {
+      const secondPage = request.searchParams.get('cursor') === 'next';
+      return { ok: true, json: async () => ({ ok: true, messages: secondPage ? [
+        { type: 'message', user: 'UBOB', ts: messageTs, text: 'Hi <@UALICE>, the report is ready.', reply_count: 0 },
+      ] : [], response_metadata: { next_cursor: secondPage ? '' : 'next' } }) };
+    }
     if (request.pathname.endsWith('/conversations.replies')) return { ok: true, json: async () => ({ ok: true, messages: [
       { type: 'message', user: 'UBOB', ts: messageTs, text: 'Hi <@UALICE>, the report is ready.' },
     ], response_metadata: { next_cursor: '' } }) };

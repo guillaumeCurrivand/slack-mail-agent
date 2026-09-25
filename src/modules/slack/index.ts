@@ -20,9 +20,9 @@ const parseSelection = (value: unknown) => {
 const parseResultsPage = (value: unknown) => {
   if (typeof value !== 'string') return;
   const match = /^(\d{13})\|(\d{1,6})$/.exec(value);
-  const anchor = Number(match?.[1]), page = Number(match?.[2]);
-  return Number.isSafeInteger(anchor) && anchor > 0 && anchor <= Date.now() && Number.isSafeInteger(page)
-    ? { anchorSeconds: anchor / 1000, page } : undefined;
+  const anchorMs = Number(match?.[1]), page = Number(match?.[2]);
+  return Number.isSafeInteger(anchorMs) && anchorMs > 0 && anchorMs <= Date.now() && Number.isSafeInteger(page)
+    ? { anchor: new Date(anchorMs), page } : undefined;
 };
 
 export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<typeof readSlackConfig>): AssistantModule {
@@ -32,9 +32,9 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
   const history = new SlackHistory(token);
   const unanswered = new SlackUnansweredSearch(directory, selections, history);
 
-  async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchorSeconds: number, requestedPage = 0) {
+  async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchor: Date, requestedPage = 0) {
     let results;
-    try { results = await unanswered.search(actor, anchorSeconds); }
+    try { results = await unanswered.search(actor, anchor); }
     catch {
       await context.messenger.send(actor, { text: 'Could not search Slack channels right now. Try slack unanswered again.' });
       return;
@@ -93,7 +93,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     if (incomplete === 'provider') lines.push('Contextual matching could not be completed right now. Direct mention and name matches are still shown.');
     if (incomplete === 'config') lines.push('Contextual matching is not configured. Direct mention and name matches are still shown.');
     const buttons: Button[] = [];
-    const anchorValue = String(Math.round(anchorSeconds * 1000));
+    const anchorValue = String(anchor.getTime());
     if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${anchorValue}|${page - 1}` });
     if (page + 1 < pages) buttons.push({ label: 'Next', action: 'unanswered_page', value: `${anchorValue}|${page + 1}` });
     await context.messenger.send(actor, { kind: 'Unanswered for you', text: lines.join('\n'), buttons });
@@ -136,14 +136,14 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     if (payload.type === 'text') {
       const command = String(payload.text ?? '').trim().toLowerCase();
       if (command === 'channels') return showChannels(actor, context);
-      if (command === 'unanswered') return showUnanswered(actor, eventId, context, context.requestedAt.getTime() / 1000);
+      if (command === 'unanswered') return showUnanswered(actor, eventId, context, context.requestedAt);
       return context.messenger.send(actor, { text: 'Use slack channels to choose your sources, then slack unanswered to search them.' });
     }
     if (payload.type !== 'action') return;
     if (payload.action === 'unanswered_page') {
       const page = parseResultsPage(payload.value);
       if (!page) return context.messenger.send(actor, { text: 'That results control is invalid. Run slack unanswered again.' });
-      return showUnanswered(actor, eventId, context, page.anchorSeconds, page.page);
+      return showUnanswered(actor, eventId, context, page.anchor, page.page);
     }
     if (payload.action === 'channel_page') {
       const value = String(payload.value ?? '');

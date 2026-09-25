@@ -18,12 +18,13 @@ export const isAddressed = (text: string, user: string, names: string[]) => {
 export class SlackUnansweredSearch {
   constructor(private directory: SlackChannelDirectory, private selections: SlackChannelSelections, private history: SlackHistory) {}
 
-  async search(actor: Actor, anchorSeconds: number): Promise<UnansweredResults> {
+  async search(actor: Actor, anchor: Date): Promise<UnansweredResults> {
     const selected = await this.selections.list(actor);
     if (!selected.length) return { matches: [], candidates: [], names: [], skipped: [] };
     const available = new Map((await this.directory.listFor(actor.user)).map(channel => [channel.id, channel]));
     const skipped = selected.filter(id => !available.has(id));
     const names = await this.history.profile(actor.user);
+    const anchorSeconds = anchor.getTime() / 1000;
     const cutoff = anchorSeconds - 48 * 60 * 60;
     const matches: UnansweredMatch[] = [];
     const candidates: UnansweredCandidate[] = [];
@@ -33,7 +34,7 @@ export class SlackUnansweredSearch {
       try {
         const channelMatches: UnansweredMatch[] = [];
         const channelCandidates: UnansweredCandidate[] = [];
-        const roots = await this.history.roots(id, anchorSeconds);
+        const roots = await this.history.roots(id, anchor);
         for (const root of roots) {
           const rootTime = Number(root.ts);
           const latestReply = root.latest_reply ? Number(root.latest_reply) : 0;
