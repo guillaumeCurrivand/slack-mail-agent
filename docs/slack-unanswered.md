@@ -10,7 +10,7 @@ People can miss Slack messages that mention them, ask them a question, or reques
 
 Add a `slack` module with a `slack unanswered` command. Users choose the public and private channels to search with `slack channels`; the bot must also have access, and group DMs are excluded. The command searches on demand for messages posted during the preceding rolling 48 hours and returns matching messages privately, grouped by channel.
 
-Separate clear matches from **Possibly for you** messages whose thread context gives a specific reason they may concern the user without establishing that they are the intended recipient. The list reflects current Slack thread state: a user's later message in a thread removes its messages from future lists. The feature does not create or manage separate task records.
+Separate clear matches from **Possibly for you** messages whose thread context gives a specific reason they may concern the user without establishing that they are the intended recipient. The list reflects current Slack thread state: a user's later message in a thread removes earlier requests from future lists. A subsequent question or request directed back to the user is a new unanswered message. The feature does not create or manage separate task records.
 
 ## User Stories
 
@@ -37,6 +37,11 @@ Separate clear matches from **Possibly for you** messages whose thread context g
 21. As a Slack user, I want clear mention and name matches to remain available when the shared AI budget cannot fund uncertain matching, so that deterministic results are still useful.
 22. As a Slack user, I want the assistant to explain when the shared budget prevents it from checking **Possibly for you**, so that an incomplete uncertain-results section is not mistaken for a negative search.
 23. As a Slack user, I want Slack Unanswered to work without connecting Gmail, so that using this module does not require another module's account.
+24. As a Slack user, I want a new question or request for information or action after my reply to appear as a new result linked to that follow-up message, even without another mention, so that a continuing exchange is not lost.
+25. As a Slack user, I want separate follow-up requests to appear separately until I post again in their thread, so that each new request remains visible under the existing response rule.
+26. As a Slack user, I want acknowledgements after my reply, including a simple thanks that mentions me, to stay out of the list, so that courtesy replies are not mistaken for new work.
+27. As a Slack user, I want a follow-up from another participant to appear when the thread clearly directs it to me, with uncertain recipients under **Possibly for you**, so that the feature follows the conversation rather than only its original author.
+28. As a Slack user, I want a follow-up answered by someone else to disappear when that answer clearly resolves it, or appear under **Possibly for you** when resolution is uncertain, so that the list reflects whether my reply is still needed.
 
 ## Implementation Decisions
 
@@ -44,9 +49,10 @@ Separate clear matches from **Possibly for you** messages whose thread context g
 - Keep channel selection per Slack user and workspace. Start with no selected channels. Enforce that each selected channel is accessible to both that user and the bot when listing and searching it.
 - Search read-only. Include candidate messages whose own timestamps are within the rolling 48-hour window. Fetch the complete relevant thread, including older replies, to assess matches and whether the user responded.
 - Treat Slack message text and thread replies as untrusted content. They may inform classification but cannot authorize actions or alter module settings.
-- Classify clear @mentions and profile-name matches as **Unanswered for you** when the user has not posted later in the thread. A first-name match may produce a result for multiple users with that name.
-- Use AI through the existing shared budget for requests, questions, and thread context that cannot be resolved through clear mention or name matching. Keep uncertain but contextually relevant candidates in **Possibly for you**. Exclude generic requests without a specific contextual connection.
-- Attribute paid AI calls to `slack`. If budget is unavailable, retain deterministic mention/name results and disclose that uncertain matching was not checked.
+- Classify clear @mentions and profile-name matches as **Unanswered for you** when the user has not posted later in the thread. A first-name match may produce a result for multiple users with that name. Outside a follow-up exchange, retain the existing direct-match behavior.
+- Treat each question or request posted after the user's reply as a potential new unanswered message, including one from the original asker or another participant. Link each result to its own message. Any subsequent message from the user clears earlier requests in the thread regardless of wording. Exclude simple acknowledgements after the user's reply, even if they mention the user.
+- Use AI through the existing shared budget for requests, questions, follow-up resolution, and thread context that cannot be resolved deterministically. Keep uncertain but contextually relevant candidates in **Possibly for you**. Exclude generic requests without a specific contextual connection and follow-ups clearly resolved by another participant. Narrowly filter obvious follow-up acknowledgements without AI.
+- Attribute paid AI calls to `slack`. If budget or the provider is unavailable, retain direct mention/name results, filter obvious acknowledgements, and disclose that contextual matching and follow-up resolution were not fully checked.
 - Build the response privately using the existing Slack messenger, grouping results by channel, newest first, and paginating when needed. Include an excerpt, author, time, and source-message link.
 - Persist per-user channel selections. Derive unanswered state from Slack at each search; do not persist a second task/message record or add done, dismiss, reopen, due-date, or reminder state. Keep AI execution checkpoints keyed to the queued event so a retry never blindly repeats a paid call; these hold classification IDs, decisions, and short reasons rather than full Slack messages. Remove them after 30 days once their jobs are no longer active.
 - If a selected channel becomes unavailable, skip it for that search, explain the issue privately, and preserve the selection.
@@ -56,7 +62,7 @@ Separate clear matches from **Possibly for you** messages whose thread context g
 
 Good tests exercise observable behavior and safeguards through the highest useful public boundary. For this feature, exercise a signed Slack DM command through enqueue, worker dispatch, module handling, and private response delivery. Use fake Slack history and AI providers; do not access live channels or make paid AI calls in automated tests.
 
-Cover channel selection and removal, per-user isolation, user-and-bot access filtering, unavailable-channel behavior, the rolling 48-hour boundary, older thread context, later user replies, message authorship, name collisions, both result groups, generic-request exclusion, pagination and links, private delivery, and shared-budget exhaustion with a clear incomplete-results notice. Also verify the `slack` prefix routes to the module and disabled-module requests do not execute it.
+Cover channel selection and removal, per-user isolation, user-and-bot access filtering, unavailable-channel behavior, the rolling 48-hour boundary, older thread context, later user replies, repeated follow-up requests, acknowledgements with mentions, new asks from other participants, answers from other participants, message authorship, name collisions, both result groups, generic-request exclusion, pagination and links, private delivery, and shared-budget exhaustion with a clear incomplete-results notice. Also verify the `slack` prefix routes to the module and disabled-module requests do not execute it.
 
 Prior art includes `tests/modules.test.ts` for routing, durable dispatch, module isolation, and shared budget behavior; `tests/workflow.test.ts` for fake external providers and budget failure behavior; and `tests/slack.test.ts` for Slack message formatting and sanitization. Prefer extending these seams over adding lower-level-only tests.
 

@@ -4,7 +4,7 @@ import { SlackHistory, SlackHistoryAccessLost, type SlackMessage } from './histo
 import type { SlackChannelSelections } from './store.js';
 
 export type UnansweredMatch = { channel: Channel; message: SlackMessage };
-export type UnansweredCandidate = UnansweredMatch & { thread: SlackMessage[] };
+export type UnansweredCandidate = UnansweredMatch & { thread: SlackMessage[]; followup: boolean; direct: boolean };
 export type UnansweredResults = { matches: UnansweredMatch[]; candidates: UnansweredCandidate[]; names: string[]; skipped: string[] };
 
 export const isAddressed = (text: string, user: string, names: string[]) => {
@@ -13,6 +13,18 @@ export const isAddressed = (text: string, user: string, names: string[]) => {
     const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
     return new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'iu').test(text);
   });
+};
+
+// Only suppress acknowledgements whose entire message is a short thanks or
+// receipt. Anything with additional words may contain a new request.
+export const isObviousAcknowledgement = (text: string, names: string[]) => {
+  let remainder = text.replace(/<@[A-Z0-9]+(?:\|[^>]*)?>/gi, ' ');
+  for (const name of names) {
+    const escaped = name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    remainder = remainder.replace(new RegExp(`(?<![\\p{L}\\p{N}_])${escaped}(?![\\p{L}\\p{N}_])`, 'giu'), ' ');
+  }
+  remainder = remainder.replace(/[\s,.!:;]+/g, ' ').trim().toLowerCase();
+  return /^(?:(?:thanks|thank you|thx|ty)(?: so much)?(?: for (?:the|your) (?:update|help|answer|info|information|details|response|file|draft|figures)| for (?:that|this))?|got it(?: thanks)?|received|noted|sounds good|perfect|great|ok|okay)$/.test(remainder);
 };
 
 export class SlackUnansweredSearch {
@@ -44,8 +56,11 @@ export class SlackUnansweredSearch {
             const posted = Number(candidate.ts);
             if (posted < cutoff || posted > anchorSeconds || candidate.user === actor.user) continue;
             if (thread.some(reply => reply.user === actor.user && Number(reply.ts) > posted)) continue;
-            if (isAddressed(candidate.text, actor.user, names)) channelMatches.push({ channel, message: candidate });
-            else channelCandidates.push({ channel, message: candidate, thread });
+            const direct = isAddressed(candidate.text, actor.user, names);
+            const followup = thread.some(reply => reply.user === actor.user && Number(reply.ts) < posted);
+            if (followup && isObviousAcknowledgement(candidate.text, names)) continue;
+            if (direct && !followup) channelMatches.push({ channel, message: candidate });
+            else channelCandidates.push({ channel, message: candidate, thread, followup, direct });
           }
         }
         matches.push(...channelMatches);

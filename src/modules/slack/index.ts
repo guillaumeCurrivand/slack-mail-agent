@@ -41,6 +41,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     }
     const clear: UnansweredMatch[] = [...results.matches];
     const possible: Array<UnansweredMatch & { reason: string }> = [];
+    const assessed = new Set<string>();
     let incomplete: 'budget' | 'provider' | 'config' | undefined;
     if (results.candidates.length) {
       if (!aiConfig.key) incomplete = 'config';
@@ -48,11 +49,16 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
         const classification = await new SlackAI(aiConfig.key, aiConfig.model, context.budget, aiAttempts)
           .classify(actor, eventId, results.names, results.candidates);
         incomplete = classification.incomplete;
+        for (const candidate of classification.assessed) assessed.add(`${candidate.channel.id}:${candidate.message.ts}`);
         for (const { candidate, decision, reason } of classification.decisions) {
           if (decision === 'clear') clear.push(candidate);
           else possible.push({ ...candidate, reason });
         }
       }
+    }
+    // Keep clear direct matches when contextual checking could not assess them.
+    for (const candidate of results.candidates) {
+      if (candidate.followup && candidate.direct && !assessed.has(`${candidate.channel.id}:${candidate.message.ts}`)) clear.push(candidate);
     }
     const sort = (a: UnansweredMatch, b: UnansweredMatch) => a.channel.name.localeCompare(b.channel.name) || Number(b.message.ts) - Number(a.message.ts);
     clear.sort(sort); possible.sort(sort);
@@ -89,9 +95,9 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
       return;
     }
     if (results.skipped.length) lines.push(`Skipped inaccessible selected channels: ${results.skipped.join(', ')}. Your selections are saved.`);
-    if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Direct mention and name matches are still shown.');
-    if (incomplete === 'provider') lines.push('Contextual matching could not be completed right now. Direct mention and name matches are still shown.');
-    if (incomplete === 'config') lines.push('Contextual matching is not configured. Direct mention and name matches are still shown.');
+    if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Follow-up resolution could not be fully checked either. Direct mention and name matches are still shown.');
+    if (incomplete === 'provider') lines.push('Contextual matching and follow-up resolution could not be completed right now. Direct mention and name matches are still shown.');
+    if (incomplete === 'config') lines.push('Contextual matching and follow-up resolution are not configured. Direct mention and name matches are still shown.');
     const buttons: Button[] = [];
     const anchorValue = String(anchor.getTime());
     if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${anchorValue}|${page - 1}` });

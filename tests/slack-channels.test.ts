@@ -504,6 +504,111 @@ it('finds clear requests and contextually possible replies without assigning gen
   } finally { await h.close(); }
 });
 
+it('finds new requests after a reply and distinguishes acknowledgements and third-party resolution', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const stamp = (seconds: number) => `${seconds}.000001`;
+  const root = { type: 'message', ts: stamp(now - 60 * 60 * 60), user: 'UASKER', text: 'Can anyone send the figures?', reply_count: 7, latest_reply: stamp(now - 30) };
+  const answer = { type: 'message', ts: stamp(now - 100), user: 'UALICE', text: 'Here are the figures.' };
+  const date = { type: 'message', ts: stamp(now - 90), user: 'UASKER', text: 'When is the next update?' };
+  const file = { type: 'message', ts: stamp(now - 80), user: 'UASKER', text: 'Can you send the spreadsheet too?' };
+  const thanks = { type: 'message', ts: stamp(now - 70), user: 'UASKER', text: 'Thanks <@UALICE>!' };
+  const otherAsk = { type: 'message', ts: stamp(now - 60), user: 'UOTHER', text: 'Could you add the region breakdown?' };
+  const ambiguous = { type: 'message', ts: stamp(now - 50), user: 'UTHIRD', text: 'Could someone validate the totals?' };
+  const resolved = { type: 'message', ts: stamp(now - 40), user: 'UASKER', text: '<@UALICE> can you confirm the owner?' };
+  const otherAnswer = { type: 'message', ts: stamp(now - 30), user: 'UOTHER', text: 'I confirmed the owner.' };
+  const thread = [root, answer, date, file, thanks, otherAsk, ambiguous, resolved, otherAnswer];
+  const modelInputs: any[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (request.hostname === 'api.openai.com') {
+      const body = JSON.parse(String(options?.body));
+      if (method === 'input_tokens') return Response.json({ input_tokens: 200 });
+      const input = JSON.parse(body.input);
+      modelInputs.push(input);
+      return Response.json({ status: 'completed', usage: { input_tokens: 200, output_tokens: 100 }, output: [{ content: [{
+        type: 'output_text', text: JSON.stringify({ results: input.candidates.map((candidate: any) => ({
+          id: candidate.id,
+          decision: candidate.text.includes('totals') ? 'possible'
+            : ['next update', 'spreadsheet', 'region breakdown'].some(value => candidate.text.includes(value)) ? 'clear' : 'none',
+          evidenceTs: answer.ts,
+          reason: 'The user answered earlier in this thread.',
+        })) }),
+      }] }] });
+    }
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Author' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [root], response_metadata: { next_cursor: '' } });
+    if (method === 'conversations.replies') return Response.json({ ok: true, messages: thread, response_metadata: { next_cursor: '' } });
+    if (method === 'chat.getPermalink') return Response.json({ ok: true, permalink: `https://example.slack.com/archives/CPUBLIC/p${request.searchParams.get('message_ts')?.replace('.', '')}` });
+    throw new Error(`Unexpected provider call: ${request.pathname}`);
+  }));
+  const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
+  try {
+    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    const result = await h.dm('slack unanswered');
+    const text = result.message.text;
+    for (const message of [date, file, otherAsk, ambiguous]) {
+      expect(text).toContain(message.text);
+      expect(text).toContain(`p${message.ts.replace('.', '')}`);
+    }
+    expect(text).toContain('Possibly for you');
+    for (const message of [root, otherAnswer]) expect(text).not.toContain(message.text);
+    expect(text).not.toContain('Thanks');
+    expect(text).not.toContain('confirm the owner?');
+    expect(modelInputs.flatMap(input => input.candidates).some((candidate: any) => candidate.text === thanks.text)).toBe(false);
+    expect(modelInputs.flatMap(input => input.candidates).filter((candidate: any) => candidate.text === date.text)[0]).toMatchObject({ followup: true, direct: false });
+    expect(modelInputs.flatMap(input => input.candidates).filter((candidate: any) => candidate.text === resolved.text)[0]).toMatchObject({ author: 'UASKER', followup: true, direct: true });
+
+    thread.push({ type: 'message', ts: stamp(now - 5), user: 'UALICE', text: "I'll check." });
+    expect((await h.dm('slack unanswered')).message.text).not.toContain(date.text);
+    expect((await h.dm('slack unanswered')).message.text).not.toContain(file.text);
+  } finally { await h.close(); }
+});
+
+it('keeps direct follow-up requests but filters obvious thanks without AI budget', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const stamp = (seconds: number) => `${seconds}.000001`;
+  const root = { type: 'message', ts: stamp(now - 100), user: 'UASKER', text: 'Alice, can you send the draft?', reply_count: 6, latest_reply: stamp(now - 10) };
+  const answer = { type: 'message', ts: stamp(now - 40), user: 'UALICE', text: 'Here it is.' };
+  const followup = { type: 'message', ts: stamp(now - 30), user: 'UASKER', text: '<@UALICE> can you send the source file?' };
+  const thanks = { type: 'message', ts: stamp(now - 20), user: 'UASKER', text: 'Thanks, Alice!' };
+  const thanksFor = { type: 'message', ts: stamp(now - 15), user: 'UASKER', text: 'Thanks for the update, Alice!' };
+  const newRequest = { type: 'message', ts: stamp(now - 12), user: 'UASKER', text: 'Thanks Alice, can you check the totals?' };
+  const unnamed = { type: 'message', ts: stamp(now - 10), user: 'UASKER', text: 'When can we publish?' };
+  const outsideFollowup = { type: 'message', ts: stamp(now - 8), user: 'UOTHER', text: 'Thanks <@UALICE>!' };
+  let paidCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (request.hostname === 'api.openai.com') {
+      if (method === 'input_tokens') return Response.json({ input_tokens: 100 });
+      paidCalls++;
+      throw new Error('Paid generation should not run.');
+    }
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Author' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [root, outsideFollowup], response_metadata: { next_cursor: '' } });
+    if (method === 'conversations.replies') return Response.json({ ok: true, messages: [root, answer, followup, thanks, thanksFor, newRequest, unnamed], response_metadata: { next_cursor: '' } });
+    if (method === 'chat.getPermalink') return Response.json({ ok: true, permalink: 'https://example.slack.com/archives/source' });
+    throw new Error(`Unexpected provider call: ${request.pathname}`);
+  }));
+  const h = await harness({ ...env, OPENAI_API_KEY: 'fake', AI_MONTHLY_LIMIT_USD: '0' });
+  try {
+    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    const text = (await h.dm('slack unanswered')).message.text;
+    expect(text).toContain('can you send the source file?');
+    expect(text).toContain('can you check the totals?');
+    expect(text).toContain('Thanks \\&lt;@UALICE\\&gt;');
+    expect(text.match(/Thanks/g)).toHaveLength(2);
+    expect(text).not.toContain('Thanks for the update');
+    expect(text).not.toContain(unnamed.text);
+    expect(text).not.toContain(root.text);
+    expect(text).toContain('Follow-up resolution could not be fully checked');
+    expect(paidCalls).toBe(0);
+  } finally { await h.close(); }
+});
+
 it('keeps direct matches and discloses incomplete contextual search when the shared AI budget is exhausted', async () => {
   const now = Math.floor(Date.now() / 1000);
   const direct = { type: 'message', ts: `${now - 10}.000001`, user: 'UAUTHOR', text: '<@UALICE> please review the draft' };
