@@ -6,11 +6,21 @@ Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A 
 
 Implement `AssistantModule` from `src/core/modules.ts`. Required fields are a stable lowercase `id`, a short `description` for shared help, and `handle(actor, payload, eventId, context)`.
 
-Each new DM request starts with the module ID. The core removes the prefix and queues the request with an immutable module identifier. For example, `slack unanswered` reaches the Slack module as `{ type: 'text', text: 'unanswered' }`. A prefix by itself becomes the module's `help` request. Unknown prefixes and unprefixed requests receive shared guidance without paid AI routing. `help` and `budget` are reserved shared commands; `core` is reserved for internal routing.
+Each new typed module request starts with the module ID. The core removes the prefix and queues the request with an immutable module identifier. For example, `slack unanswered` reaches the Slack module as `{ type: 'text', text: 'unanswered' }`. A prefix by itself becomes the module's `help` request. Unknown prefixes and unprefixed requests receive shared guidance without paid AI routing. `menu`, `help`, `budget`, `hello` and `hi` are reserved shared commands; `core` is reserved for internal routing. Opening a Module menu does not change routing for later text.
 
 The handler receives the authenticated Slack actor, a durable event ID, the current database connection, a budget attributed to this module, a messenger, and the queued job's request time. Pass local button action IDs to that messenger: it adds the module namespace automatically. The router removes the namespace when the button is clicked. Verify that every referenced object and approval belongs to the actor; a namespaced action is not authorization.
 
 `legacyActions` exists solely for exact pre-module button IDs already posted to Slack. New modules should not use it. Duplicate module IDs, reserved IDs, and ambiguous legacy action registrations are rejected.
+
+### Private DM menus
+
+Optional `name` supplies the user-facing Module name. Optional `menu(actor, page, { sql })` returns a `MenuPage` with a kind header, text, local workflow buttons and optional `{ label, page }` navigation links. It reads the Module's current state without AI calls or workflow mutations. The shared runtime supplies Back to menu, namespaces local page destinations and keeps state queries inside the Module. Without a menu callback, the core shows the Module description and its help command.
+
+Menu links use authenticated core navigation jobs rather than a remembered active Module. Workflow buttons still use normal module jobs and must recheck ownership and current state. Use the exported `menuButton` (a button with `scope: 'core'`) on workflow Cards to open a separate menu without replacing that Card. Do not manually prefix local action IDs. Scoped core buttons explicitly bypass module namespacing; they do not bypass authorization.
+
+`Messenger.send` remains compatible with existing workflow callers. Navigation-capable adapters also implement `post` (return the posted message timestamp) and `update` (edit that timestamp). The production Slack adapter shares rendering/sanitization for posts and updates. Send-only test adapters remain valid for existing workflow tests; navigation tests need message identities and updates.
+
+Core records posted menu identities against owner and DM, then validates those records against signed action message timestamps before editing. A workflow Card is never an in-place navigation target. Menu metadata expires after 30 days; send `menu` to recover. This is shared delivery metadata, not Module state, and it can expire while a Module is disabled without changing that Module's saved work. Navigation delivery markers are written before contacting Slack: definite rejection allows retry, while an uncertain outcome requires a fresh User request. Markers for pending jobs survive cleanup. Existing owner locking still applies; keeping navigation responsive during long work belongs to a later redesign slice.
 
 ## State and retries
 

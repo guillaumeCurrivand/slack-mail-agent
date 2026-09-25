@@ -69,7 +69,7 @@ https://YOUR_HOST/auth/google/callback
 
 Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the comma-separated `GOOGLE_WORKSPACE_DOMAINS`. These are Google's verified hosted-domain values, not merely email suffixes. Request `openid`, `email`, and `https://www.googleapis.com/auth/gmail.modify`. Your Workspace administrator may need to allow the app and scope. Internal-app eligibility and organization policies must be checked in your own Google Cloud/Workspace configuration.
 
-Each teammate sends `mail connect` in a DM, follows their short-lived link, grants access using their own Workspace account, and confirms the resulting email address back in Slack. Authorization is not activated until this last confirmation. An account cannot be activated for two Slack users in the configured workspace.
+Each teammate opens `menu` → Mail Sorter → Gmail connection → Connect Gmail (or sends `mail connect`), follows their short-lived link, grants access using their own Workspace account, and confirms the resulting email address back in Slack. Authorization is not activated until this last confirmation. An account cannot be activated for two Slack users in the configured workspace.
 
 `mail disconnect` removes the application's active credentials and cancels pending previews after confirmation. It leaves rules in place. Users can additionally revoke the OAuth grant in their Google account. Historical encrypted credentials may remain in database backups until their retention period expires.
 
@@ -84,6 +84,10 @@ Calendar months use UTC. A request with missing usage, timeout, or crash keeps i
 The limit governs this app's recorded generation usage at its configured prices. Taxes, price changes, token-count endpoint commercial terms, and other applications using the same key are outside that accounting; verify pricing and project usage before release. $10 does not promise a fixed number of scans. `store:false` does not imply zero provider retention.
 
 ## Using it
+
+Send `menu`, `help`, `hello` or `hi` to open a private menu. Click an enabled Module, Budget or Help; Back navigation updates that same message. Mail Sorter → Gmail connection shows connection status and offers Connect Gmail or confirmed disconnect. Google sign-in still opens externally, and the resulting mailbox still needs your approval in Slack. Mail workflow Cards include Menu buttons that open separate navigation without replacing the Card.
+
+This is the first navigation slice: sorting, rules, Reports and Slack channel/search actions still use the commands below. Clickable management and work-launch controls are planned. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation still waits behind long work for the same User until the later scheduling slice is implemented.
 
 Send these in a private conversation with the bot. Every module request, including natural-language follow-ups, needs its prefix; the assistant does not remember an active module:
 

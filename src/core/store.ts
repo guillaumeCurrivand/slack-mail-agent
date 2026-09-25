@@ -10,6 +10,13 @@ CREATE TABLE IF NOT EXISTS jobs (
  finished_at timestamptz
 );
 CREATE INDEX IF NOT EXISTS jobs_pending ON jobs(available_at,created_at) WHERE status IN ('queued','running');
+CREATE TABLE IF NOT EXISTS core_navigation_menus (
+ id text PRIMARY KEY, owner text NOT NULL, channel text NOT NULL, timestamp text,
+ created_at timestamptz NOT NULL DEFAULT now()
+);
+CREATE TABLE IF NOT EXISTS core_navigation_deliveries (
+ event_id text PRIMARY KEY, owner text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
+);
 CREATE TABLE IF NOT EXISTS ai_months (
  month text PRIMARY KEY, charged_micro bigint NOT NULL DEFAULT 0, reserved_micro bigint NOT NULL DEFAULT 0,
  alert_sent boolean NOT NULL DEFAULT false
@@ -26,7 +33,11 @@ export class JobStore {
   async enqueue(id: string, actor: Actor, payload: Record<string, unknown>, module = 'core') {
     await this.sql.query('INSERT INTO jobs(id,owner,actor,payload,module) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [id, ownerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module]);
   }
-  async cleanup() { await this.sql.query("DELETE FROM jobs WHERE finished_at<now()-interval '30 days'"); }
+  async cleanup() {
+    await this.sql.query("DELETE FROM jobs WHERE finished_at<now()-interval '30 days'");
+    await this.sql.query("DELETE FROM core_navigation_menus WHERE created_at<now()-interval '30 days'");
+    await this.sql.query("DELETE FROM core_navigation_deliveries d WHERE created_at<now()-interval '30 days' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=d.event_id AND j.status IN ('queued','running'))");
+  }
 }
 
 export async function withOwner<T>(pool: Pool, actor: Actor, work: (client: PoolClient) => Promise<T>): Promise<T | undefined> {

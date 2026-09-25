@@ -32,6 +32,14 @@ The script requires a successful readiness request with `{"ok":true}`, then show
 
 If the readiness check fails, inspect the logs and keep the release marked unverified. If failure occurred after stopping the old app but before `docker compose up`, `docker compose start app` can restart the still-existing old container. Once the new app has started, database migrations may already have run: assess schema and queued-work compatibility before reverting code or restoring a backup. Do not remove the database volume to retry an update.
 
+## DM navigation and Gmail connection release candidate
+
+Ticket 01 adds DM menus and Gmail connection controls. There are no new environment variables, secrets or Slack/Google scopes. Startup idempotently creates shared navigation-menu and delivery-marker tables; no manual migration command is required. Existing mail state and queued work remain intact. Stop the old app before starting the new image using the update procedure above, preserving `.env` and the database volume.
+
+After readiness succeeds, DM `menu`. Check that Budget, Help, each enabled Module and Back update the clicked menu. Open Mail Sorter → Gmail connection and verify current status; opening the page must not connect or disconnect anything. Confirm a Menu button on a newly posted mail workflow Card opens a separate menu and preserves the Card. Send `menu` again and verify both recent menus navigate independently. If Slack Unanswered is enabled, its menu should explain the existing channel/search commands without requiring Gmail. Full work-launch and management buttons remain future work.
+
+Local verification on 2026-09-25: 114 automated tests passed; TypeScript check and build passed. Two real PostgreSQL locking tests were skipped because `TEST_DATABASE_URL` was not configured. Both Standards and Spec reviews have no outstanding findings. This candidate has not been deployed or verified against live Slack/Google; runtime tests use fake providers.
+
 ## Module refactor release: `510c05f`
 
 - No new required secrets or Slack/Google permissions. `ENABLED_MODULES` defaults to `mail`; existing configurations keep Mail Sorter enabled. An explicitly empty value disables all modules.

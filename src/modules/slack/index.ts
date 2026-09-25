@@ -171,7 +171,8 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
   }
 
   return {
-    id: 'slack', description: 'Find unanswered messages in selected Slack channels',
+    id: 'slack', name: 'Slack Unanswered', description: 'Find unanswered messages in selected Slack channels',
+    async menu() { return { kind: 'Slack Unanswered', text: 'Use slack channels to choose your sources, then slack unanswered to search them. Gmail is not required.' }; },
     async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); },
     async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); },
     async handle(actor, payload, eventId, context) {

@@ -33,6 +33,11 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     const action = body.actions?.[0];
     if (body.type !== 'block_actions' || typeof action?.action_id !== 'string' || typeof action.value !== 'string' || action.value.length > 500) return reply.code(400).send();
     const route = modules.action(action.action_id, action.value);
+    if (route.module === 'core' && route.payload.type === 'navigation') {
+      const timestamp = body.message?.ts;
+      if (typeof timestamp !== 'string' || !/^\d+\.\d+$/.test(timestamp)) return reply.code(400).send();
+      route.payload.timestamp = timestamp;
+    }
     await store.enqueue(`action:${digest(raw)}`, { team: body.team.id, user: body.user.id, channel: body.channel.id }, route.payload, route.module);
     return { ok: true };
   });
