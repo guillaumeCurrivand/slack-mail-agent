@@ -24,6 +24,11 @@ export type Connection = { id: string; subject: string; email: string; encrypted
 export type Draft = { id: string; created: string; kind: 'rules' | 'delete' | 'connection'; rules?: RuleInput[]; replaceId?: string; ruleId?: string; connection?: Connection };
 export type UserState = { rules: Rule[]; ruleVersion: number; drafts: Draft[]; runs: Run[]; history: { role: 'user' | 'assistant'; content: string; at: string }[]; connection?: Connection; handled: string[] };
 export const emptyState = (): UserState => ({ rules: [], ruleVersion: 0, drafts: [], runs: [], history: [], handled: [] });
+export const currentPreview = (state: UserState, run: Run, now = Date.now()) =>
+  run.connectionId === state.connection?.id && run.ruleVersion === state.ruleVersion && Date.parse(run.created) >= now - 86400_000;
+export const availableRuleProposal = (state: UserState, draft: Draft, now = Date.now()) =>
+  draft.kind !== 'connection' && Date.parse(draft.created) > now - 86400_000 &&
+  (!(draft.replaceId || draft.kind === 'delete') || state.rules.some(rule => rule.id === (draft.replaceId ?? draft.ruleId)));
 export const sameLabels = (a: string[], b: string[]) => [...a].sort().join('\0') === [...b].sort().join('\0');
 export const senderAddress = (from: string) => (from.match(/<([^<>]+)>/)?.[1] ?? from).trim().toLowerCase();
 

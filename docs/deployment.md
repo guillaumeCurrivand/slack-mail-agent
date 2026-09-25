@@ -34,6 +34,10 @@ If the readiness check fails, inspect the logs and keep the release marked unver
 
 ## DM navigation and Gmail connection release candidate
 
+Ticket 02 extends these menus with Manage rules, Latest report and Pending approvals. It adds no environment variables, permissions or schema changes beyond ticket 01's automatic navigation tables. After deploying both slices with the procedure above, open Manage rules and page through the list, open Latest report, and reopen a pending item if one exists. Verify that reopening posts a separate Card without changing the saved item or approving it. Add/Edit instructions must retain the `mail` prefix; opening rule management must not save, delete or apply anything. Starter rules and removal require a subsequent approval, so do not approve them merely for a navigation smoke test.
+
+Ticket 02 local verification on 2026-09-25: 120 tests passed; TypeScript check and build passed. Two PostgreSQL tests were skipped without `TEST_DATABASE_URL`. Standards and Spec reviews each reported zero findings. Live integration and production deployment remain unverified.
+
 Ticket 01 adds DM menus and Gmail connection controls. There are no new environment variables, secrets or Slack/Google scopes. Startup idempotently creates shared navigation-menu and delivery-marker tables; no manual migration command is required. Existing mail state and queued work remain intact. Stop the old app before starting the new image using the update procedure above, preserving `.env` and the database volume.
 
 After readiness succeeds, DM `menu`. Check that Budget, Help, each enabled Module and Back update the clicked menu. Open Mail Sorter → Gmail connection and verify current status; opening the page must not connect or disconnect anything. Confirm a Menu button on a newly posted mail workflow Card opens a separate menu and preserves the Card. Send `menu` again and verify both recent menus navigate independently. If Slack Unanswered is enabled, its menu should explain the existing channel/search commands without requiring Gmail. Full work-launch and management buttons remain future work.

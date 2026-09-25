@@ -1,7 +1,7 @@
 import { Vault } from '../../core/crypto.js';
 import { ownerKey } from '../../core/identity.js';
 import type { AssistantModule } from '../../core/modules.js';
-import { escapeCardValue, menuButton } from '../../core/slack.js';
+import { menuButton } from '../../core/slack.js';
 import { JobStore, withOwner, type Sql } from '../../core/store.js';
 import { OpenAI } from './ai.js';
 import type { MailConfig } from './config.js';
@@ -10,6 +10,7 @@ import { Gmail, type Tokens } from './gmail.js';
 import { GoogleOAuth } from './oauth.js';
 import { registerMailRoutes } from './routes.js';
 import { mailSchema, prune, Store } from './store.js';
+import { mailMenu } from './menu.js';
 
 export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sql: Sql): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
@@ -18,15 +19,7 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
     id: 'mail', name: 'Mail Sorter', description: 'Sort your Gmail using approved personal rules',
     async menu(actor, page, context) {
       const state = await new Store(context.sql).load(actor);
-      const status = state.connection ? `Connected Gmail: ${escapeCardValue(state.connection.email)}.` : 'Gmail is not connected. Sorting requires a connected mailbox.';
-      if (page === 'connection') return { kind: 'Gmail connection', text: `${status}\nConnect only your own Google Workspace mailbox. Google sign-in opens outside Slack. Disconnect requires a separate confirmation and keeps saved rules.`,
-        buttons: state.connection ? [{ label: 'Disconnect Gmail', action: 'menu_disconnect', value: state.connection.id }]
-          : [{ label: 'Connect Gmail', action: 'menu_connect', value: '' }],
-        links: [{ label: 'Back to Mail Sorter', page: 'main' }],
-      };
-      return { kind: 'Mail Sorter', text: `${status}\nCommands: mail sort, mail rules, mail starters, mail report. Describe rules with the mail prefix. Sorting prepares a preview; mailbox changes require separate approval.`,
-        links: [{ label: 'Gmail connection', page: 'connection' }],
-      };
+      return mailMenu(state, page);
     },
     // Only exact action IDs emitted by pre-module versions are accepted.
     legacyActions: ['approve_draft', 'cancel_draft', 'disconnect', 'details', 'report', 'cancel_run', 'accept_item', 'skip_item', 'confirm_run', 'undo_run'],

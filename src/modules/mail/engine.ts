@@ -1,8 +1,8 @@
 import { Budget, BudgetExceeded, budgetReport } from '../../core/budget.js';
 import type { Intelligence, Intent } from './ai.js';
-import { labelSchema, ownerKey, planMessage, sameLabels, starterRules, uid, validateRule, type Actor, type Connection, type Draft, type Item, type Run, type UserState } from './domain.js';
+import { availableRuleProposal, currentPreview, labelSchema, ownerKey, planMessage, sameLabels, starterRules, uid, validateRule, type Actor, type Connection, type Draft, type Item, type Run, type UserState } from './domain.js';
 import type { Mailbox } from './gmail.js';
-import { escapeCardValue, type Button, type Messenger } from '../../core/slack.js';
+import { escapeCardValue, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import { prune, Store } from './store.js';
 
 export type Event = { type: 'text'; text: string; resolved?: Intent } | { type: 'action'; action: string; value: string } | { type: 'connection'; connection: Connection };
@@ -19,8 +19,25 @@ export class Engine {
   private sendCard(actor: Actor, kind: string, text: string, buttons?: Button[]) { return this.d.messenger.send(actor, { kind, text, buttons }); }
   private sendHelp(actor: Actor) { return this.sendCard(actor, 'Help', HELP); }
   async handle(actor: Actor, event: Event, eventId: string) {
-    const state = await this.d.store.load(actor); prune(state);
+    const state = await this.d.store.load(actor);
     if (state.handled.includes(eventId)) return;
+    if (event.type === 'action' && ['menu_add_rule', 'menu_edit_rule', 'menu_latest_report', 'reopen_draft', 'reopen_preview', 'details', 'report'].includes(event.action)) {
+      // Only delivery bookkeeping is persisted for reads; prune a private copy
+      // afterward so browsing cannot delete or renew saved domain records.
+      state.handled = [...state.handled, eventId].slice(-2000); await this.d.store.save(actor, state);
+      prune(state);
+      try { await this.action(actor, state, event.action, event.value); }
+      catch (error) {
+        if (error instanceof SlackDeliveryRejected) {
+          const saved = await this.d.store.load(actor);
+          saved.handled = saved.handled.filter(id => id !== eventId);
+          await this.d.store.save(actor, saved);
+        }
+        throw error;
+      }
+      return;
+    }
+    prune(state);
     try {
       if (event.type === 'connection') {
         const draft: Draft = { id: uid(), created: new Date().toISOString(), kind: 'connection', connection: event.connection };
@@ -87,14 +104,37 @@ export class Engine {
   private async propose(actor: Actor, state: UserState, value: Omit<Draft, 'id' | 'created'>) {
     const draft: Draft = { ...value, id: uid(), created: new Date().toISOString() };
     state.drafts.push(draft); await this.d.store.save(actor, state);
+    return this.showDraft(actor, state, draft);
+  }
+  private showDraft(actor: Actor, state: UserState, draft: Draft) {
     const description = draft.kind === 'delete' ? `Remove rule ${escapeCardValue(state.rules.find(r => r.id === draft.ruleId)?.name ?? '')}?` :
       `${draft.replaceId ? 'Replace existing rule with' : 'Proposed rules'}:\n\n${draft.rules!.map(r => `${escapeCardValue(r.name)}\n${escapeCardValue(r.condition)}\n${r.senders.length ? `Senders: ${r.senders.map(escapeCardValue).join(', ')}\n` : ''}Labels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}\nExamples: ${r.examples.map(escapeCardValue).join(' | ')}`).join('\n\n')}`;
     return this.sendCard(actor, draft.kind === 'delete' ? 'Remove rule' : 'Rule proposal', `${description}\n\nNo rule changes until you approve.`, [{ label: 'Approve rule changes', action: 'approve_draft', value: draft.id, style: 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
   }
   private async action(actor: Actor, state: UserState, action: string, value: string) {
+    if (action === 'menu_add_rule') return this.send(actor, 'Start your reply with mail and describe the condition, labels, action and exceptions. I will propose a rule with examples for your approval.');
+    if (action === 'menu_edit_rule') {
+      const rule = state.rules.find(rule => rule.id === value);
+      return this.send(actor, rule ? `To edit ${escapeCardValue(rule.name)}, reply: mail change rule ${escapeCardValue(rule.id)} followed by your desired condition, labels, action and exceptions. Changes need separate approval.` : 'That rule is no longer available in your account. Open Manage rules again.');
+    }
+    if (action === 'menu_latest_report') return this.report(actor, state, state.runs.at(-1)?.id);
+    if (action === 'menu_starters') return this.propose(actor, state, { kind: 'rules', rules: starterRules() });
+    if (action === 'menu_remove_rule') {
+      if (!state.rules.some(rule => rule.id === value)) return this.send(actor, 'That rule is no longer available in your account. Open Manage rules again.');
+      return this.propose(actor, state, { kind: 'delete', ruleId: value });
+    }
+    if (action === 'reopen_draft') {
+      const draft = state.drafts.find(draft => draft.id === value && availableRuleProposal(state, draft));
+      return draft ? this.showDraft(actor, state, draft) : this.send(actor, 'This proposal is unavailable, expired or already handled. Open Pending approvals again.');
+    }
+    if (action === 'reopen_preview') {
+      const run = state.runs.find(run => run.id === value && run.status === 'preview' && currentPreview(state, run));
+      return run ? this.preview(actor, run) : this.send(actor, 'This preview is unavailable, expired, or its connection/rules changed. Open Pending approvals or send mail sort for a new preview.');
+    }
     if (action === 'approve_draft' || action === 'cancel_draft') {
       const draft = state.drafts.find(d => d.id === value);
       if (!draft) return this.send(actor, 'This proposal is unavailable or already handled.');
+      if (action === 'approve_draft' && draft.kind !== 'connection' && !availableRuleProposal(state, draft)) return this.send(actor, 'This proposal is no longer current. Open Manage rules to propose it again.');
       if (action === 'approve_draft') {
         if (draft.kind === 'connection') {
           state.connection = draft.connection; state.runs.forEach(r => { if (r.status === 'preview' || r.status === 'scanning') r.status = 'cancelled'; });
@@ -197,7 +237,7 @@ export class Engine {
   }
   private async apply(actor: Actor, state: UserState, run: Run) {
     if (!['preview', 'applying'].includes(run.status)) return this.report(actor, state, run.id);
-    if (run.connectionId !== state.connection?.id || run.ruleVersion !== state.ruleVersion || Date.parse(run.created) < Date.now() - 86400_000) {
+    if (!currentPreview(state, run)) {
       run.status = 'cancelled'; await this.d.store.save(actor, state);
       return this.send(actor, 'This preview expired or its connection/rules changed. Send mail sort for a new preview.');
     }

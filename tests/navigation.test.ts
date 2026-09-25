@@ -9,9 +9,10 @@ import { dispatchJob } from '../src/core/dispatch.js';
 import { createServer } from '../src/core/server.js';
 import { ModuleRegistry, type AssistantModule } from '../src/core/modules.js';
 import { Slack } from '../src/core/slack.js';
+import { Vault } from '../src/core/crypto.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { Store } from '../src/modules/mail/store.js';
-import { starterRules } from '../src/modules/mail/domain.js';
+import { starterRules, type Run } from '../src/modules/mail/domain.js';
 
 const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
@@ -59,9 +60,9 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
     expect((await post('/slack/events', JSON.stringify({ type: 'event_callback', team_id: actor.team, event_id: randomUUID(), event: { type: 'message', channel_type: 'im', user: actor.user, channel: actor.channel, text } }), 'application/json')).statusCode).toBe(200);
     return drain();
   };
-  const click = async (source: Posted, label: string, actor = alice, ts = source.ts) => {
+  const click = async (source: Posted, label: string, actor = alice, ts = source.ts, clickId = randomUUID()) => {
     const selected = button(source, label);
-    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts }, actions: [{ action_id: selected.action_id, value: selected.value, action_ts: randomUUID() }] }) }).toString();
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts }, actions: [{ action_id: selected.action_id, value: selected.value, action_ts: clickId }] }) }).toString();
     expect((await post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
     return drain();
   };
@@ -249,5 +250,188 @@ it('requires the originating User to approve the mailbox after the complete menu
     expect((await h.click(mail, 'Gmail connection')).body.text).toContain('alice@example.com');
     expect((await h.get(callback, String(start.headers['set-cookie']).split(';')[0])).statusCode).toBe(400);
     expect((await h.click(proposal, 'Connect this mailbox')).body.text).toContain('already handled');
+  } finally { await h.close(); }
+});
+
+it('browses mail rules in place and posts Add/Edit instructions without changing saved state or routing', async () => {
+  const h = await harness(mailEnv);
+  try {
+    const store = new Store(sql), state = await store.load(alice);
+    state.rules = Array.from({ length: 7 }, (_, index) => ({ ...starterRules()[0]!, id: `rule-${index}`, name: `Priority ${index}` }));
+    await store.save(alice, state);
+    const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const rules = await h.click(mail, 'Manage rules');
+    expect(rules.method).toBe('chat.update');
+    expect(rules.body.text).toContain('Priority 0');
+    expect(rules.body.text).not.toContain('Priority 6');
+    const next = await h.click(rules, 'Next');
+    expect(next.ts).toBe(rules.ts);
+    expect(next.body.text).toContain('Priority 3');
+    const edit = await h.click(next, 'Edit 1');
+    expect(edit.method).toBe('chat.postMessage');
+    expect(edit.body.text).toContain('mail');
+    expect(edit.body.text).toContain('rule-3');
+    expect((await h.click(rules, 'Add rule')).body.text).toContain('mail');
+    expect((await h.dm('change Priority 0')).body.text).toContain('prefix');
+    expect((await h.click(await h.dm('menu', bob), 'Mail Sorter', bob)).body.text).not.toContain('Priority');
+    expect((await h.click(mail, 'Latest report')).body.text).toContain('No retained run');
+    expect(buttons(mail).some((item: any) => item.text.text === 'Pending approvals')).toBe(false);
+    const after = await store.load(alice);
+    expect(after.rules).toEqual(state.rules);
+    expect(after.drafts).toEqual(state.drafts);
+    expect(after.history).toEqual(state.history);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('offers starter rules and removal as separately approved Proposals, then reopens the original Proposal', async () => {
+  const h = await harness(mailEnv);
+  try {
+    const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const rules = await h.click(mail, 'Manage rules');
+    expect(rules.body.text).toContain('No approved rules');
+    const requestId = randomUUID();
+    const proposal = await h.click(rules, 'Starter rules', alice, rules.ts, requestId);
+    const delivered = h.messages.length;
+    await h.click(rules, 'Starter rules', alice, rules.ts, requestId);
+    expect(h.messages).toHaveLength(delivered);
+    const approval = button(proposal, 'Approve rule changes');
+    expect((await h.click(mail, 'Manage rules')).body.text).toContain('No approved rules');
+    const pending = await h.click(await h.click(mail, 'Back to menu').then(main => h.click(main, 'Mail Sorter')), 'Pending approvals');
+    const reopened = await h.click(pending, 'Open 1');
+    expect(reopened.method).toBe('chat.postMessage');
+    expect(button(reopened, 'Approve rule changes').value).toBe(approval.value);
+    expect(reopened.body.text).toContain('Examples:');
+    expect((await h.click(reopened, 'Approve rule changes', bob)).body.text).toContain('unavailable');
+    await h.click(reopened, 'Approve rule changes');
+    const saved = await h.click(mail, 'Manage rules');
+    expect(saved.body.text).toContain('Urgent');
+    expect((await h.click(reopened, 'Approve rule changes')).body.text).toContain('already handled');
+    const remove = await h.click(saved, 'Remove 1');
+    expect(remove.body.text).toContain('Remove rule Urgent');
+    expect((await h.click(mail, 'Manage rules')).body.text).toContain('Urgent');
+    await h.click(remove, 'Approve rule changes');
+    expect((await h.click(mail, 'Manage rules')).body.text).not.toContain('Urgent');
+    expect((await h.click(saved, 'Remove 1')).body.text).toContain('no longer available');
+    expect((await h.click(pending, 'Open 1')).body.text).toContain('unavailable');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('reopens saved Previews and Reports without renewing them and excludes stale approvals', async () => {
+  const store = new Store(sql), state = await store.load(alice);
+  state.connection = { id: 'connection-1', subject: 'alice', email: 'alice@example.com', encryptedTokens: 'unused' };
+  const preview: Run = { id: 'preview-1', created: new Date(Date.now() - 3600_000).toISOString(), connectionId: state.connection.id, ruleVersion: 0, status: 'preview', items: [] };
+  state.runs = [preview,
+    { ...preview, id: 'expired', created: new Date(Date.now() - 25 * 3600_000).toISOString() },
+    { ...preview, id: 'wrong-version', ruleVersion: 5 }, { ...preview, id: 'disconnected', connectionId: 'old' },
+    { ...preview, id: 'done', status: 'done' }];
+  state.drafts = Array.from({ length: 4 }, (_, index) => ({ id: `draft-${index}`, kind: 'rules' as const, created: new Date().toISOString(), rules: starterRules() }));
+  state.drafts.push({ id: 'expired-draft', kind: 'rules', created: new Date(Date.now() - 25 * 3600_000).toISOString(), rules: starterRules() });
+  await store.save(alice, state);
+  const h = await harness(mailEnv);
+  try {
+    const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const pending = await h.click(mail, 'Pending approvals');
+    expect(pending.body.text).toContain('page 1/2');
+    const next = await h.click(pending, 'Next');
+    expect(next.ts).toBe(pending.ts);
+    expect(next.body.text).toContain('preview-1');
+    expect(next.body.text).not.toMatch(/expired|wrong-version|disconnected/);
+    const reopened = await h.click(next, 'Open 2');
+    expect(reopened.method).toBe('chat.postMessage');
+    expect(button(reopened, 'Confirm proposed changes').value).toBe('preview-1');
+    expect((await h.click(next, 'Open 2', bob)).body.text).toContain('unavailable');
+    const report = await h.click(mail, 'Latest report');
+    expect(report.body.text).toContain('done');
+    expect(button(report, 'Undo this run').value).toBe('done');
+    expect((await h.click(report, 'Details')).body.text).toContain('Run done');
+    const saved = await store.load(alice);
+    expect(saved.runs).toEqual(state.runs);
+    expect(saved.drafts).toEqual(state.drafts);
+    expect(saved.history).toEqual(state.history);
+    saved.ruleVersion++;
+    await store.save(alice, saved);
+    expect((await h.click(next, 'Open 2')).body.text).toContain('connection/rules changed');
+    expect((await h.click(reopened, 'Confirm proposed changes')).body.text).toContain('connection/rules changed');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('retains saved-item identity through a restart and suppresses uncertain redelivery', async () => {
+  const store = new Store(sql), state = await store.load(alice);
+  state.drafts.push({ id: 'retained', kind: 'rules', created: new Date().toISOString(), rules: starterRules() });
+  await store.save(alice, state);
+  const first = await harness(mailEnv);
+  const pending = await first.click(await first.click(await first.dm('menu'), 'Mail Sorter'), 'Pending approvals');
+  await first.close();
+  const h = await harness(mailEnv);
+  try {
+    h.failNext('reject');
+    await expect(h.click(pending, 'Open 1')).rejects.toThrow('rejected');
+    const reopened = await h.drain();
+    expect(button(reopened, 'Approve rule changes').value).toBe('retained');
+    h.failNext('uncertain');
+    await expect(h.click(pending, 'Open 1')).rejects.toThrow('Connection lost');
+    const count = h.messages.length;
+    await h.drain();
+    expect(h.messages).toHaveLength(count);
+    const unchanged = await store.load(alice);
+    expect(unchanged.drafts).toEqual(state.drafts);
+    await h.click(reopened, 'Cancel');
+    expect((await h.click(pending, 'Open 1')).body.text).toContain('already handled');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('keeps targeted undo behind the saved Report and does not overwrite later mailbox changes', async () => {
+  const store = new Store(sql), state = await store.load(alice);
+  state.connection = { id: 'connected', subject: 'alice', email: 'alice@example.com', encryptedTokens: new Vault(Buffer.from(mailEnv.ENCRYPTION_KEY, 'base64')).seal({ access_token: 'fake', refresh_token: 'fake', expires_at: Date.now() + 3600_000 }, 'TTEAM:UALICE') };
+  state.runs = [{ id: 'finished', created: new Date().toISOString(), ruleVersion: 0, connectionId: 'connected', status: 'done', items: ['unchanged', 'changed'].map(id => ({ id, from: 'sender@example.com', subject: id, before: ['INBOX'], historyId: 'before', after: ['INBOX', 'URGENT'], afterHistory: 'after', add: ['URGENT'], remove: [], status: 'applied', plan: { labels: ['Urgent'], disposition: 'keep', needsDecision: false, reasons: ['Approved rule'] } })) }];
+  await store.save(alice, state);
+  const mutations: unknown[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options: RequestInit) => {
+    expect(url).toContain('https://gmail.googleapis.com/');
+    if (options.method === 'POST') {
+      expect(url).toContain('/messages/unchanged/modify');
+      mutations.push(JSON.parse(String(options.body)));
+      return Response.json({ id: 'unchanged', historyId: 'undone', labelIds: ['INBOX'] });
+    }
+    const changed = url.includes('/changed?');
+    return Response.json({ id: changed ? 'changed' : 'unchanged', historyId: changed ? 'later' : 'after', labelIds: ['INBOX', 'URGENT'] });
+  }));
+  const h = await harness(mailEnv);
+  try {
+    const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const report = await h.click(mail, 'Latest report');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+    expect((await h.click(report, 'Undo this run', bob)).body.text).toContain('not available');
+    const result = await h.click(report, 'Undo this run');
+    expect(result.body.text).toContain('undone');
+    expect(mutations).toEqual([{ addLabelIds: [], removeLabelIds: ['URGENT'] }]);
+    const details = await h.click(result, 'Details');
+    expect(details.body.text).toContain('message changed since this run');
+    await h.click(report, 'Undo this run');
+    expect(mutations).toHaveLength(1);
+  } finally { await h.close(); }
+});
+
+it('bounds long rule summaries while retaining every page and action', async () => {
+  const store = new Store(sql), state = await store.load(alice);
+  state.rules = Array.from({ length: 40 }, (_, index) => ({ ...starterRules()[0]!, id: `long-${index}`, name: `Long rule ${index}`, condition: '*'.repeat(1200), senders: Array.from({ length: 100 }, (_, n) => `${'x'.repeat(60)}${n}@example.com`), labels: Array.from({ length: 10 }, () => '_'.repeat(100)) }));
+  await store.save(alice, state);
+  const h = await harness(mailEnv);
+  try {
+    let page = await h.click(await h.click(await h.dm('menu'), 'Mail Sorter'), 'Manage rules');
+    for (let n = 0; n < 14; n++) {
+      const text = page.body.blocks.find((block: any) => block.type === 'markdown').text;
+      expect(text.length).toBeLessThan(12_000);
+      expect(text).toContain(`Long rule ${n * 3}`);
+      expect(text).toContain('summarized');
+      button(page, 'Edit 1'); button(page, 'Remove 1'); button(page, 'Back to menu');
+      if (n < 13) page = await h.click(page, 'Next');
+    }
+    expect(buttons(page).some((item: any) => item.text.text === 'Next')).toBe(false);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
 });

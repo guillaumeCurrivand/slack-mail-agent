@@ -87,7 +87,9 @@ The limit governs this app's recorded generation usage at its configured prices.
 
 Send `menu`, `help`, `hello` or `hi` to open a private menu. Click an enabled Module, Budget or Help; Back navigation updates that same message. Mail Sorter → Gmail connection shows connection status and offers Connect Gmail or confirmed disconnect. Google sign-in still opens externally, and the resulting mailbox still needs your approval in Slack. Mail workflow Cards include Menu buttons that open separate navigation without replacing the Card.
 
-This is the first navigation slice: sorting, rules, Reports and Slack channel/search actions still use the commands below. Clickable management and work-launch controls are planned. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation still waits behind long work for the same User until the later scheduling slice is implemented.
+Mail Sorter also offers Manage rules, Latest report and Pending approvals when needed. Rule lists paginate in place and summarize long fields. Add/Edit gives instructions for a `mail`-prefixed description; starter rules and removal still need separate approval. Saved Proposals, Previews and Reports reopen as separate Cards without new AI work or extended validity. Expired or invalidated approvals cannot be reopened as current work.
+
+Sorting and Slack channel/search actions still use the commands below; in-place channel management and work-launch buttons are planned. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation still waits behind long work for the same User until the later scheduling slice is implemented.
 
 Send these in a private conversation with the bot. Every module request, including natural-language follow-ups, needs its prefix; the assistant does not remember an active module:
 
