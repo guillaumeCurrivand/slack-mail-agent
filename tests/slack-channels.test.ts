@@ -30,7 +30,11 @@ function fakeChannels() {
     expect(request.searchParams.get('types')).toBe('public_channel,private_channel');
     const secondPage = request.searchParams.get('cursor') === 'next';
     return { ok: true, json: async () => secondPage
-      ? { ok: true, channels: [{ id: 'GPRIVATE', name: 'planning', is_group: true, is_private: true }, { id: 'GMPIM', name: 'group-dm', is_mpim: true }], response_metadata: { next_cursor: '' } }
+      ? { ok: true, channels: [
+        { id: 'GPRIVATE', name: 'planning', is_group: true, is_private: true },
+        { id: 'CPRIVATE', name: 'newplanning', is_channel: true, is_group: false, is_private: true },
+        { id: 'GMPIM', name: 'group-dm', is_mpim: true },
+      ], response_metadata: { next_cursor: '' } }
       : { ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: 'next' } } };
   }));
 }
@@ -98,8 +102,9 @@ it('lists only shared public and private channels from a signed Slack DM without
     expect(actor).toEqual(alice);
     expect(message.text).toContain('general');
     expect(message.text).toContain('planning');
+    expect(message.text).toContain('newplanning');
     expect(message.text).not.toContain('group-dm');
-    expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select']);
+    expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select', 'slack:channel_select']);
   } finally { await h.close(); }
 });
 

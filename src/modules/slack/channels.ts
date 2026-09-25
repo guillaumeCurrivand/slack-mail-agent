@@ -3,7 +3,7 @@ import { SlackApi } from './api.js';
 export type Channel = { id: string; name: string; private: boolean };
 
 const parseChannel = (item: any): Channel | undefined => {
-  const isPrivate = item?.is_private === true && item?.is_group === true;
+  const isPrivate = item?.is_private === true && (item?.is_channel === true || item?.is_group === true);
   const isPublic = item?.is_channel === true && item?.is_private === false;
   if (!isPrivate && !isPublic || item.is_mpim || item.is_im || item.is_archived ||
     typeof item.id !== 'string' || !/^[CG][A-Z0-9]+$/.test(item.id) || typeof item.name !== 'string') return;
