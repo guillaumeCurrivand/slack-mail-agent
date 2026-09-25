@@ -1,5 +1,6 @@
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, JobPayload, ModuleContext } from '../../core/modules.js';
+import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, escapeSlack, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
 import { SlackChannelDirectory, type Channel } from './channels.js';
@@ -105,13 +106,12 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     await context.messenger.send(actor, { kind: 'Unanswered for you', text: lines.join('\n'), buttons });
   }
 
-  async function showChannels(actor: Actor, context: ModuleContext, requestedPage = 0, notice = '') {
-    let available: Channel[];
+  async function channelPage(actor: Actor, requestedPage = 0, notice = '', standalone = false): Promise<MenuPage> {
+    const links = [{ label: 'Back to Slack Unanswered', page: standalone ? 'slack:main' : 'main' }];
+    let available: Channel[] = [];
+    let accessUnavailable = false;
     try { available = await directory.listFor(actor.user); }
-    catch {
-      await context.messenger.send(actor, { text: `${notice ? `${notice}\n` : ''}Could not list Slack channels right now. Try slack channels again.` });
-      return;
-    }
+    catch { accessUnavailable = true; }
     const saved = new Set(await selections.list(actor));
     const availableIds = new Set(available.map(channel => channel.id));
     const unavailable = [...saved].filter(id => !availableIds.has(id)).sort();
@@ -125,23 +125,57 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     const text = [
       notice,
       `Selected channels: ${saved.size}. Only you can change your selection.`,
-      items.length ? `Available channels (page ${page + 1}/${pages}):` : 'No shared public or private channels are available. Invite the bot to a channel to make it eligible.',
+      accessUnavailable ? 'Channel access unavailable right now. Available channels cannot be shown. Saved selections can still be removed.'
+        : items.length ? `Channels (page ${page + 1}/${pages}):` : 'No shared public or private channels are available. Invite the bot to a channel to make it eligible.',
+      accessUnavailable && items.length ? `Saved selections (page ${page + 1}/${pages}):` : '',
       ...visible.map(item => `${item.selected ? '✓' : '○'} ${item.name}`),
-      unavailable.length ? 'Unavailable selections remain saved until you remove them.' : '',
+      unavailable.length ? 'Unavailable selected channels remain saved until you remove them. Their content is not shown.' : '',
     ].filter(Boolean).join('\n');
     const buttons: Button[] = visible.map(item => ({
-      label: `${item.selected ? 'Remove' : 'Select'} ${item.buttonName.slice(0, 60)}`,
+      label: `${item.selected ? 'Remove' : 'Add'} ${item.buttonName.slice(0, 60)}`,
       action: item.selected ? 'channel_remove' : 'channel_select', value: selectionValue(item.id, page),
     }));
     if (page > 0) buttons.push({ label: 'Previous', action: 'channel_page', value: String(page - 1) });
     if (page + 1 < pages) buttons.push({ label: 'Next', action: 'channel_page', value: String(page + 1) });
-    await context.messenger.send(actor, { kind: 'Slack channels', text, buttons });
+    return { kind: 'Slack channels', text, buttons, bindButtons: true, links };
+  }
+
+  async function handleChannels(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {
+    const navigation = new Navigation(context.sql, context.messenger);
+    if (payload.type === 'text') return navigation.show(actor, eventId, await channelPage(actor, 0, '', true));
+    const bound = await navigation.boundTarget(actor, payload.value, payload.timestamp);
+    if (!bound) return navigation.show(actor, eventId, { kind: 'Menu unavailable', text: 'This channel list is unavailable. Send slack channels or menu to open a fresh one.' });
+    const action = String(payload.action);
+    if (action === 'channel_page') {
+      const page = /^\d{1,6}$/.test(bound.value) ? Number(bound.value) : 0;
+      return navigation.show(actor, eventId, await channelPage(actor, page, '', true), bound.target);
+    }
+    const selected = parseSelection(bound.value);
+    if (!selected) return navigation.show(actor, eventId, await channelPage(actor, 0, 'That channel control is invalid.', true), bound.target);
+    if (await selections.handled(actor, eventId)) return navigation.show(actor, eventId, await channelPage(actor, selected.page, 'This action was already processed.', true), bound.target);
+    const saved = new Set(await selections.list(actor));
+    let notice: string;
+    if (action === 'channel_remove') {
+      if (saved.has(selected.id)) notice = await selections.removeOnce(actor, eventId, selected.id) ? 'Channel removed.' : 'This action was already processed.';
+      else { await selections.markHandled(actor, eventId); notice = 'That channel was already removed.'; }
+    } else {
+      let available: Channel[];
+      try { available = await directory.listFor(actor.user); }
+      catch {
+        await selections.markHandled(actor, eventId);
+        return navigation.show(actor, eventId, await channelPage(actor, selected.page, 'Could not verify channel access. No selection was changed.', true), bound.target);
+      }
+      if (!available.some(channel => channel.id === selected.id)) notice = 'That channel is no longer available to you and the bot. No selection was changed.';
+      else if (saved.has(selected.id)) notice = 'That channel is already selected.';
+      else notice = await selections.addOnce(actor, eventId, selected.id) ? 'Channel added.' : 'This action was already processed.';
+      if (notice !== 'Channel added.') await selections.markHandled(actor, eventId);
+    }
+    return navigation.show(actor, eventId, await channelPage(actor, selected.page, notice, true), bound.target);
   }
 
   async function respond(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {
     if (payload.type === 'text') {
       const command = String(payload.text ?? '').trim().toLowerCase();
-      if (command === 'channels') return showChannels(actor, context);
       if (command === 'unanswered') return showUnanswered(actor, eventId, context, context.requestedAt);
       return context.messenger.send(actor, { text: 'Use slack channels to choose your sources, then slack unanswered to search them.' });
     }
@@ -151,31 +185,23 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
       if (!page) return context.messenger.send(actor, { text: 'That results control is invalid. Run slack unanswered again.' });
       return showUnanswered(actor, eventId, context, page.anchor, page.page);
     }
-    if (payload.action === 'channel_page') {
-      const value = String(payload.value ?? '');
-      return showChannels(actor, context, /^\d{1,6}$/.test(value) ? Number(value) : 0);
-    }
-    if (payload.action !== 'channel_select' && payload.action !== 'channel_remove') return;
-    const selected = parseSelection(payload.value);
-    if (!selected) return showChannels(actor, context, 0, 'That channel control is invalid.');
-    if (payload.action === 'channel_remove') {
-      await selections.remove(actor, selected.id);
-      return showChannels(actor, context, selected.page, 'Channel removed.');
-    }
-    let available: Channel[];
-    try { available = await directory.listFor(actor.user); }
-    catch { return context.messenger.send(actor, { text: 'Could not verify channel access right now. No selection was changed.' }); }
-    if (!available.some(channel => channel.id === selected.id)) return showChannels(actor, context, selected.page, 'That channel is no longer available to you and the bot.');
-    await selections.add(actor, selected.id);
-    return showChannels(actor, context, selected.page, 'Channel selected.');
+    return;
   }
 
   return {
     id: 'slack', name: 'Slack Unanswered', description: 'Find unanswered messages in selected Slack channels',
-    async menu() { return { kind: 'Slack Unanswered', text: 'Use slack channels to choose your sources, then slack unanswered to search them. Gmail is not required.' }; },
+    menuActions: ['channel_page', 'channel_select', 'channel_remove'],
+    async menu(actor, page) {
+      if (page.startsWith('channels_')) return channelPage(actor, /^channels_(\d{1,6})$/.test(page) ? Number(page.slice(9)) : 0);
+      return { kind: 'Slack Unanswered', text: 'Choose channels to manage your sources, or send slack channels. Send slack unanswered to search them. Gmail is not required.', links: [{ label: 'Choose channels', page: 'channels_0' }] };
+    },
     async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); },
     async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); },
     async handle(actor, payload, eventId, context) {
+      if ((payload.type === 'text' && String(payload.text ?? '').trim().toLowerCase() === 'channels') ||
+        (payload.type === 'menu_action' && ['channel_page', 'channel_select', 'channel_remove'].includes(String(payload.action)))) {
+        return handleChannels(actor, payload, eventId, context);
+      }
       if (await selections.handled(actor, eventId)) return;
       let responseAttempted = false;
       const messenger: Messenger = { send: async (recipient, message) => {

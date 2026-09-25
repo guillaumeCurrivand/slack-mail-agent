@@ -58,11 +58,21 @@ export class SlackChannelSelections {
     const result = await this.sql.query('SELECT channel_id FROM slack_selected_channels WHERE owner=$1 ORDER BY channel_id', [ownerKey(actor)]);
     return result.rows.map(row => String(row.channel_id));
   }
-  async add(actor: Actor, id: string): Promise<void> {
-    await this.sql.query('INSERT INTO slack_selected_channels(owner,channel_id) VALUES($1,$2) ON CONFLICT DO NOTHING', [ownerKey(actor), id]);
+  async addOnce(actor: Actor, eventId: string, id: string): Promise<boolean> {
+    const result = await this.sql.query(`WITH claim AS (
+      INSERT INTO slack_handled_events(owner,event_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING event_id
+    ), changed AS (
+      INSERT INTO slack_selected_channels(owner,channel_id) SELECT $1,$3 FROM claim ON CONFLICT DO NOTHING RETURNING channel_id
+    ) SELECT EXISTS(SELECT 1 FROM claim) AS claimed`, [ownerKey(actor), eventId, id]);
+    return result.rows[0]?.claimed === true;
   }
-  async remove(actor: Actor, id: string): Promise<void> {
-    await this.sql.query('DELETE FROM slack_selected_channels WHERE owner=$1 AND channel_id=$2', [ownerKey(actor), id]);
+  async removeOnce(actor: Actor, eventId: string, id: string): Promise<boolean> {
+    const result = await this.sql.query(`WITH claim AS (
+      INSERT INTO slack_handled_events(owner,event_id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING event_id
+    ), changed AS (
+      DELETE FROM slack_selected_channels WHERE owner=$1 AND channel_id=$3 AND EXISTS(SELECT 1 FROM claim) RETURNING channel_id
+    ) SELECT EXISTS(SELECT 1 FROM claim) AS claimed`, [ownerKey(actor), eventId, id]);
+    return result.rows[0]?.claimed === true;
   }
   async handled(actor: Actor, eventId: string): Promise<boolean> {
     const result = await this.sql.query('SELECT 1 FROM slack_handled_events WHERE owner=$1 AND event_id=$2', [ownerKey(actor), eventId]);

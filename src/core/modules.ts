@@ -14,6 +14,7 @@ export interface AssistantModule {
   description: string;
   name?: string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
+  menuActions?: readonly string[];
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
   registerRoutes?(app: FastifyInstance): void;
@@ -49,7 +50,7 @@ export class ModuleRegistry {
     const separator = action.indexOf(':');
     const id = separator > 0 ? action.slice(0, separator) : this.legacyActions.get(action);
     const name = separator > 0 ? action.slice(separator + 1) : action;
-    if (id && name && this.modules.has(id)) return { module: id, payload: { type: 'action', action: name, value } };
+    if (id && name && this.modules.has(id)) return { module: id, payload: { type: this.modules.get(id)!.menuActions?.includes(name) ? 'menu_action' : 'action', action: name, value } };
     return { module: 'core', payload: { type: 'unavailable' } };
   }
   async dispatch(job: RoutedJob, actor: Actor, eventId: string, context: ModuleContext) {
@@ -70,9 +71,13 @@ export class ModuleRegistry {
     }
     const module = this.modules.get(job.module);
     if (!module) throw new Error('Module is not enabled.');
-    const messenger: Messenger = { send: (recipient, message) => context.messenger.send(recipient, {
-      ...message, ...(message.buttons ? { buttons: message.buttons.map(button => ({ ...button, action: `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })) } : {}),
-    }) };
+    const namespace = (message: MenuPage): MenuPage => ({ ...message,
+      ...(message.buttons ? { buttons: message.buttons.map(button => ({ ...button, action: button.action.startsWith('core:') ? button.action : `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })) } : {}),
+    });
+    const messenger: Messenger = { send: (recipient, message) => context.messenger.send(recipient, namespace(message)),
+      ...(context.messenger.post ? { post: (recipient: Actor, message: MenuPage) => context.messenger.post!(recipient, namespace(message)) } : {}),
+      ...(context.messenger.update ? { update: (recipient: Actor, timestamp: string, message: MenuPage) => context.messenger.update!(recipient, timestamp, namespace(message)) } : {}),
+    };
     await module.handle(actor, job.payload, eventId, { ...context, messenger });
   }
 

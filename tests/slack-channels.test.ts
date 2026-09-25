@@ -10,7 +10,6 @@ import { createServer } from '../src/core/server.js';
 import { Slack, SlackDeliveryRejected, type AgentMessage, type Messenger } from '../src/core/slack.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { worker } from '../src/core/worker.js';
-import { SlackChannelSelections } from '../src/modules/slack/store.js';
 
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'token', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'slack' };
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
@@ -18,7 +17,7 @@ const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
 let db: PGlite, sql: Sql;
 
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
-beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts'); });
+beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts'); });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
@@ -44,15 +43,23 @@ async function harness(runtimeEnv: NodeJS.ProcessEnv = env, sendThroughSlack = f
   const modules = createModules(runtimeConfig, sql, runtimeEnv);
   for (const module of modules.all()) await module.initialize?.(sql);
   const app = createServer(runtimeConfig, new JobStore(sql), modules);
-  const messages: Array<{ actor: Actor; message: AgentMessage }> = [];
+  const messages: Array<{ actor: Actor; message: AgentMessage; ts: string; method: string }> = [];
   let failAfterDelivery = false;
   let rejectBeforeDelivery = false;
-  const messenger: Messenger = { async send(actor, message) {
+  const deliver = async (actor: Actor, message: AgentMessage, method: 'post' | 'update', target?: string) => {
     if (rejectBeforeDelivery) { rejectBeforeDelivery = false; throw new SlackDeliveryRejected('Rejected'); }
-    if (sendThroughSlack) await new Slack(runtimeConfig.SLACK_BOT_TOKEN).send(actor, message);
-    messages.push({ actor, message });
+    const ts = target ?? `${Math.floor(Date.now() / 1000)}.${String(messages.length + 1).padStart(6, '0')}`;
+    if (sendThroughSlack) {
+      if (method === 'update') await new Slack(runtimeConfig.SLACK_BOT_TOKEN).update(actor, ts, message);
+      else await new Slack(runtimeConfig.SLACK_BOT_TOKEN).post(actor, message);
+    }
+    messages.push({ actor, message, ts, method });
     if (failAfterDelivery) { failAfterDelivery = false; throw new Error('Delivery outcome uncertain'); }
-  } };
+    return ts;
+  };
+  const messenger: Messenger = { async send(actor, message) { await deliver(actor, message, 'post'); },
+    post: (actor, message) => deliver(actor, message, 'post'),
+    async update(actor, timestamp, message) { await deliver(actor, message, 'update', timestamp); } };
   const query = (text: string, values?: any[]) => text.includes('pg_try_advisory_lock')
     ? Promise.resolve({ rows: [{ locked: true }] }) : text.includes('pg_advisory_unlock')
       ? Promise.resolve({ rows: [{}] }) : sql.query(text, values);
@@ -80,9 +87,9 @@ async function harness(runtimeEnv: NodeJS.ProcessEnv = env, sendThroughSlack = f
     if (requestedAt) await sql.query('UPDATE jobs SET created_at=$1 WHERE id=$2', [requestedAt, `slack:${eventId}`]);
   };
   const dm = async (text: string, actor = alice, requestedAt?: Date) => { await postDm(text, actor, requestedAt); return receive(); };
-  const postAction = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice) => {
+  const postAction = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice, ts = messages.findLast(item => item.message.buttons?.includes(button))?.ts) => {
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user },
-      channel: { id: actor.channel }, actions: [{ action_id: button.action, value: button.value, action_ts: crypto.randomUUID() }] }) }).toString();
+      channel: { id: actor.channel }, message: { ts }, actions: [{ action_id: button.action, value: button.value, action_ts: crypto.randomUUID() }] }) }).toString();
     expect((await post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
   };
   const click = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice) => { await postAction(button, actor); return receive(); };
@@ -104,7 +111,7 @@ it('lists only shared public and private channels from a signed Slack DM without
     expect(message.text).toContain('planning');
     expect(message.text).toContain('newplanning');
     expect(message.text).not.toContain('group-dm');
-    expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select', 'slack:channel_select']);
+    expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select', 'slack:channel_select', 'core:navigate']);
   } finally { await h.close(); }
 });
 
@@ -121,7 +128,7 @@ it('delivers channel selection buttons with distinct action IDs in each Slack ac
       posted.push(body);
       const valid = body.blocks.filter((block: any) => block.type === 'actions').every((block: any) =>
         new Set(block.elements.map((element: any) => element.action_id)).size === block.elements.length);
-      return Response.json(valid ? { ok: true } : { ok: false, error: 'invalid_blocks' });
+      return Response.json(valid ? { ok: true, ts: '1234567890.000001' } : { ok: false, error: 'invalid_blocks' });
     }
     throw new Error(`Unexpected Slack API: ${request.pathname}`);
   }));
@@ -131,7 +138,7 @@ it('delivers channel selection buttons with distinct action IDs in each Slack ac
     await h.drain();
     expect(posted).toHaveLength(1);
     expect(h.messages).toHaveLength(1);
-    expect(h.messages[0]!.message.buttons).toHaveLength(2);
+    expect(h.messages[0]!.message.buttons).toHaveLength(3);
   } finally { await h.close(); }
 });
 
@@ -162,7 +169,7 @@ it('keeps each user selection across restarts and temporary access loss until th
   const first = await harness();
   try {
     const list = await first.dm('slack channels');
-    const selectPrivate = list.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
+    const selectPrivate = list.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     expect((await first.click(selectPrivate)).message.text).toContain('Selected channels: 1');
     expect((await first.click(selectPrivate)).message.text).toContain('Selected channels: 1');
   } finally { await first.close(); }
@@ -175,8 +182,8 @@ it('keeps each user selection across restarts and temporary access loss until th
     expect(bobList.message.text).toContain('Selected channels: 0');
     expect(bobList.message.text).not.toContain('planning');
     const aliceList = await second.dm('slack channels');
-    const oldPrivateButton = aliceList.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
-    expect((await second.click(oldPrivateButton, bob)).message.text).toContain('Selected channels: 0');
+    const oldPrivateButton = aliceList.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
+    expect((await second.click(oldPrivateButton, bob)).message.text).toContain('unavailable');
 
     aliceCanSeePrivate = false;
     const unavailable = await second.dm('slack channels');
@@ -185,15 +192,15 @@ it('keeps each user selection across restarts and temporary access loss until th
     aliceCanSeePrivate = true;
     const restored = await second.dm('slack channels');
     expect(restored.message.text).toContain('Selected channels: 1');
-    const removePrivate = restored.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
+    const removePrivate = restored.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     expect(removePrivate.action).toBe('slack:channel_remove');
     const removed = await second.click(removePrivate);
     expect(removed.message.text).toContain('Selected channels: 0');
     expect((await second.dm('slack channels')).message.text).toContain('Selected channels: 0');
-    await second.click(removed.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!);
+    await second.click(removed.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!);
     aliceCanSeePrivate = false;
     const inaccessible = await second.dm('slack channels');
-    const removeInaccessible = inaccessible.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
+    const removeInaccessible = inaccessible.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     expect(removeInaccessible.action).toBe('slack:channel_remove');
     expect((await second.click(removeInaccessible)).message.text).toContain('Selected channels: 0');
     aliceCanSeePrivate = true;
@@ -215,8 +222,8 @@ it('paginates long channel lists and keeps page controls private to the requesti
     expect(second.actor).toEqual(alice);
     expect(second.message.text).toContain('page 2/2');
     expect(second.message.buttons?.some(button => button.label.includes('channel-11'))).toBe(true);
-    expect(second.message.buttons).toHaveLength(3);
-    const selected = await h.click(second.message.buttons!.find(button => button.value.startsWith('CCHANNEL11|'))!);
+    expect(second.message.buttons).toHaveLength(4);
+    const selected = await h.click(second.message.buttons!.find(button => button.value.includes('|CCHANNEL11|'))!);
     expect(selected.message.text).toContain('Selected channels: 1');
     expect(selected.message.text).toContain('page 2/2');
   } finally { await h.close(); }
@@ -227,10 +234,10 @@ it('does not repeat a private response when a processed selection job is replaye
   const h = await harness();
   try {
     const list = await h.dm('slack channels');
-    const select = list.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
+    const select = list.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     await h.click(select);
     const delivered = h.messages.length;
-    await sql.query("UPDATE jobs SET status='queued',available_at=now(),payload=$1 WHERE module='slack' AND id LIKE 'action:%'", [JSON.stringify({ type: 'action', action: 'channel_select', value: select.value })]);
+    await sql.query("UPDATE jobs SET status='queued',available_at=now() WHERE module='slack' AND id LIKE 'action:%'");
     await h.drain();
     expect(h.messages).toHaveLength(delivered);
     expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 1');
@@ -242,7 +249,7 @@ it('does not blindly resend a selection response after an uncertain delivery out
   const h = await harness();
   try {
     const list = await h.dm('slack channels');
-    const select = list.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
+    const select = list.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     h.failNextDelivery();
     await h.click(select);
     const delivered = h.messages.length;
@@ -253,7 +260,7 @@ it('does not blindly resend a selection response after an uncertain delivery out
   } finally { await h.close(); }
 });
 
-it('retains an old handled marker while a disabled Slack job is pending, then expires it after completion', async () => {
+it('retains an old navigation delivery marker while a disabled Slack job is pending, then expires it after completion', async () => {
   fakeChannels();
   const first = await harness();
   let jobId = '';
@@ -265,7 +272,7 @@ it('retains an old handled marker while a disabled Slack job is pending, then ex
     const queued = (await sql.query("SELECT id FROM jobs WHERE module='slack' AND status='queued'")).rows;
     expect(queued).toHaveLength(1);
     jobId = String(queued[0]!.id);
-    await sql.query("UPDATE slack_handled_events SET handled_at=now()-interval '31 days' WHERE event_id=$1", [jobId]);
+    await sql.query("UPDATE core_navigation_deliveries SET created_at=now()-interval '31 days' WHERE event_id=$1", [jobId]);
     await sql.query('UPDATE jobs SET available_at=now() WHERE id=$1', [jobId]);
   } finally { await first.close(); }
 
@@ -278,14 +285,13 @@ it('retains an old handled marker while a disabled Slack job is pending, then ex
 
   const resumed = await harness();
   try {
-    const selections = new SlackChannelSelections(sql);
-    await selections.cleanup();
-    expect(await selections.handled(alice, jobId)).toBe(true);
+    await new JobStore(sql).cleanup();
+    expect((await sql.query('SELECT event_id FROM core_navigation_deliveries WHERE event_id=$1', [jobId])).rows).toHaveLength(1);
     await resumed.drain();
     expect(resumed.messages).toHaveLength(0);
     expect((await sql.query('SELECT status FROM jobs WHERE id=$1', [jobId])).rows[0]!.status).toBe('done');
-    await selections.cleanup();
-    expect(await selections.handled(alice, jobId)).toBe(false);
+    await new JobStore(sql).cleanup();
+    expect((await sql.query('SELECT event_id FROM core_navigation_deliveries WHERE event_id=$1', [jobId])).rows).toHaveLength(0);
   } finally { await resumed.close(); }
 });
 
@@ -294,7 +300,7 @@ it('retries a private response when Slack definitely rejects the first delivery'
   const h = await harness();
   try {
     const list = await h.dm('slack channels');
-    const select = list.message.buttons!.find(button => button.value.startsWith('GPRIVATE|'))!;
+    const select = list.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     h.rejectNextDelivery();
     await h.postAction(select);
     const delivered = h.messages.length;
@@ -423,7 +429,7 @@ it('groups and paginates private results while reporting inaccessible selected c
   const h = await harness();
   try {
     const channels = await h.dm('slack channels');
-    for (const button of channels.message.buttons!) await h.click(button);
+    for (const button of channels.message.buttons!.filter(button => button.action === 'slack:channel_select')) await h.click(button);
     const first = await h.dm('slack unanswered');
     expect(first.actor).toEqual(alice);
     expect(first.message.text).toContain('page 1/2');

@@ -1,6 +1,6 @@
 # Slack Unanswered module spec
 
-Status: approved feature spec; channel selection, direct mention/name search, and contextual matching are implemented locally but disabled by default. Live Slack access and model-quality validation remain release work. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
+Status: approved feature spec; clickable channel selection, direct mention/name search, and contextual matching are implemented locally but disabled by default. Live Slack access and model-quality validation remain release work. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
 
 ## Problem Statement
 
@@ -45,7 +45,7 @@ Separate clear matches from **Possibly for you** messages whose thread context g
 
 ## Implementation Decisions
 
-- Implement the capability as the built-in module with the stable prefix `slack`. `slack unanswered` performs the search; `slack channels` manages a user's selected sources.
+- Implement the capability as the built-in module with the stable prefix `slack`. `slack unanswered` performs the search; `slack channels` and Slack Unanswered → Choose channels manage a user's selected sources. The private list paginates and updates in place for Add, Remove and page changes. It keeps inaccessible selections visible by ID with a safe explanation and Remove control. Browsing and selection make no AI calls.
 - Keep channel selection per Slack user and workspace. Start with no selected channels. Enforce that each selected channel is accessible to both that user and the bot when listing and searching it.
 - Search read-only. Include candidate messages whose own timestamps are within the rolling 48-hour window. Fetch the complete relevant thread, including older replies, to assess matches and whether the user responded.
 - Treat Slack message text and thread replies as untrusted content. They may inform classification but cannot authorize actions or alter module settings.

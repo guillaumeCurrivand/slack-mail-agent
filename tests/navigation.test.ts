@@ -21,7 +21,7 @@ const mailEnv = { ...env, ENABLED_MODULES: 'mail,slack', ENCRYPTION_KEY: randomB
 let db: PGlite, sql: Sql;
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
 beforeEach(async () => {
-  await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries CASCADE');
+  await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts');
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected external provider call'); }));
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -104,6 +104,122 @@ it('updates only the clicked menu, checks ownership and keeps module selection o
     expect(h.messages.filter(message => message.method === 'chat.update')).toHaveLength(updates);
     expect((await h.dm('channels')).body.text).toContain('prefix');
   } finally { await h.close(); }
+});
+
+it('chooses Slack channels across pages in the same DM message without Gmail or AI', async () => {
+  let channelCount = 12;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url);
+    expect(request.pathname).toBe('/api/users.conversations');
+    return Response.json({ ok: true, channels: Array.from({ length: channelCount }, (_, index) => ({
+      id: `CCHANNEL${index}`, name: `channel-${String(index).padStart(2, '0')}`, is_channel: true, is_private: false,
+    })), response_metadata: { next_cursor: '' } });
+  }));
+  const h = await harness();
+  try {
+    const main = await h.dm('menu');
+    const module = await h.click(main, 'Slack Unanswered');
+    const first = await h.click(module, 'Choose channels');
+    expect(first.method).toBe('chat.update');
+    expect(first.ts).toBe(main.ts);
+    expect(first.body.text).toContain('page 1/2');
+    const second = await h.click(first, 'Next');
+    expect(second.ts).toBe(first.ts);
+    expect(second.body.text).toContain('channel-11');
+    const added = await h.click(second, 'Add #channel-11');
+    expect(added.method).toBe('chat.update');
+    expect(added.ts).toBe(first.ts);
+    expect(added.body.text).toContain('Selected channels: 1');
+    button(added, 'Remove #channel-11');
+    const removed = await h.click(added, 'Remove #channel-11');
+    expect(removed.body.text).toContain('Selected channels: 0');
+    button(removed, 'Add #channel-11');
+    channelCount = 1;
+    const adjusted = await h.click(first, 'Next');
+    expect(adjusted.body.text).toContain('page 1/1');
+    expect(adjusted.body.text).not.toContain('channel-11');
+    const back = await h.click(adjusted, 'Back to Slack Unanswered');
+    expect(back.ts).toBe(main.ts);
+    expect(back.body.text).toContain('Choose channels');
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
+    expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url).includes('users.conversations'))).toBe(true);
+  } finally { await h.close(); }
+});
+
+it('retains inaccessible selections and rejects another user or stale access on channel clicks', async () => {
+  let accessible = true;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const request = new URL(url);
+    expect(request.pathname).toBe('/api/users.conversations');
+    return Response.json({ ok: true, channels: request.searchParams.get('user') === 'UALICE' && accessible
+      ? [{ id: 'GPRIVATE', name: 'planning', is_group: true, is_private: true }] : [], response_metadata: { next_cursor: '' } });
+  }));
+  const h = await harness();
+  try {
+    const first = await h.dm('slack channels');
+    const bobAttempt = await h.click(first, 'Add #planning', bob);
+    expect(bobAttempt.body.text).toContain('unavailable');
+    expect(bobAttempt.body.text).not.toContain('planning');
+    accessible = false;
+    const changed = await h.click(first, 'Add #planning');
+    expect(changed.body.text).toContain('no longer available');
+    expect(changed.body.text).toContain('Selected channels: 0');
+    accessible = true;
+    const added = await h.click(first, 'Add #planning');
+    expect(added.body.text).toContain('Selected channels: 1');
+    accessible = false;
+    const unavailable = await h.click(first, 'Add #planning');
+    expect(unavailable.body.text).toContain('Unavailable selected channel GPRIVATE');
+    expect(unavailable.body.text).not.toContain('planning');
+    const removed = await h.click(unavailable, 'Remove GPRIVATE');
+    expect(removed.body.text).toContain('Selected channels: 0');
+    expect(removed.body.text).toContain('No shared public or private channels');
+    accessible = true;
+    const messagesAfterRemove = h.messages.length;
+    await sql.query("UPDATE jobs SET status='queued',available_at=now() WHERE module='slack' AND payload->>'action'='channel_select'");
+    await h.drain();
+    expect(h.messages).toHaveLength(messagesAfterRemove);
+    const current = await h.dm('slack channels');
+    expect(current.body.text).toContain('Selected channels: 0');
+  } finally { await h.close(); }
+});
+
+it('keeps saved selections removable if channel discovery fails during refresh', async () => {
+  let discoveryCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async () => {
+    discoveryCalls++;
+    if (discoveryCalls === 3) throw new Error('Channel discovery unavailable');
+    return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+  }));
+  const h = await harness();
+  try {
+    const list = await h.dm('slack channels');
+    const updated = await h.click(list, 'Add #general');
+    expect(updated.method).toBe('chat.update');
+    expect(updated.body.text).toContain('Selected channels: 1');
+    expect(updated.body.text).toContain('access unavailable');
+    expect(updated.body.text).not.toContain('selections are unchanged');
+    button(updated, 'Remove CPUBLIC');
+  } finally { await h.close(); }
+});
+
+it('gives shared guidance for channel controls after Slack Unanswered is disabled', async () => {
+  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, channels: [
+    { id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false },
+  ], response_metadata: { next_cursor: '' } })));
+  const enabled = await harness();
+  let list: Posted;
+  try { list = await enabled.dm('slack channels'); }
+  finally { await enabled.close(); }
+  const provider = vi.fn(() => { throw new Error('Disabled module accessed Slack'); });
+  vi.stubGlobal('fetch', provider);
+  const disabled = await harness({ ...env, ENABLED_MODULES: '' });
+  try {
+    const guidance = await disabled.click(list!, 'Add #general');
+    expect(guidance.body.text).toContain('not sent to a module');
+    expect(guidance.body.text).not.toContain('general');
+    expect(provider).not.toHaveBeenCalled();
+  } finally { await disabled.close(); }
 });
 
 it('connects through the existing invitation and confirms disconnect without erasing saved rules', async () => {
