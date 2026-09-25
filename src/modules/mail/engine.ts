@@ -123,7 +123,8 @@ export class Engine {
       const rule = state.rules.find(rule => rule.id === value);
       return this.send(actor, rule ? `To edit ${escapeCardValue(rule.name)}, reply: mail change rule ${escapeCardValue(rule.id)} followed by your desired condition, labels, action and exceptions. Changes need separate approval.` : 'That rule is no longer available in your account. Open Manage rules again.');
     }
-    if (action === 'menu_latest_report') return this.report(actor, state, state.runs.at(-1)?.id);
+    if (action === 'menu_latest_report') return this.report(actor, state,
+      state.runs.findLast(run => run.status === 'done' || run.status === 'undone')?.id);
     if (action === 'menu_starters') return this.propose(actor, state, { kind: 'rules', rules: starterRules() });
     if (action === 'menu_remove_rule') {
       if (!state.rules.some(rule => rule.id === value)) return this.send(actor, 'That rule is no longer available in your account. Open Manage rules again.');

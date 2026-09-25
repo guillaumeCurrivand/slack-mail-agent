@@ -115,6 +115,34 @@ it('lists only shared public and private channels from a signed Slack DM without
   } finally { await h.close(); }
 });
 
+it('offers Menu after an unrecognized Slack command', async () => {
+  const h = await harness();
+  try {
+    const reply = await h.dm('slack unknown');
+    expect(reply.message.text).toContain('slack channels');
+    expect(reply.message.buttons?.some(button => button.action === 'core:menu')).toBe(true);
+  } finally { await h.close(); }
+});
+
+it('accepts historical unbound channel controls using current owner state and access', async () => {
+  fakeChannels();
+  const h = await harness();
+  try {
+    const list = await h.dm('slack channels');
+    await sql.query('DELETE FROM core_navigation_menus WHERE timestamp=$1', [list.ts]);
+    await h.postAction({ label: 'Select general', action: 'slack:channel_select', value: 'CPUBLIC|0' }, alice, list.ts);
+    await h.drain();
+    expect(h.messages.at(-1)?.message.text).toContain('Selected channels: 1');
+    expect(h.messages.at(-1)?.method).toBe('post');
+    await h.postAction({ label: 'Next', action: 'slack:channel_page', value: '0' }, alice, list.ts);
+    await h.drain();
+    expect(h.messages.at(-1)?.message.text).toContain('general');
+    await h.postAction({ label: 'Remove general', action: 'slack:channel_remove', value: 'CPUBLIC|0' }, alice, list.ts);
+    await h.drain();
+    expect(h.messages.at(-1)?.message.text).toContain('Selected channels: 0');
+  } finally { await h.close(); }
+});
+
 it('delivers channel selection buttons with distinct action IDs in each Slack actions block', async () => {
   const posted: any[] = [];
   vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
@@ -411,7 +439,8 @@ it('uses the command time and full threads for name matches, collisions, and lat
 
 it('groups and paginates private results while reporting inaccessible selected channels', async () => {
   let privateVisible = true;
-  const stamp = (offset: number) => `${Math.floor(Date.now() / 1000) - offset}.000001`;
+  const base = Math.floor(Date.now() / 1000) - 60;
+  const stamp = (offset: number) => `${base - offset}.000001`;
   vi.stubGlobal('fetch', vi.fn(async (url: string) => {
     const request = new URL(url), method = request.pathname.split('/').at(-1);
     if (method === 'users.conversations') return { ok: true, json: async () => ({ ok: true, channels: [
@@ -439,6 +468,8 @@ it('groups and paginates private results while reporting inaccessible selected c
     expect(first.message.text).toContain('public 0');
     expect(first.message.text).not.toContain('private result');
     const next = first.message.buttons!.find(button => button.label === 'Next')!;
+    const originalJob = (await sql.query('SELECT created_at FROM jobs WHERE id=$1', [next.value.split('|')[0]])).rows[0]!;
+    const legacyPage = { label: 'Next', action: 'slack:unanswered_page', value: `${new Date(originalJob.created_at).getTime()}|1` };
     const providerCalls = vi.mocked(fetch).mock.calls.length;
     const restarted = await harness();
     try {
@@ -449,6 +480,16 @@ it('groups and paginates private results while reporting inaccessible selected c
       expect(second.message.text).toContain('private result');
       expect(second.message.text).toContain('Open message');
       expect(vi.mocked(fetch).mock.calls.slice(providerCalls).every(([url]) => new URL(String(url)).pathname.endsWith('/users.conversations'))).toBe(true);
+      await sql.query('DELETE FROM slack_unanswered_results WHERE event_id=$1', [next.value.split('|')[0]]);
+      await restarted.postAction(legacyPage, alice, first.ts);
+      await restarted.drain();
+      expect(restarted.messages.at(-1)?.message.text).toContain('page 2/2');
+      expect(restarted.messages.at(-1)?.message.text).toContain('private result');
+      expect(vi.mocked(fetch).mock.calls.every(([url]) => new URL(String(url)).hostname !== 'api.openai.com')).toBe(true);
+      await restarted.postAction(legacyPage, bob, first.ts);
+      await restarted.drain();
+      expect(restarted.messages.at(-1)?.message.text).toContain('results are unavailable');
+      expect(restarted.messages.at(-1)?.message.text).not.toContain('private result');
       const otherUser = await restarted.click(next, bob);
       expect(otherUser.message.text).toContain('results are unavailable');
       expect(otherUser.message.text).not.toContain('private result');
@@ -742,6 +783,18 @@ it('does not pay for the same contextual classification again after Slack reject
       await restarted.drain();
       expect(restarted.messages).toHaveLength(1);
       expect(restarted.messages[0]!.message.text).toContain('owner send the release report');
+      const original = (await sql.query("SELECT id,created_at FROM jobs WHERE module='slack' AND id LIKE 'slack:%' ORDER BY created_at DESC LIMIT 1")).rows[0]!;
+      await sql.query('DELETE FROM slack_unanswered_results WHERE event_id=$1', [original.id]);
+      await restarted.postAction({ label: 'Old page', action: 'slack:unanswered_page',
+        value: `${new Date(original.created_at).getTime()}|0` }, alice, restarted.messages[0]!.ts);
+      await restarted.drain();
+      expect(restarted.messages.at(-1)?.message.text).toContain('owner send the release report');
+      await sql.query('DELETE FROM slack_unanswered_results WHERE event_id=$1', [original.id]);
+      await sql.query('DELETE FROM slack_ai_attempts WHERE event_id=$1', [original.id]);
+      await restarted.postAction({ label: 'Old page', action: 'slack:unanswered_page',
+        value: `${new Date(original.created_at).getTime()}|0` }, alice, restarted.messages[0]!.ts);
+      await restarted.drain();
+      expect(restarted.messages.at(-1)?.message.text).toContain('Older contextual results could not be restored');
     } finally { await restarted.close(); }
     expect(paidCalls).toBe(1);
   } finally { await h.close(); }

@@ -31,6 +31,17 @@ type SavedPage = { text: string; channels: string[]; selected: string[] };
 
 export class SlackUnansweredResults {
   constructor(private sql: Sql) {}
+  /** Locate a pre-navigation search by the timestamp carried on its page buttons. */
+  async legacySource(actor: Actor, anchorMilliseconds: number): Promise<string | undefined> {
+    if (!Number.isSafeInteger(anchorMilliseconds) || anchorMilliseconds < 0) return;
+    const from = new Date(anchorMilliseconds).toISOString();
+    const through = new Date(anchorMilliseconds + 1).toISOString();
+    const row = (await this.sql.query(`SELECT id FROM jobs WHERE owner=$1 AND module='slack'
+      AND id LIKE 'slack:%' AND created_at >= $2::timestamptz
+      AND created_at < $3::timestamptz ORDER BY created_at,id LIMIT 1`,
+    [ownerKey(actor), from, through])).rows[0];
+    return row?.id;
+  }
   async load(actor: Actor, eventId: string): Promise<SavedPage[] | undefined> {
     const row = (await this.sql.query(`SELECT pages FROM slack_unanswered_results WHERE owner=$1 AND event_id=$2
       AND created_at>=now()-interval '30 days'`, [ownerKey(actor), eventId])).rows[0];
@@ -48,6 +59,10 @@ export class SlackUnansweredResults {
 
 export class SlackAiAttempts {
   constructor(private sql: Sql) {}
+  async load(actor: Actor, eventId: string, batch: number) {
+    return (await this.sql.query(`SELECT input_hash,status,result FROM slack_ai_attempts
+      WHERE owner=$1 AND event_id=$2 AND batch_index=$3`, [ownerKey(actor), eventId, batch])).rows[0];
+  }
   async start(actor: Actor, eventId: string, batch: number, hash: string) {
     const owner = ownerKey(actor);
     const inserted = await this.sql.query(`INSERT INTO slack_ai_attempts(owner,event_id,batch_index,input_hash,status)

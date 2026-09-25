@@ -587,6 +587,22 @@ it('reopens saved Previews and Reports without renewing them and excludes stale 
   } finally { await h.close(); }
 });
 
+it('keeps Latest report on the newest completed run while a newer Preview is pending', async () => {
+  const store = new Store(sql), state = await store.load(alice);
+  state.runs = [
+    { id: 'completed', created: new Date(Date.now() - 60_000).toISOString(), connectionId: 'old', ruleVersion: 0, status: 'done', items: [] },
+    { id: 'pending', created: new Date().toISOString(), connectionId: 'old', ruleVersion: 0, status: 'preview', items: [] },
+  ];
+  await store.save(alice, state);
+  const h = await harness(mailEnv);
+  try {
+    const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const report = await h.click(mail, 'Latest report');
+    expect(report.body.text).toContain('Run completed: done');
+    expect(report.body.text).not.toContain('Run pending');
+  } finally { await h.close(); }
+});
+
 it('retains saved-item identity through a restart and suppresses uncertain redelivery', async () => {
   const store = new Store(sql), state = await store.load(alice);
   state.drafts.push({ id: 'retained', kind: 'rules', created: new Date().toISOString(), rules: starterRules() });
