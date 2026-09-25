@@ -416,13 +416,15 @@ it('groups and paginates private results while reporting inaccessible selected c
     const request = new URL(url), method = request.pathname.split('/').at(-1);
     if (method === 'users.conversations') return { ok: true, json: async () => ({ ok: true, channels: [
       { id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false },
+      { id: 'CEMPTY', name: 'quiet', is_channel: true, is_private: false },
       ...(privateVisible ? [{ id: 'GPRIVATE', name: 'planning', is_group: true, is_private: true }] : []),
     ], response_metadata: { next_cursor: '' } }) };
     if (method === 'users.info') return { ok: true, json: async () => ({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
       ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Author' } } }) };
     if (method === 'conversations.history') return { ok: true, json: async () => ({ ok: true, messages: request.searchParams.get('channel') === 'CPUBLIC'
       ? Array.from({ length: 9 }, (_, i) => ({ type: 'message', ts: stamp(i + 2), user: 'UAUTHOR', text: `Alice public ${i}` }))
-      : [{ type: 'message', ts: stamp(1), user: 'UAUTHOR', text: 'Alice private result' }], response_metadata: { next_cursor: '' } }) };
+      : request.searchParams.get('channel') === 'CEMPTY' ? []
+        : [{ type: 'message', ts: stamp(1), user: 'UAUTHOR', text: 'Alice private result' }], response_metadata: { next_cursor: '' } }) };
     if (method === 'chat.getPermalink') return { ok: true, json: async () => ({ ok: true, permalink: 'https://example.slack.com/archives/source' }) };
     throw new Error(`Unexpected Slack API: ${method}`);
   }));
@@ -436,27 +438,40 @@ it('groups and paginates private results while reporting inaccessible selected c
     expect(first.message.text).toContain('general');
     expect(first.message.text).toContain('public 0');
     expect(first.message.text).not.toContain('private result');
+    const next = first.message.buttons!.find(button => button.label === 'Next')!;
     const providerCalls = vi.mocked(fetch).mock.calls.length;
     const restarted = await harness();
     try {
-      const second = await restarted.click(first.message.buttons!.find(button => button.label === 'Next')!);
+      const second = await restarted.click(next);
       expect(second.actor).toEqual(alice);
       expect(second.message.text).toContain('page 2/2');
       expect(second.message.text).toContain('planning');
       expect(second.message.text).toContain('private result');
       expect(second.message.text).toContain('Open message');
       expect(vi.mocked(fetch).mock.calls.slice(providerCalls).every(([url]) => new URL(String(url)).pathname.endsWith('/users.conversations'))).toBe(true);
-      const otherUser = await restarted.click(first.message.buttons!.find(button => button.label === 'Next')!, bob);
+      const otherUser = await restarted.click(next, bob);
       expect(otherUser.message.text).toContain('results are unavailable');
       expect(otherUser.message.text).not.toContain('private result');
+      const beforeRemoval = await h.dm('slack channels');
+      const removed = await h.click(beforeRemoval.message.buttons!.find(button => button.value.includes('|CEMPTY|'))!);
+      const changedSelection = await restarted.click(next);
+      expect(changedSelection.message.text).toContain('no longer selected or accessible');
+      expect(changedSelection.message.text).not.toContain('private result');
+      await h.click(removed.message.buttons!.find(button => button.value.includes('|CEMPTY|'))!);
       privateVisible = false;
-      const revoked = await restarted.click(first.message.buttons!.find(button => button.label === 'Next')!);
+      const revoked = await restarted.click(next);
       expect(revoked.message.text).toContain('no longer selected or accessible');
       expect(revoked.message.text).not.toContain('private result');
+      privateVisible = true;
+      await sql.query(`UPDATE slack_unanswered_results SET created_at=now()-interval '31 days' WHERE event_id=$1`, [next.value.split('|')[0]]);
+      const expired = await restarted.click(next);
+      expect(expired.message.text).toContain('results are unavailable');
+      expect(expired.message.text).not.toContain('private result');
+      privateVisible = false;
     } finally { await restarted.close(); }
     const skipped = await h.dm('slack unanswered');
     expect(skipped.message.text).toContain('Skipped inaccessible selected channels: GPRIVATE');
-    expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 2');
+    expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 3');
   } finally { await h.close(); }
 });
 

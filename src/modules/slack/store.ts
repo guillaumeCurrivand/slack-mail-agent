@@ -27,12 +27,13 @@ export const slackResultsSchema = `CREATE TABLE IF NOT EXISTS slack_unanswered_r
   created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(owner,event_id)
 );`;
 
-type SavedPage = { text: string; channels: string[] };
+type SavedPage = { text: string; channels: string[]; selected: string[] };
 
 export class SlackUnansweredResults {
   constructor(private sql: Sql) {}
   async load(actor: Actor, eventId: string): Promise<SavedPage[] | undefined> {
-    const row = (await this.sql.query('SELECT pages FROM slack_unanswered_results WHERE owner=$1 AND event_id=$2', [ownerKey(actor), eventId])).rows[0];
+    const row = (await this.sql.query(`SELECT pages FROM slack_unanswered_results WHERE owner=$1 AND event_id=$2
+      AND created_at>=now()-interval '30 days'`, [ownerKey(actor), eventId])).rows[0];
     return row?.pages;
   }
   async save(actor: Actor, eventId: string, pages: SavedPage[]) {

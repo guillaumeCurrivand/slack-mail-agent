@@ -5,7 +5,7 @@ import type { SlackChannelSelections } from './store.js';
 
 export type UnansweredMatch = { channel: Channel; message: SlackMessage };
 export type UnansweredCandidate = UnansweredMatch & { thread: SlackMessage[]; followup: boolean; direct: boolean };
-export type UnansweredResults = { matches: UnansweredMatch[]; candidates: UnansweredCandidate[]; names: string[]; skipped: string[] };
+export type UnansweredResults = { matches: UnansweredMatch[]; candidates: UnansweredCandidate[]; names: string[]; selected: string[]; available: string[]; skipped: string[] };
 
 export const isAddressed = (text: string, user: string, names: string[]) => {
   if (text.includes(`<@${user}>`) || text.includes(`<@${user}|`)) return true;
@@ -32,8 +32,9 @@ export class SlackUnansweredSearch {
 
   async search(actor: Actor, anchor: Date): Promise<UnansweredResults> {
     const selected = await this.selections.list(actor);
-    if (!selected.length) return { matches: [], candidates: [], names: [], skipped: [] };
+    if (!selected.length) return { matches: [], candidates: [], names: [], selected, available: [], skipped: [] };
     const available = new Map((await this.directory.listFor(actor.user)).map(channel => [channel.id, channel]));
+    const availableIds = selected.filter(id => available.has(id));
     const skipped = selected.filter(id => !available.has(id));
     const names = await this.history.profile(actor.user);
     const anchorSeconds = anchor.getTime() / 1000;
@@ -73,6 +74,6 @@ export class SlackUnansweredSearch {
     const sort = (a: UnansweredMatch, b: UnansweredMatch) => a.channel.name.localeCompare(b.channel.name) || Number(b.message.ts) - Number(a.message.ts);
     matches.sort(sort);
     candidates.sort(sort);
-    return { matches, candidates, names, skipped: [...new Set(skipped)] };
+    return { matches, candidates, names, selected, available: availableIds, skipped: [...new Set(skipped)] };
   }
 }

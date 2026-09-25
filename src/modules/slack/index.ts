@@ -37,16 +37,25 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     if (!pages?.length) return context.messenger.send(actor, { text: 'These results are unavailable. Run slack unanswered again.', buttons: [menuButton] });
     const page = Math.min(requestedPage, pages.length - 1);
     const saved = pages[page]!;
-    if (saved.channels.length) {
-      try {
+    if (!Array.isArray(saved.selected) || !Array.isArray(saved.channels)) return context.messenger.send(actor, {
+      text: 'These results are unavailable. Run slack unanswered again.', buttons: [menuButton],
+    });
+    try {
+      const selected = await selections.list(actor);
+      const sameSelection = selected.length === saved.selected.length && selected.every((id, index) => id === saved.selected[index]);
+      if (!sameSelection) return context.messenger.send(actor, {
+        text: 'A channel in these results is no longer selected or accessible. No message content was shown. Run slack unanswered again for current results.', buttons: [menuButton],
+      });
+      if (selected.length) {
         const available = new Set((await directory.listFor(actor.user)).map(channel => channel.id));
-        const selected = new Set(await selections.list(actor));
-        if (saved.channels.some(id => !available.has(id) || !selected.has(id))) return context.messenger.send(actor, {
+        const availableSources = selected.filter(id => available.has(id));
+        const sameAccess = availableSources.length === saved.channels.length && availableSources.every((id, index) => id === saved.channels[index]);
+        if (!sameAccess) return context.messenger.send(actor, {
           text: 'A channel in these results is no longer selected or accessible. No message content was shown. Run slack unanswered again for current results.', buttons: [menuButton],
         });
-      } catch {
-        return context.messenger.send(actor, { text: 'Could not verify channel access for these results. Run slack unanswered again.', buttons: [menuButton] });
       }
+    } catch {
+      return context.messenger.send(actor, { text: 'Could not verify channel access for these results. Run slack unanswered again.', buttons: [menuButton] });
     }
     const buttons: Button[] = [];
     if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${sourceId}|${page - 1}` });
@@ -90,8 +99,9 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
       ...possible.map(item => ({ ...item, group: 'possible' as const })),
     ];
     const pageCount = Math.max(1, Math.ceil(entries.length / RESULT_PAGE_SIZE));
-    const selectedCount = entries.length ? 0 : (await selections.list(actor)).length;
-    const pages: Array<{ text: string; channels: string[] }> = [];
+    const selectedCount = entries.length ? 0 : results.selected.length;
+    const availableSources = results.available;
+    const pages: Array<{ text: string; channels: string[]; selected: string[] }> = [];
     const authors = new Map<string, string>();
     try {
       for (let page = 0; page < pageCount; page++) {
@@ -122,7 +132,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
         if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Follow-up resolution could not be fully checked either. Direct mention and name matches are still shown.');
         if (incomplete === 'provider') lines.push('Contextual matching and follow-up resolution could not be completed right now. Direct mention and name matches are still shown.');
         if (incomplete === 'config') lines.push('Contextual matching and follow-up resolution are not configured. Direct mention and name matches are still shown.');
-        pages.push({ text: lines.join('\n'), channels: [...new Set(visible.map(item => item.channel.id))] });
+        pages.push({ text: lines.join('\n'), channels: availableSources, selected: results.selected });
       }
     } catch {
       await context.messenger.send(actor, { text: 'Could not load Slack message details right now. Try slack unanswered again.' });
