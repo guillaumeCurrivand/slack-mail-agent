@@ -1,8 +1,8 @@
 # Clickable navigation in private Slack DMs
 
-Status: ready-for-agent
+Status: resolved
 
-The product design is approved. This specification describes future implementation, not shipped behavior. Testing follows the project's established signed-request, workflow and database-concurrency patterns.
+The product design is approved and implemented locally across all four tickets. Live integration and production deployment remain unverified. Testing follows the project's established signed-request, workflow and database-concurrency patterns.
 
 ## Problem Statement
 
@@ -119,5 +119,5 @@ For runtime implementation, verify Node satisfies the project requirement, then 
 ## Further Notes
 
 - The user confirmed the design after explicitly replacing the initial Home-tab proposal with DM-only navigation. The [interview record](interview.md) is historical decision context; the product specification is the authoritative contract.
-- This document is published to the repository's local Markdown tracker with `ready-for-agent`; it does not require triage. The approved implementation is split into four tickets: [DM navigation and Gmail connection](issues/01-dm-navigation-and-gmail-connection.md), [Mail rules and saved work](issues/02-mail-rules-and-saved-work.md), [Slack channel management](issues/03-slack-channel-management.md), and [safe work launch](issues/04-launch-work-safely-from-menus.md). Each ticket records its own completion status; this full redesign is not yet complete.
+- The approved implementation is split into four locally completed tickets: [DM navigation and Gmail connection](issues/01-dm-navigation-and-gmail-connection.md), [Mail rules and saved work](issues/02-mail-rules-and-saved-work.md), [Slack channel management](issues/03-slack-channel-management.md), and [safe work launch](issues/04-launch-work-safely-from-menus.md). Each ticket records its own verification limits.
 - The spec intentionally records required concurrency and recovery outcomes without pretending a new persistence or locking design already exists. Implementation planning must account for those cross-cutting changes before calling this a menu-only presentation change.

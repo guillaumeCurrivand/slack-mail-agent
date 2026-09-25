@@ -1,6 +1,6 @@
 import type { Actor } from './identity.js';
 
-export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core' };
+export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core'; bound?: boolean };
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[] };
 export interface Messenger {
   send(actor: Actor, message: AgentMessage): Promise<void>;

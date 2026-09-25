@@ -1,5 +1,6 @@
 import Fastify from 'fastify';
 import { digest, verifySlack } from './crypto.js';
+import { boundMenuTarget } from './navigation.js';
 import type { ModuleRegistry } from './modules.js';
 import type { JobStore } from './store.js';
 
@@ -22,7 +23,12 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (body.type !== 'event_callback' || event?.type !== 'message' || event.channel_type !== 'im' || event.subtype || event.bot_id || !/^[UW][A-Z0-9]+$/.test(event.user ?? '') || !/^D[A-Z0-9]+$/.test(event.channel ?? '') || typeof event.text !== 'string') return { ok: true };
     if (!body.event_id || event.text.length > 8000) return reply.code(400).send();
     const route = modules.text(event.text);
-    await store.enqueue(`slack:${body.event_id}`, { team: body.team_id, user: event.user, channel: event.channel }, route.payload, route.module);
+    const actor = { team: body.team_id, user: event.user, channel: event.channel };
+    const operation = modules.operation(route);
+    const receiptOperation = modules.receiptOperation(route);
+    if (operation) await store.enqueueOperation(`slack:${body.event_id}`, actor, route.payload, route.module, operation);
+    else if (receiptOperation) await store.enqueueWithOperationSnapshot(`slack:${body.event_id}`, actor, route.payload, route.module, receiptOperation);
+    else await store.enqueue(`slack:${body.event_id}`, actor, route.payload, route.module);
     return { ok: true }; // Only durable enqueue is on the acknowledgement path.
   });
   app.post('/slack/actions', async (request, reply) => {
@@ -38,7 +44,11 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
       if (typeof timestamp !== 'string' || !/^\d+\.\d+$/.test(timestamp)) return reply.code(400).send();
       route.payload.timestamp = timestamp;
     }
-    await store.enqueue(`action:${digest(raw)}`, { team: body.team.id, user: body.user.id, channel: body.channel.id }, route.payload, route.module);
+    const actor = { team: body.team.id, user: body.user.id, channel: body.channel.id };
+    const operation = modules.operation(route);
+    if (operation && await boundMenuTarget(store.sql, actor, route.payload.value, route.payload.timestamp))
+      await store.enqueueOperation(`action:${digest(raw)}`, actor, route.payload, route.module, operation);
+    else await store.enqueue(`action:${digest(raw)}`, actor, route.payload, route.module);
     return { ok: true };
   });
   for (const module of modules.all()) module.registerRoutes?.(app);

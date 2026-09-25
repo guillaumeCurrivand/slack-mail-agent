@@ -13,7 +13,7 @@ Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specifi
 - Slack DMs, natural-language rule proposals, explicit rule approval, starter rules, and per-user conversation history.
 - Google Workspace OAuth with PKCE, nonce and browser-state checks, hosted-domain enforcement, encrypted credentials, and a final Slack confirmation of the mailbox address.
 - Persistent previews, explicit decisions for uncertain messages, individual-message actions, reports, and conservative undo.
-- Durable PostgreSQL jobs, per-user serialization, duplicate-event protection, and mutation checkpoints.
+- Durable PostgreSQL jobs, per-user and per-module serialization, active-operation admission, duplicate-event protection, and mutation checkpoints.
 - A shared $10/month AI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Channel selection, approval, reports, and undo do not require AI; contextual Slack matching and mail interpretation do.
 - For enabled modules, hourly retention cleanup removes conversations and run records older than 30 days, as well as expired login states and rule proposals. See the [retention policy](docs/product-spec.md#memory-and-undo) for the disabled-module exception.
 
@@ -89,7 +89,7 @@ Send `menu`, `help`, `hello` or `hi` to open a private menu. Click an enabled Mo
 
 Mail Sorter also offers Manage rules, Latest report and Pending approvals when needed. Rule lists paginate in place and summarize long fields. Add/Edit gives instructions for a `mail`-prefixed description; starter rules and removal still need separate approval. Saved Proposals, Previews and Reports reopen as separate Cards without new AI work or extended validity. Expired or invalidated approvals cannot be reopened as current work.
 
-Sorting and Slack search still use the commands below; work-launch buttons are planned. Slack channel management is also available through Choose channels. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation still waits behind long work for the same User until the later scheduling slice is implemented.
+Mail Sorter → Sort inbox and Slack Unanswered → Find unanswered start their existing work immediately. The corresponding `mail sort` and `slack unanswered` shortcuts use the same active-operation admission: another request received while that User's operation is queued, running or retrying reports the original request. After completion or terminal failure, a deliberate new request can start. A Preview still requires separate approval before Gmail changes. Slack search still uses the original request time for its 48-hour window. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation and the other Module can continue during a long provider call.
 
 Send these in a private conversation with the bot. Every module request, including natural-language follow-ups, needs its prefix; the assistant does not remember an active module:
 
@@ -118,6 +118,8 @@ Gmail does not provide conditional mutation with a history-ID compare-and-swap. 
 ## Tests
 
 `npm test` runs behavioral workflow, security, OAuth and budget tests using an embedded PostgreSQL implementation with fake external providers. No live Slack messages, Gmail writes, or paid AI calls are made.
+
+Set `WORKER_CONCURRENCY` to 2–4 (default 2) so another lane can serve navigation while one is waiting for a provider. Startup rejects 1. Existing `.env.example` already uses 2.
 
 For actual PostgreSQL locking and concurrency tests, also set `TEST_DATABASE_URL` to a local test database, then run `npm test`. These tests create and remove their own uniquely named schema. Without this environment variable, the real-server tests are explicitly skipped.
 

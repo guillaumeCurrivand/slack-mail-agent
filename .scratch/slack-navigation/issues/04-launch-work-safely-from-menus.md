@@ -1,6 +1,6 @@
 # 04: Launch work safely from menus
 
-Status: ready-for-agent
+Status: resolved
 
 **What to build:** A User can click Sort inbox or Find unanswered to start existing work immediately, receive separate private results, and continue navigating or using the other Module. Repeated clicks during active work report that operation instead of starting duplicate paid work.
 
@@ -41,3 +41,5 @@ This is the largest approved slice. Keep it bounded to the two existing work ope
 ## Comments
 
 Approved as ticket 4 of the four-ticket breakdown. Ticket 01 is listed explicitly as an approved prerequisite even though ticket 03 also depends on it. Ticket 02 can finish before or after this slice; all four tickets must be complete before presenting the full redesign as implemented.
+
+Implemented locally on 2026-09-25. Both menus start their existing workflows. Exact typed starts, natural-language mail sorts, and menu clicks share durable active-operation admission; separate status Cards retain the original request identity. Per-Module worker locks let core navigation and the other Module proceed during a held provider call while serializing conflicting Module work. The existing Preview approval, Slack result, spending and recovery paths remain in use. Node v25.8.1: 128 tests passed; four real PostgreSQL tests were skipped without `TEST_DATABASE_URL`. TypeScript check and build passed. Live Slack, Gmail, OpenAI and production deployment were not exercised. See [the implementation decision](../../../docs/adr/0003-operation-admission-and-module-locks.md) and [production update guide](../../../docs/deployment.md).

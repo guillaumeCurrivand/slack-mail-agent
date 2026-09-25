@@ -5,6 +5,16 @@ import type { Sql } from './store.js';
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; bindButtons?: boolean };
 export type MenuTarget = { id: string; timestamp: string };
 
+export async function boundMenuTarget(sql: Sql, actor: Actor, value: unknown, timestamp: unknown): Promise<{ target: MenuTarget; value: string } | undefined> {
+  if (typeof value !== 'string' || typeof timestamp !== 'string') return;
+  const separator = value.indexOf('|');
+  if (separator < 1) return;
+  const id = value.slice(0, separator), boundValue = value.slice(separator + 1);
+  if (!boundValue) return;
+  const record = (await sql.query("SELECT id FROM core_navigation_menus WHERE id=$1 AND owner=$2 AND channel=$3 AND timestamp=$4 AND created_at>=now()-interval '30 days'", [id, ownerKey(actor), actor.channel, timestamp])).rows[0];
+  return record ? { target: { id, timestamp }, value: boundValue } : undefined;
+}
+
 /** Only recorded Agent menus can be edited; workflow Cards are never update targets. */
 export class Navigation {
   constructor(private sql: Sql, private messenger: Messenger) {}
@@ -16,19 +26,13 @@ export class Navigation {
   }
 
   async boundTarget(actor: Actor, value: unknown, timestamp: unknown): Promise<{ target: MenuTarget; value: string } | undefined> {
-    if (typeof value !== 'string' || typeof timestamp !== 'string') return;
-    const separator = value.indexOf('|');
-    if (separator < 1) return;
-    const id = value.slice(0, separator), boundValue = value.slice(separator + 1);
-    if (!boundValue) return;
-    const record = (await this.sql.query("SELECT id FROM core_navigation_menus WHERE id=$1 AND owner=$2 AND channel=$3 AND timestamp=$4 AND created_at>=now()-interval '30 days'", [id, ownerKey(actor), actor.channel, timestamp])).rows[0];
-    return record ? { target: { id, timestamp }, value: boundValue } : undefined;
+    return boundMenuTarget(this.sql, actor, value, timestamp);
   }
 
   async show(actor: Actor, eventId: string, page: MenuPage, target?: MenuTarget) {
     const id = target?.id ?? uid();
     const { links = [], bindButtons = false, ...content } = page;
-    const message: AgentMessage = { ...content, buttons: [...(content.buttons ?? []).map(button => bindButtons ? { ...button, value: `${id}|${button.value}` } : button),
+    const message: AgentMessage = { ...content, buttons: [...(content.buttons ?? []).map(button => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button),
       ...links.map(link => ({ label: link.label, action: 'core:navigate', value: `${id}|${link.page}` }))] };
     // Record intent before contacting Slack: an uncertain response must not be resent.
     const claimed = await this.sql.query('INSERT INTO core_navigation_deliveries(event_id,owner) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING event_id', [eventId, ownerKey(actor)]);

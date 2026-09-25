@@ -15,6 +15,7 @@ export interface AssistantModule {
   name?: string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
   menuActions?: readonly string[];
+  workOperations?: readonly { name: string; commands: readonly string[]; action: string; snapshotUnknownText?: boolean }[];
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
   registerRoutes?(app: FastifyInstance): void;
@@ -38,6 +39,15 @@ export class ModuleRegistry {
   }
   all() { return [...this.modules.values()]; }
   enabledIds() { return ['core', ...this.modules.keys()]; }
+  operation(job: RoutedJob): string | undefined {
+    const module = this.modules.get(job.module);
+    return module?.workOperations?.find(operation => job.payload.type === 'text'
+      ? operation.commands.includes(String(job.payload.text ?? '').trim().toLowerCase())
+      : job.payload.type === 'menu_action' && job.payload.action === operation.action)?.name;
+  }
+  receiptOperation(job: RoutedJob): string | undefined {
+    return job.payload.type === 'text' ? this.modules.get(job.module)?.workOperations?.find(operation => operation.snapshotUnknownText)?.name : undefined;
+  }
   text(text: string): RoutedJob {
     const [prefix = '', rest = ''] = text.trim().split(/\s+([\s\S]*)/, 2);
     const id = prefix.toLowerCase();
@@ -56,6 +66,10 @@ export class ModuleRegistry {
   async dispatch(job: RoutedJob, actor: Actor, eventId: string, context: ModuleContext) {
     if (job.module === 'core') {
       const navigation = new Navigation(context.sql, context.messenger);
+      if (job.payload.type === 'operation_busy') return navigation.show(actor, eventId, {
+        kind: 'Work in progress', text: `Your ${job.payload.operation} request was already in progress when this request arrived. Existing request: ${job.payload.original}. Open Menu to continue.`,
+        buttons: [{ label: 'Menu', action: 'core:menu', value: '' }],
+      });
       if (job.payload.type === 'navigation') {
         const destination = await navigation.target(actor, job.payload.value, job.payload.timestamp);
         if (!destination) return navigation.show(actor, eventId, { kind: 'Menu unavailable', text: 'This menu is unavailable. Send menu to open a fresh one.', buttons: [{ label: 'Menu', action: 'core:menu', value: '' }] });

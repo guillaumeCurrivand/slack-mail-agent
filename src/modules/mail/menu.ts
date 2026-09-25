@@ -43,7 +43,7 @@ export function mailMenu(state: UserState, page: string): MenuPage {
     };
   }
   return { kind: 'Mail Sorter', text: `${status}\nCommands: mail sort, mail rules, mail starters, mail report. Describe rules with the mail prefix. Sorting prepares a preview; mailbox changes require separate approval.`,
-    buttons: [{ label: 'Latest report', action: 'menu_latest_report', value: '' }],
+    buttons: [{ label: 'Sort inbox', action: 'sort_inbox', value: 'sort', bound: true }, { label: 'Latest report', action: 'menu_latest_report', value: '' }],
     links: [{ label: 'Manage rules', page: 'rules-0' }, ...(pending.length ? [{ label: 'Pending approvals', page: 'pending-0' }] : []), { label: 'Gmail connection', page: 'connection' }],
   };
 }

@@ -21,7 +21,7 @@ const mailEnv = { ...env, ENABLED_MODULES: 'mail,slack', ENCRYPTION_KEY: randomB
 let db: PGlite, sql: Sql;
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
 beforeEach(async () => {
-  await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts');
+  await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts');
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected external provider call'); }));
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -53,7 +53,7 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
   };
   const drain = async () => {
     const jobs = (await sql.query("SELECT * FROM jobs WHERE status='queued' ORDER BY created_at,id")).rows;
-    for (const job of jobs) { await dispatchJob(sql, config, modules, slack, job); await sql.query("UPDATE jobs SET status='done' WHERE id=$1", [job.id]); }
+    for (const job of jobs) { await dispatchJob(sql, config, modules, slack, job); await new JobStore(sql).complete(job.id); }
     return messages.at(-1)!;
   };
   const dm = async (text: string, actor = alice) => {
@@ -80,6 +80,119 @@ it('discovers enabled modules and shared commands in a private main menu without
     const guidance = await h.dm('sort');
     expect(guidance.body.text).toContain('prefix');
     button(guidance, 'Menu');
+  } finally { await h.close(); }
+});
+
+it('starts menu work through the existing module handlers and explains missing prerequisites', async () => {
+  const h = await harness(mailEnv);
+  try {
+    const main = await h.dm('menu');
+    const mail = await h.click(main, 'Mail Sorter');
+    const sorting = await h.click(mail, 'Sort inbox');
+    expect(sorting.method).toBe('chat.postMessage');
+    expect(sorting.body.text).toContain('Connect Gmail first');
+    button(sorting, 'Menu');
+    const slack = await h.click(await h.click(mail, 'Back to menu'), 'Slack Unanswered');
+    const search = await h.click(slack, 'Find unanswered');
+    expect(search.method).toBe('chat.postMessage');
+    expect(search.body.text).toContain('Choose sources');
+    button(search, 'Menu');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('runs one paid mail Preview from signed menu starts and keeps approval separate', async () => {
+  const state = await new Store(sql).load(alice);
+  state.connection = { id: 'connected', subject: 'alice', email: 'alice@example.com', encryptedTokens: new Vault(Buffer.from(mailEnv.ENCRYPTION_KEY, 'base64'))
+    .seal({ access_token: 'fake', refresh_token: 'fake', expires_at: Date.now() + 3600_000 }, 'TTEAM:UALICE') };
+  state.rules = [{ ...starterRules()[0]!, id: 'urgent' }];
+  await new Store(sql).save(alice, state);
+  let gmailLists = 0, paidCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const path = String(url);
+    if (path.endsWith('messages?labelIds=INBOX&maxResults=100')) { gmailLists++; return Response.json({ messages: [{ id: 'm1' }] }); }
+    if (path.endsWith('messages/m1?format=full')) return Response.json({ id: 'm1', historyId: '1', labelIds: ['INBOX'],
+      payload: { mimeType: 'text/plain', headers: [{ name: 'From', value: 'sender@example.com' }, { name: 'Subject', value: 'Need help today' }], body: { data: Buffer.from('Please reply today.').toString('base64url') } } });
+    if (path.endsWith('/labels')) return Response.json({ labels: [] });
+    if (path.endsWith('/responses/input_tokens')) return Response.json({ input_tokens: 100 });
+    if (path.endsWith('/responses')) { paidCalls++; return Response.json({ status: 'completed', usage: { input_tokens: 100, output_tokens: 50 },
+      output: [{ content: [{ type: 'output_text', text: JSON.stringify({ matches: [{ ruleId: 'urgent', decision: 'yes', reason: 'Requires reply today' }] }) }] }] }); }
+    throw new Error(`Unexpected provider call: ${path}`);
+  }));
+  const h = await harness(mailEnv);
+  try {
+    const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const control = button(mail, 'Sort inbox');
+    for (let n = 0; n < 2; n++) {
+      const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user },
+        channel: { id: alice.channel }, message: { ts: mail.ts }, actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }] }) }).toString();
+      expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
+    }
+    await h.drain();
+    expect(gmailLists).toBe(1);
+    expect(paidCalls).toBe(1);
+    const preview = h.messages.find(message => message.body.blocks[0]?.text?.text === 'Preview')!;
+    expect(preview).toBeTruthy();
+    button(preview, 'Confirm proposed changes');
+    button(preview, 'Menu');
+    expect(h.messages.some(message => message.body.blocks[0]?.text?.text === 'Work in progress')).toBe(true);
+    expect((await new Store(sql).load(alice)).runs[0].status).toBe('preview');
+  } finally { await h.close(); }
+});
+
+it('associates old-menu and typed duplicate starts with the original request even after it finishes', async () => {
+  const h = await harness(mailEnv);
+  try {
+    const first = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const second = await h.click(await h.dm('menu'), 'Mail Sorter');
+    const start = async (source: Posted) => {
+      const selected = button(source, 'Sort inbox');
+      const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user },
+        channel: { id: alice.channel }, message: { ts: source.ts }, actions: [{ action_id: selected.action_id, value: selected.value, action_ts: randomUUID() }] }) }).toString();
+      expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
+    };
+    const typed = async () => expect((await h.post('/slack/events', JSON.stringify({ type: 'event_callback', team_id: alice.team,
+      event_id: randomUUID(), event: { type: 'message', channel_type: 'im', user: alice.user, channel: alice.channel, text: 'mail sort' } }), 'application/json')).statusCode).toBe(200);
+    await start(first);
+    await start(second);
+    await typed();
+    const pending = (await sql.query("SELECT id,module,payload FROM jobs WHERE status='queued' AND (module='mail' OR payload->>'type'='operation_busy') ORDER BY created_at,id")).rows;
+    expect(pending.filter(job => job.module === 'mail')).toHaveLength(1);
+    expect(pending.filter(job => job.payload.type === 'operation_busy')).toHaveLength(2);
+    expect(new Set(pending.filter(job => job.payload.type === 'operation_busy').map(job => job.payload.original))).toEqual(new Set([pending.find(job => job.module === 'mail')!.id]));
+    await h.drain();
+    expect(h.messages.filter(message => message.body.text.includes('already in progress'))).toHaveLength(2);
+    await typed();
+    expect((await sql.query("SELECT count(*)::int AS count FROM jobs WHERE status='queued' AND module='mail'")).rows[0].count).toBe(1);
+    const fresh = (await sql.query("SELECT id FROM jobs WHERE status='queued' AND module='mail'")).rows[0].id;
+    await sql.query("UPDATE jobs SET status='running',attempts=1 WHERE id=$1", [fresh]);
+    await new JobStore(sql).retryOrFail(fresh);
+    await typed();
+    expect((await sql.query("SELECT count(*)::int AS count FROM jobs WHERE module='core' AND payload->>'original'=$1", [fresh])).rows[0].count).toBe(1);
+    await sql.query('UPDATE jobs SET attempts=5 WHERE id=$1', [fresh]);
+    await new JobStore(sql).retryOrFail(fresh);
+    await typed();
+    expect((await sql.query("SELECT count(*)::int AS count FROM jobs WHERE module='mail' AND status='queued'")).rows[0].count).toBe(1);
+  } finally { await h.close(); }
+});
+
+it('keeps a natural-language sort tied to work active at receipt after later intent resolution', async () => {
+  const h = await harness(mailEnv);
+  try {
+    const postText = async (text: string) => {
+      const id = randomUUID();
+      expect((await h.post('/slack/events', JSON.stringify({ type: 'event_callback', team_id: alice.team, event_id: id,
+        event: { type: 'message', channel_type: 'im', user: alice.user, channel: alice.channel, text } }), 'application/json')).statusCode).toBe(200);
+      return `slack:${id}`;
+    };
+    const original = await postText('mail sort');
+    const natural = await postText('mail please sort my inbox now');
+    expect((await sql.query('SELECT payload FROM jobs WHERE id=$1', [natural])).rows[0].payload.activeOperation).toBe(original);
+    await sql.query("UPDATE jobs SET payload=jsonb_set(payload,'{resolved}',$2::jsonb) WHERE id=$1", [natural,
+      JSON.stringify({ intent: 'sort', reply: '', rule: null, ruleId: null, runId: null, messageId: null, correction: null })]);
+    await h.drain();
+    expect(h.messages.some(message => message.body.text.includes(`Existing request: ${original}`))).toBe(true);
+    expect((await new Store(sql).load(alice)).runs).toHaveLength(0);
   } finally { await h.close(); }
 });
 

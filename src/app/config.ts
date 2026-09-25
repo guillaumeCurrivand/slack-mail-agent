@@ -8,7 +8,7 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
     SLACK_TEAM_ID: z.string().regex(/^T[A-Z0-9]+$/), SLACK_BOT_TOKEN: z.string().min(1), SLACK_SIGNING_SECRET: z.string().min(1),
     SLACK_ADMIN_USER_ID: z.string().default(''), ENABLED_MODULES: z.string().default('mail'),
     AI_MONTHLY_LIMIT_USD: dollar('10'), AI_ALERT_USD: dollar('8'), AI_USER_MONTHLY_LIMIT_USD: dollar('10'),
-    WORKER_CONCURRENCY: z.coerce.number().int().min(1).max(4).default(2),
+    WORKER_CONCURRENCY: z.coerce.number().int().min(2).max(4).default(2),
   }).parse(env);
   const url = new URL(parsed.PUBLIC_URL);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) throw new Error('PUBLIC_URL requires HTTPS outside localhost.');

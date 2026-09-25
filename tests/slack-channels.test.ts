@@ -17,7 +17,7 @@ const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
 let db: PGlite, sql: Sql;
 
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
-beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts'); });
+beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts'); });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 

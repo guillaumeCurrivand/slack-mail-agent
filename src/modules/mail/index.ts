@@ -3,9 +3,10 @@ import { ownerKey } from '../../core/identity.js';
 import type { AssistantModule } from '../../core/modules.js';
 import { menuButton } from '../../core/slack.js';
 import { JobStore, withOwner, type Sql } from '../../core/store.js';
+import { boundMenuTarget } from '../../core/navigation.js';
 import { OpenAI } from './ai.js';
 import type { MailConfig } from './config.js';
-import { Engine, type Event } from './engine.js';
+import { Engine, SORT_OPERATION, type Event } from './engine.js';
 import { Gmail, type Tokens } from './gmail.js';
 import { GoogleOAuth } from './oauth.js';
 import { registerMailRoutes } from './routes.js';
@@ -17,6 +18,8 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
   const oauth = new GoogleOAuth(config, new Store(sql), vault);
   return {
     id: 'mail', name: 'Mail Sorter', description: 'Sort your Gmail using approved personal rules',
+    workOperations: [{ name: SORT_OPERATION, commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
+    menuActions: ['sort_inbox'],
     async menu(actor, page, context) {
       const state = await new Store(context.sql).load(actor);
       return mailMenu(state, page);
@@ -33,15 +36,20 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
         await withOwner(pool, actor, async client => {
           const store = new Store(client), state = await store.load(actor);
           prune(state); await store.save(actor, state);
-        });
+        }, 'mail');
       }
     },
     async handle(actor, payload, eventId, context) {
       // HTTP ingress constructs text/actions; only the mail OAuth callback can
       // enqueue a connection. Persisted pre-module jobs use the same shape.
-      if (!['text', 'action', 'connection'].includes(String(payload.type))) throw new Error('Unsupported mail event.');
+      if (!['text', 'action', 'menu_action', 'connection'].includes(String(payload.type))) throw new Error('Unsupported mail event.');
       const store = new Store(context.sql);
       let event = payload as Event;
+      if (payload.type === 'menu_action') {
+        const bound = await boundMenuTarget(context.sql, actor, payload.value, payload.timestamp);
+        if (!bound || payload.action !== 'sort_inbox' || bound.value !== 'sort') return context.messenger.send(actor, { text: 'This work control is unavailable. Send menu to open a fresh one.', buttons: [menuButton] });
+        event = { type: 'text', text: 'sort' };
+      }
       if (payload.type === 'action' && ['menu_connect', 'menu_disconnect'].includes(String(payload.action))) {
         const state = await store.load(actor);
         if (payload.action === 'menu_connect' && state.connection) return context.messenger.send(actor, { text: 'Gmail is already connected. Open Menu to review the current connection.', buttons: [menuButton] });
@@ -51,6 +59,7 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
       const engine = new Engine({ store, budget: context.budget, messenger: { send: (recipient, message) => context.messenger.send(recipient, {
         ...message, buttons: [...(message.buttons ?? []), menuButton],
       }) },
+        admitSort: (user, sourceId) => new JobStore(context.sql).claimOperation(sourceId, user, 'mail', SORT_OPERATION),
         intelligence: new OpenAI(config.OPENAI_API_KEY, config.OPENAI_MODEL, context.budget),
         connectUrl: user => oauth.invitation(user),
         mailbox: (user, state) => new Gmail(vault.open<Tokens>(state.connection!.encryptedTokens, ownerKey(user)), config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET,

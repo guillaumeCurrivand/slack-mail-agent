@@ -1,7 +1,7 @@
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, JobPayload, ModuleContext } from '../../core/modules.js';
-import { Navigation, type MenuPage } from '../../core/navigation.js';
-import { escapeCardValue, escapeSlack, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
+import { Navigation, boundMenuTarget, type MenuPage } from '../../core/navigation.js';
+import { escapeCardValue, escapeSlack, menuButton, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
 import { SlackChannelDirectory, type Channel } from './channels.js';
 import { SlackAI } from './ai.js';
@@ -103,7 +103,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     const anchorValue = String(anchor.getTime());
     if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${anchorValue}|${page - 1}` });
     if (page + 1 < pages) buttons.push({ label: 'Next', action: 'unanswered_page', value: `${anchorValue}|${page + 1}` });
-    await context.messenger.send(actor, { kind: 'Unanswered for you', text: lines.join('\n'), buttons });
+    await context.messenger.send(actor, { kind: 'Unanswered for you', text: lines.join('\n'), buttons: [...buttons, menuButton] });
   }
 
   async function channelPage(actor: Actor, requestedPage = 0, notice = '', standalone = false): Promise<MenuPage> {
@@ -179,6 +179,11 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
       if (command === 'unanswered') return showUnanswered(actor, eventId, context, context.requestedAt);
       return context.messenger.send(actor, { text: 'Use slack channels to choose your sources, then slack unanswered to search them.' });
     }
+    if (payload.type === 'menu_action' && payload.action === 'find_unanswered') {
+      const bound = await boundMenuTarget(context.sql, actor, payload.value, payload.timestamp);
+      if (!bound || bound.value !== 'unanswered') return context.messenger.send(actor, { text: 'This work control is unavailable. Send menu to open a fresh one.', buttons: [menuButton] });
+      return showUnanswered(actor, eventId, context, context.requestedAt);
+    }
     if (payload.type !== 'action') return;
     if (payload.action === 'unanswered_page') {
       const page = parseResultsPage(payload.value);
@@ -190,10 +195,12 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
 
   return {
     id: 'slack', name: 'Slack Unanswered', description: 'Find unanswered messages in selected Slack channels',
-    menuActions: ['channel_page', 'channel_select', 'channel_remove'],
+    workOperations: [{ name: 'Find unanswered', commands: ['unanswered'], action: 'find_unanswered' }],
+    menuActions: ['channel_page', 'channel_select', 'channel_remove', 'find_unanswered'],
     async menu(actor, page) {
       if (page.startsWith('channels_')) return channelPage(actor, /^channels_(\d{1,6})$/.test(page) ? Number(page.slice(9)) : 0);
-      return { kind: 'Slack Unanswered', text: 'Choose channels to manage your sources, or send slack channels. Send slack unanswered to search them. Gmail is not required.', links: [{ label: 'Choose channels', page: 'channels_0' }] };
+      return { kind: 'Slack Unanswered', text: 'Choose channels to manage your sources, or find unanswered messages. Shortcuts: slack channels, slack unanswered. Gmail is not required.',
+        buttons: [{ label: 'Find unanswered', action: 'find_unanswered', value: 'unanswered', bound: true }], links: [{ label: 'Choose channels', page: 'channels_0' }] };
     },
     async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); },
     async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); },

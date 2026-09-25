@@ -12,7 +12,7 @@ Slack Unanswered is implemented locally but disabled by default; live Slack acce
 
 ## Approved DM navigation redesign
 
-The user approved a clickable interface for both existing modules, entirely within private DMs. The full target contract follows below. Implementation is staged; the first three slices are currently implemented locally.
+The user approved a clickable interface for both existing modules, entirely within private DMs. The full target contract follows below. All four slices are implemented locally; live integration and deployment remain unverified.
 
 **Implemented locally (ticket 01):** `menu`, `help`, `hello` and `hi` open a private main menu. Enabled Modules, Budget and Help are clickable. Module menus and Back navigation update the clicked message; Mail Sorter exposes Gmail connection status, Connect Gmail and separately confirmed disconnect using the existing authorization flow. Mail workflow messages and routing guidance offer Menu buttons that open a separate menu. Other module actions remain documented commands until their tickets land. No menu browsing invokes AI or changes typed-message routing. Menu updates use owner/DM/message-bound records retained for 30 days; expired or unavailable menus instruct the User to send `menu`. Definite delivery rejection is retryable; uncertain navigation delivery is not blindly repeated.
 
@@ -20,7 +20,7 @@ The user approved a clickable interface for both existing modules, entirely with
 
 **Implemented locally (ticket 03):** Slack Unanswered offers Choose channels. Its per-User, per-workspace list shows eligible shared channels, retained inaccessible selections and explicit Add/Remove controls. Pagination and changes update the clicked list; `slack channels` remains a shortcut. Clicks recheck ownership and access, and browsing makes no AI calls. The selection does not require Gmail.
 
-**Still future (ticket 04):** work-launch buttons, duplicate-operation admission and responsive navigation during long-running work. The existing owner lock still serializes work across Modules. Live Slack verification and deployment of these navigation slices have not been observed.
+**Implemented locally (ticket 04):** Sort inbox and Find unanswered start the existing workflows from owner-bound menu controls. Typed starts and menu clicks share durable, atomic admission by User, Module and operation; natural-language mail requests capture active work at receipt and claim the operation after intent resolution. Overlapping requests keep the original request identity even when their status Card is delivered later. Worker locks now serialize work within each User and Module, allowing navigation and the other Module to proceed during a provider call with at least two worker lanes. Terminal completion releases admission. See [the locking decision](adr/0003-operation-admission-and-module-locks.md). Live Slack verification and deployment have not been observed; real PostgreSQL concurrency tests were skipped without `TEST_DATABASE_URL`.
 
 - The main menu offers Mail Sorter, Slack Unanswered, Budget and Help, hiding disabled modules. `menu`, `help` and plain greetings such as `hello` show the main menu. Unrecognized commands and workflow results provide a Menu button.
 - Navigation updates the menu message being used. Module menus include Back to menu. Results and approval requests remain separate messages so navigation does not erase them. The `menu` command posts a fresh menu.

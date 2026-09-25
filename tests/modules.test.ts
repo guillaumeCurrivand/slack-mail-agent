@@ -1,6 +1,6 @@
 import { randomBytes, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { readConfig } from '../src/app/config.js';
 import { createModules } from '../src/app/modules.js';
 import { legacyMetadataMigration, schema } from '../src/app/schema.js';
@@ -23,7 +23,7 @@ const mailEnv = { ...env, ENCRYPTION_KEY: randomBytes(32).toString('base64'), GO
 const options: RuntimeOptions = { AI_MONTHLY_LIMIT_USD: 10, AI_USER_MONTHLY_LIMIT_USD: 10, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' };
 let db: PGlite, sql: Sql;
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
-beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months CASCADE'); });
+beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_operation_slots CASCADE'); });
 afterAll(async () => db.close());
 
 function harness(modules = createModules(readConfig(mailEnv), sql, mailEnv), runtime = options) {
@@ -140,6 +140,54 @@ it('leaves disabled jobs untouched, processes other work for that user, and resu
   await runUntilReply(createModules(readConfig(mailEnv), sql, mailEnv));
   expect((await sql.query("SELECT status,attempts,payload FROM jobs WHERE id='disabled-mail'")).rows[0]).toEqual({ status: 'done', attempts: 3, payload: {} });
   expect((await new Store(sql).load(alice)).drafts).toHaveLength(1);
+});
+
+it('keeps navigation and the other module responsive during a held mail scan while serializing mail state', async () => {
+  const state = emptyState();
+  state.connection = { id: 'connected', subject: 'alice', email: 'alice@example.com', encryptedTokens: new (await import('../src/core/crypto.js')).Vault(Buffer.from(mailEnv.ENCRYPTION_KEY, 'base64'))
+    .seal({ access_token: 'fake', refresh_token: 'fake', expires_at: Date.now() + 3600_000 }, ownerKey(alice)) };
+  state.rules = [{ id: 'sender-rule', name: 'Known sender', kind: 'sender', category: 'other', condition: 'Known sender', senders: ['known@example.com'], labels: [], action: 'keep', examples: ['Known sender'] }];
+  await new Store(sql).save(alice, state);
+  let entered!: () => void, release!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  let listCalls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (String(url).includes('messages?labelIds=INBOX')) { listCalls++; entered(); await gate; return Response.json({ messages: [] }); }
+    if (String(url).endsWith('/labels')) return Response.json({ labels: [] });
+    throw new Error(`Unexpected provider call: ${url}`);
+  }));
+  const config = readConfig({ ...mailEnv, ENABLED_MODULES: 'mail,slack' });
+  const modules = createModules(config, sql, { ...mailEnv, ENABLED_MODULES: 'mail,slack' });
+  for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
+  const jobs = new JobStore(sql);
+  await jobs.enqueueOperation('a-sort-held', alice, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox');
+  await jobs.enqueueOperation('duplicate-held', alice, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox');
+  await jobs.enqueue('z-mail-conflict', alice, { type: 'text', text: 'report' }, 'mail');
+  await jobs.enqueue('navigate', alice, { type: 'text', text: 'menu' });
+  await jobs.enqueueOperation('search-other', alice, { type: 'text', text: 'unanswered' }, 'slack', 'Find unanswered');
+  const held = new Set<string>();
+  const query = (text: string, values?: any[]) => text.includes('pg_try_advisory_lock')
+    ? Promise.resolve({ rows: [{ locked: !held.has(values![0]) && Boolean(held.add(values![0])) }] })
+    : text.includes('pg_advisory_unlock') ? Promise.resolve({ rows: [{ unlocked: held.delete(values![0]) }] }) : sql.query(text, values);
+  const pool = { query, async connect() { return { query, release() {} }; } } as unknown as Pool;
+  const messages: Array<{ kind?: string; text: string }> = [];
+  const messenger: Messenger = { async send(_actor, message) { messages.push(message); },
+    async post(_actor, message) { messages.push(message); return '1234567890.000001'; },
+    async update(_actor, _ts, message) { messages.push(message); } };
+  const stop = worker(pool, { ...config, WORKER_CONCURRENCY: 3 }, modules, messenger);
+  try {
+    await started;
+    const deadline = Date.now() + 3000;
+    while ((!messages.some(message => message.kind === 'Menu') || !messages.some(message => message.kind === 'Unanswered for you') || !messages.some(message => message.kind === 'Work in progress')) && Date.now() < deadline)
+      await new Promise(resolve => setTimeout(resolve, 20));
+    expect(messages.some(message => message.kind === 'Menu')).toBe(true);
+    expect(messages.some(message => message.kind === 'Unanswered for you')).toBe(true);
+    expect(messages.some(message => message.kind === 'Work in progress')).toBe(true);
+    expect((await sql.query("SELECT status FROM jobs WHERE id='z-mail-conflict'")).rows[0].status).toBe('queued');
+    expect(listCalls).toBe(1);
+  } finally { release(); await stop(); vi.unstubAllGlobals(); }
+  expect((await new Store(sql).load(alice)).runs.some(run => run.status === 'preview')).toBe(true);
 });
 
 it('rejects ambiguous registrations before accepting work', () => {

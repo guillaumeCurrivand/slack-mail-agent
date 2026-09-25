@@ -5,11 +5,13 @@ import type { Mailbox } from './gmail.js';
 import { escapeCardValue, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import { prune, Store } from './store.js';
 
-export type Event = { type: 'text'; text: string; resolved?: Intent } | { type: 'action'; action: string; value: string } | { type: 'connection'; connection: Connection };
+export const SORT_OPERATION = 'Sort inbox';
+export type Event = { type: 'text'; text: string; resolved?: Intent; activeOperation?: string } | { type: 'action'; action: string; value: string } | { type: 'connection'; connection: Connection };
 export type EngineDependencies = {
   store: Store; intelligence: Intelligence; messenger: Messenger; budget: Budget;
   mailbox: (actor: Actor, state: UserState) => Mailbox;
   connectUrl: (actor: Actor) => Promise<string>;
+  admitSort?: (actor: Actor, eventId: string) => Promise<string>;
 };
 const HELP = 'I can sort your latest 100 inbox messages after you approve a preview.\nCommands: mail connect, mail starters, mail rules, mail sort, mail report, mail details <run-id> <page>, mail disconnect.\nStart every request with mail, including natural language: “mail Label emails from alex@example.com as Projects/Alpha.” Rule changes also need approval. Use the buttons on a preview to confirm, cancel, inspect or undo. Shared commands: help, budget.';
 
@@ -84,7 +86,11 @@ export class Engine {
       }
       case 'rules': return this.sendCard(actor, 'Your rules', state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nSenders: ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : 'semantic matching'}\nLabels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}`).join('\n\n') : 'You have no approved rules. Send mail starters or describe your first rule after the mail prefix.');
       case 'budget': return this.send(actor, await budgetReport(this.d.budget));
-      case 'sort': return this.scan(actor, state, eventId);
+      case 'sort': {
+        const original = event.activeOperation ?? (this.d.admitSort ? await this.d.admitSort(actor, eventId) : eventId);
+        if (original !== eventId) return this.sendCard(actor, 'Work in progress', `Your Sort inbox request was already in progress when this message arrived. Existing request: ${original}.`);
+        return this.scan(actor, state, eventId);
+      }
       case 'report': return this.report(actor, state, intent.runId ?? state.runs.at(-1)?.id);
       case 'propose_rule': {
         if (!intent.rule) return this.send(actor, 'Please start your reply with mail and describe the condition, labels, action and any exceptions.');
