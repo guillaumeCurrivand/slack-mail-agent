@@ -7,7 +7,7 @@ import { createModules } from '../src/app/modules.js';
 import { schema } from '../src/app/schema.js';
 import type { Actor } from '../src/core/identity.js';
 import { createServer } from '../src/core/server.js';
-import { SlackDeliveryRejected, type AgentMessage, type Messenger } from '../src/core/slack.js';
+import { Slack, SlackDeliveryRejected, type AgentMessage, type Messenger } from '../src/core/slack.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { worker } from '../src/core/worker.js';
 import { SlackChannelSelections } from '../src/modules/slack/store.js';
@@ -35,7 +35,7 @@ function fakeChannels() {
   }));
 }
 
-async function harness(runtimeEnv: NodeJS.ProcessEnv = env) {
+async function harness(runtimeEnv: NodeJS.ProcessEnv = env, sendThroughSlack = false) {
   const runtimeConfig = readConfig(runtimeEnv);
   const modules = createModules(runtimeConfig, sql, runtimeEnv);
   for (const module of modules.all()) await module.initialize?.(sql);
@@ -45,6 +45,7 @@ async function harness(runtimeEnv: NodeJS.ProcessEnv = env) {
   let rejectBeforeDelivery = false;
   const messenger: Messenger = { async send(actor, message) {
     if (rejectBeforeDelivery) { rejectBeforeDelivery = false; throw new SlackDeliveryRejected('Rejected'); }
+    if (sendThroughSlack) await new Slack(runtimeConfig.SLACK_BOT_TOKEN).send(actor, message);
     messages.push({ actor, message });
     if (failAfterDelivery) { failAfterDelivery = false; throw new Error('Delivery outcome uncertain'); }
   } };
@@ -99,6 +100,33 @@ it('lists only shared public and private channels from a signed Slack DM without
     expect(message.text).toContain('planning');
     expect(message.text).not.toContain('group-dm');
     expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select']);
+  } finally { await h.close(); }
+});
+
+it('delivers channel selection buttons with distinct action IDs in each Slack actions block', async () => {
+  const posted: any[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    const request = new URL(url);
+    if (request.pathname.endsWith('/users.conversations')) return Response.json({ ok: true, channels: [
+      { id: 'CONE', name: 'one', is_channel: true, is_private: false },
+      { id: 'CTWO', name: 'two', is_channel: true, is_private: false },
+    ], response_metadata: { next_cursor: '' } });
+    if (request.pathname.endsWith('/chat.postMessage')) {
+      const body = JSON.parse(String(options?.body));
+      posted.push(body);
+      const valid = body.blocks.filter((block: any) => block.type === 'actions').every((block: any) =>
+        new Set(block.elements.map((element: any) => element.action_id)).size === block.elements.length);
+      return Response.json(valid ? { ok: true } : { ok: false, error: 'invalid_blocks' });
+    }
+    throw new Error(`Unexpected Slack API: ${request.pathname}`);
+  }));
+  const h = await harness(env, true);
+  try {
+    await h.postDm('slack channels');
+    await h.drain();
+    expect(posted).toHaveLength(1);
+    expect(h.messages).toHaveLength(1);
+    expect(h.messages[0]!.message.buttons).toHaveLength(2);
   } finally { await h.close(); }
 });
 

@@ -54,7 +54,20 @@ export class Slack implements Messenger {
     // Sanitized markdown, not mrkdwn. Cards add a plain-text kind header; Replies have none.
     if (message.kind) blocks.push({ type: 'header', text: { type: 'plain_text', text: message.kind } });
     if (text) blocks.push({ type: 'markdown', text: text.slice(0, 12_000) });
-    if (buttons.length) blocks.push({ type: 'actions', elements: buttons.map(b => ({ type: 'button', text: { type: 'plain_text', text: b.label.slice(0, 75) }, action_id: b.action, value: b.value, ...(b.style ? { style: b.style } : {}) })) });
+    let actionElements: any[] = [];
+    let actionIds = new Set<string>();
+    const flushActions = () => {
+      if (actionElements.length) blocks.push({ type: 'actions', elements: actionElements });
+      actionElements = [];
+      actionIds = new Set();
+    };
+    for (const button of buttons) {
+      // Slack requires action IDs to be unique within each actions block.
+      if (actionIds.has(button.action) || actionElements.length === 25) flushActions();
+      actionElements.push({ type: 'button', text: { type: 'plain_text', text: button.label.slice(0, 75) }, action_id: button.action, value: button.value, ...(button.style ? { style: button.style } : {}) });
+      actionIds.add(button.action);
+    }
+    flushActions();
     const response = await this.fetcher('https://slack.com/api/chat.postMessage', {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: actor.channel, text: escapeSlack(plainReading(text).slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),

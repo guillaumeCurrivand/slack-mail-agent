@@ -1,6 +1,6 @@
 # Updating production
 
-Production uses Docker Compose. This procedure updates an existing server running this repository's `compose.yaml`, with its `app` and `db` services. Replace `/path/to/slack-mail-agent` with the existing server checkout; keep the same Compose project name, environment file, and any override files used for the original deployment. The actual server checkout path has not been recorded.
+Production uses Docker Compose. The confirmed server checkout is `/opt/slack-mail-agent`, running this repository's `compose.yaml` with `app` and `db` services. Keep the same Compose project name, environment file, and any override files used for the original deployment.
 
 The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to container port `3000` and explicitly sets the app's internal `PORT=3000`. The reverse proxy and host readiness check use port `3001`; no `.env` port change is required for this Compose setup.
 
@@ -13,7 +13,7 @@ Run this in Bash on the production server, as the account that owns the checkout
 The deployment procedure is implemented in [`scripts/deploy.sh`](../scripts/deploy.sh). On your first update, pull to obtain the script, then run it:
 
 ```bash
-cd /path/to/slack-mail-agent &&
+cd /opt/slack-mail-agent &&
 git pull --ff-only origin main &&
 bash scripts/deploy.sh
 ```
@@ -28,7 +28,7 @@ The dump contains application data; keep it out of the Git checkout and handle i
 
 ## Confirm the deployment
 
-The script requires a successful readiness request with `{"ok":true}`, then shows container status and recent app logs. This checks the application and its database connection; it does not verify Slack delivery or Gmail authorization. Confirm the app stays running, then DM `help`, `mail help`, and `budget` to the bot. These commands do not modify the mailbox or require a paid AI call. Use the deployed public origin's `/ready` endpoint as well to check the HTTPS proxy path.
+The script requires a successful readiness request with `{"ok":true}`, then shows container status and recent app logs. This checks the application and its database connection; it does not verify Slack delivery or Gmail authorization. Confirm the app stays running, then DM `help`, `mail help`, and `budget` to the bot. If Slack Unanswered is enabled, also DM `slack channels` and confirm the channel picker appears, select a channel, then DM `slack unanswered`. These commands do not modify the mailbox; contextual matching in `slack unanswered` may use the shared AI budget. Use the deployed public origin's `/ready` endpoint as well to check the HTTPS proxy path.
 
 If the readiness check fails, inspect the logs and keep the release marked unverified. If failure occurred after stopping the old app but before `docker compose up`, `docker compose start app` can restart the still-existing old container. Once the new app has started, database migrations may already have run: assess schema and queued-work compatibility before reverting code or restoring a backup. Do not remove the database volume to retry an update.
 
@@ -39,3 +39,7 @@ If the readiness check fails, inspect the logs and keep the release marked unver
 - Stop the old worker before the new one starts; do not run old and new versions together during this upgrade. The Compose sequence above does this.
 - Users now send `mail sort`, `mail rules`, and other prefixed requests. Natural-language requests also need `mail`. Shared `help` and `budget` stay unprefixed. Previously posted mail buttons and already-queued mail work remain supported.
 - Local verification after review: 75 automated tests passed, TypeScript checks and build passed. The two real PostgreSQL concurrency tests were skipped without `TEST_DATABASE_URL`; live production integrations remain to be checked on the server.
+
+## Slack Unanswered channel picker fix
+
+When Slack Unanswered is enabled, `ENABLED_MODULES` must include `slack` (for example, `mail,slack`). This fix changes only how channel-selection buttons are arranged in outgoing Slack messages. It requires no new environment variables, Slack permissions, or manual database migration. Rebuild and restart the app using the procedure above, then verify that `slack channels` displays selectable channels and that a selection is retained. See [Slack Unanswered](slack-unanswered.md) for the feature contract and [README](../README.md) for the required Slack scopes and module configuration.
