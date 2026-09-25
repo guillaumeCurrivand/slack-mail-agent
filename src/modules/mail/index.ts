@@ -18,7 +18,7 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
   const oauth = new GoogleOAuth(config, new Store(sql), vault);
   return {
     id: 'mail', name: 'Mail Sorter', description: 'Sort your Gmail using approved personal rules',
-    workOperations: [{ name: SORT_OPERATION, commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
+    workOperations: [{ key: SORT_OPERATION, label: 'Sort inbox', commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
     menuActions: ['sort_inbox'],
     async menu(actor, page, context) {
       const state = await new Store(context.sql).load(actor);

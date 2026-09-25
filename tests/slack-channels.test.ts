@@ -17,7 +17,7 @@ const bob: Actor = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
 let db: PGlite, sql: Sql;
 
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
-beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts'); });
+beforeEach(async () => { await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts,slack_unanswered_results'); });
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
@@ -436,13 +436,24 @@ it('groups and paginates private results while reporting inaccessible selected c
     expect(first.message.text).toContain('general');
     expect(first.message.text).toContain('public 0');
     expect(first.message.text).not.toContain('private result');
-    const second = await h.click(first.message.buttons!.find(button => button.label === 'Next')!);
-    expect(second.actor).toEqual(alice);
-    expect(second.message.text).toContain('page 2/2');
-    expect(second.message.text).toContain('planning');
-    expect(second.message.text).toContain('private result');
-    expect(second.message.text).toContain('Open message');
-    privateVisible = false;
+    const providerCalls = vi.mocked(fetch).mock.calls.length;
+    const restarted = await harness();
+    try {
+      const second = await restarted.click(first.message.buttons!.find(button => button.label === 'Next')!);
+      expect(second.actor).toEqual(alice);
+      expect(second.message.text).toContain('page 2/2');
+      expect(second.message.text).toContain('planning');
+      expect(second.message.text).toContain('private result');
+      expect(second.message.text).toContain('Open message');
+      expect(vi.mocked(fetch).mock.calls.slice(providerCalls).every(([url]) => new URL(String(url)).pathname.endsWith('/users.conversations'))).toBe(true);
+      const otherUser = await restarted.click(first.message.buttons!.find(button => button.label === 'Next')!, bob);
+      expect(otherUser.message.text).toContain('results are unavailable');
+      expect(otherUser.message.text).not.toContain('private result');
+      privateVisible = false;
+      const revoked = await restarted.click(first.message.buttons!.find(button => button.label === 'Next')!);
+      expect(revoked.message.text).toContain('no longer selected or accessible');
+      expect(revoked.message.text).not.toContain('private result');
+    } finally { await restarted.close(); }
     const skipped = await h.dm('slack unanswered');
     expect(skipped.message.text).toContain('Skipped inaccessible selected channels: GPRIVATE');
     expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 2');

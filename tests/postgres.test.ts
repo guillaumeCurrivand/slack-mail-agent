@@ -42,8 +42,8 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     const actor = { team: 'T', user: 'A', channel: 'D' };
     const first = new JobStore(pool), second = new JobStore(pool);
     await Promise.all([
-      first.enqueueOperation('first', actor, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox'),
-      second.enqueueOperation('second', actor, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox'),
+      first.enqueueOperation('first', actor, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox'),
+      second.enqueueOperation('second', actor, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox'),
     ]);
     const rows = (await pool.query("SELECT id,module,payload FROM jobs WHERE id IN ('first','second') ORDER BY id")).rows;
     expect(rows).toHaveLength(2);
@@ -51,7 +51,7 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     const original = rows.find(row => row.module === 'mail')!;
     expect(rows.find(row => row.module === 'core')!.payload).toMatchObject({ type: 'operation_busy', original: original.id });
     await first.complete(original.id);
-    await first.enqueueOperation('third', actor, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox');
+    await first.enqueueOperation('third', actor, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox');
     expect((await pool.query("SELECT module FROM jobs WHERE id='third'")).rows[0].module).toBe('mail');
   });
   it('holds conflicting module work while core and another module can enter', async () => {

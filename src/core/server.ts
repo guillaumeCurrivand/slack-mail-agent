@@ -26,7 +26,7 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     const actor = { team: body.team_id, user: event.user, channel: event.channel };
     const operation = modules.operation(route);
     const receiptOperation = modules.receiptOperation(route);
-    if (operation) await store.enqueueOperation(`slack:${body.event_id}`, actor, route.payload, route.module, operation);
+    if (operation) await store.enqueueOperation(`slack:${body.event_id}`, actor, route.payload, route.module, operation.key, operation.label);
     else if (receiptOperation) await store.enqueueWithOperationSnapshot(`slack:${body.event_id}`, actor, route.payload, route.module, receiptOperation);
     else await store.enqueue(`slack:${body.event_id}`, actor, route.payload, route.module);
     return { ok: true }; // Only durable enqueue is on the acknowledgement path.
@@ -47,7 +47,7 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     const actor = { team: body.team.id, user: body.user.id, channel: body.channel.id };
     const operation = modules.operation(route);
     if (operation && await boundMenuTarget(store.sql, actor, route.payload.value, route.payload.timestamp))
-      await store.enqueueOperation(`action:${digest(raw)}`, actor, route.payload, route.module, operation);
+      await store.enqueueOperation(`action:${digest(raw)}`, actor, route.payload, route.module, operation.key, operation.label);
     else await store.enqueue(`action:${digest(raw)}`, actor, route.payload, route.module);
     return { ok: true };
   });

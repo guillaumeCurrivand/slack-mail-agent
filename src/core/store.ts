@@ -54,7 +54,7 @@ export class JobStore {
     return result.rows[0].job_id;
   }
   /** One statement makes slot admission and both original/duplicate jobs atomic. */
-  async enqueueOperation(id: string, actor: Actor, payload: Record<string, unknown>, module: string, operation: string) {
+  async enqueueOperation(id: string, actor: Actor, payload: Record<string, unknown>, module: string, operation: string, label = operation) {
     await this.sql.query(`WITH slot AS (
       INSERT INTO core_operation_slots(owner,module,operation,job_id) SELECT $2,$5,$6,$1
       WHERE NOT EXISTS (SELECT 1 FROM jobs WHERE id=$1)
@@ -65,9 +65,9 @@ export class JobStore {
     )
     INSERT INTO jobs(id,owner,actor,payload,module)
     SELECT $1,$2,$3,CASE WHEN slot.job_id=$1 THEN $4::jsonb
-      ELSE jsonb_build_object('type','operation_busy','operation', $6::text,'original',slot.job_id) END,
+      ELSE jsonb_build_object('type','operation_busy','operation', $7::text,'original',slot.job_id) END,
       CASE WHEN slot.job_id=$1 THEN $5 ELSE 'core' END
-    FROM slot ON CONFLICT DO NOTHING`, [id, ownerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module, operation]);
+    FROM slot ON CONFLICT DO NOTHING`, [id, ownerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module, operation, label]);
   }
   async complete(id: string) {
     await this.sql.query(`WITH finished AS (

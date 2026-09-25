@@ -22,6 +22,28 @@ export const slackAiSchema = `CREATE TABLE IF NOT EXISTS slack_ai_attempts (
   created_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (owner,event_id,batch_index)
 );`;
+export const slackResultsSchema = `CREATE TABLE IF NOT EXISTS slack_unanswered_results (
+  owner text NOT NULL, event_id text NOT NULL, pages jsonb NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(owner,event_id)
+);`;
+
+type SavedPage = { text: string; channels: string[] };
+
+export class SlackUnansweredResults {
+  constructor(private sql: Sql) {}
+  async load(actor: Actor, eventId: string): Promise<SavedPage[] | undefined> {
+    const row = (await this.sql.query('SELECT pages FROM slack_unanswered_results WHERE owner=$1 AND event_id=$2', [ownerKey(actor), eventId])).rows[0];
+    return row?.pages;
+  }
+  async save(actor: Actor, eventId: string, pages: SavedPage[]) {
+    await this.sql.query('INSERT INTO slack_unanswered_results(owner,event_id,pages) VALUES($1,$2,$3) ON CONFLICT DO NOTHING',
+      [ownerKey(actor), eventId, JSON.stringify(pages)]);
+  }
+  async cleanup() {
+    await this.sql.query(`DELETE FROM slack_unanswered_results r WHERE r.created_at<now()-interval '30 days'
+      AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=r.event_id AND j.status IN ('queued','running'))`);
+  }
+}
 
 export class SlackAiAttempts {
   constructor(private sql: Sql) {}

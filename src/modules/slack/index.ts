@@ -7,7 +7,7 @@ import { SlackChannelDirectory, type Channel } from './channels.js';
 import { SlackAI } from './ai.js';
 import type { readSlackConfig } from './config.js';
 import { SlackHistory } from './history.js';
-import { slackAiSchema, slackHandledSchema, slackSchema, SlackAiAttempts, SlackChannelSelections } from './store.js';
+import { slackAiSchema, slackHandledSchema, slackResultsSchema, slackSchema, SlackAiAttempts, SlackChannelSelections, SlackUnansweredResults } from './store.js';
 import { SlackUnansweredSearch, type UnansweredMatch } from './unanswered.js';
 
 const PAGE_SIZE = 10;
@@ -20,20 +20,42 @@ const parseSelection = (value: unknown) => {
 };
 const parseResultsPage = (value: unknown) => {
   if (typeof value !== 'string') return;
-  const match = /^(\d{13})\|(\d{1,6})$/.exec(value);
-  const anchorMs = Number(match?.[1]), page = Number(match?.[2]);
-  return Number.isSafeInteger(anchorMs) && anchorMs > 0 && anchorMs <= Date.now() && Number.isSafeInteger(page)
-    ? { anchor: new Date(anchorMs), page } : undefined;
+  const match = /^([^|]{1,200})\|(\d{1,6})$/.exec(value);
+  return match ? { sourceId: match[1]!, page: Number(match[2]) } : undefined;
 };
 
 export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<typeof readSlackConfig>): AssistantModule {
   const directory = new SlackChannelDirectory(token);
   const selections = new SlackChannelSelections(sql);
   const aiAttempts = new SlackAiAttempts(sql);
+  const savedResults = new SlackUnansweredResults(sql);
   const history = new SlackHistory(token);
   const unanswered = new SlackUnansweredSearch(directory, selections, history);
 
-  async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchor: Date, requestedPage = 0) {
+  async function sendUnansweredPage(actor: Actor, sourceId: string, requestedPage: number, context: ModuleContext) {
+    const pages = await savedResults.load(actor, sourceId);
+    if (!pages?.length) return context.messenger.send(actor, { text: 'These results are unavailable. Run slack unanswered again.', buttons: [menuButton] });
+    const page = Math.min(requestedPage, pages.length - 1);
+    const saved = pages[page]!;
+    if (saved.channels.length) {
+      try {
+        const available = new Set((await directory.listFor(actor.user)).map(channel => channel.id));
+        const selected = new Set(await selections.list(actor));
+        if (saved.channels.some(id => !available.has(id) || !selected.has(id))) return context.messenger.send(actor, {
+          text: 'A channel in these results is no longer selected or accessible. No message content was shown. Run slack unanswered again for current results.', buttons: [menuButton],
+        });
+      } catch {
+        return context.messenger.send(actor, { text: 'Could not verify channel access for these results. Run slack unanswered again.', buttons: [menuButton] });
+      }
+    }
+    const buttons: Button[] = [];
+    if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${sourceId}|${page - 1}` });
+    if (page + 1 < pages.length) buttons.push({ label: 'Next', action: 'unanswered_page', value: `${sourceId}|${page + 1}` });
+    return context.messenger.send(actor, { kind: 'Unanswered for you', text: saved.text, buttons: [...buttons, menuButton] });
+  }
+
+  async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchor: Date) {
+    if (await savedResults.load(actor, eventId)) return sendUnansweredPage(actor, eventId, 0, context);
     let results;
     try { results = await unanswered.search(actor, anchor); }
     catch {
@@ -67,43 +89,47 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
       ...clear.map(item => ({ ...item, group: 'clear' as const, reason: '' })),
       ...possible.map(item => ({ ...item, group: 'possible' as const })),
     ];
-    const pages = Math.max(1, Math.ceil(entries.length / RESULT_PAGE_SIZE));
-    const page = Math.min(requestedPage, pages - 1);
-    const visible = entries.slice(page * RESULT_PAGE_SIZE, (page + 1) * RESULT_PAGE_SIZE);
-    const lines = [`Messages from the 48 hours before your command (page ${page + 1}/${pages}):`];
-    if (!entries.length) lines.push('No confirmed unanswered messages found in your selected channels.');
-    if (!entries.length && !(await selections.list(actor)).length) lines.push('Choose sources with slack channels.');
-    let previousChannel = '';
-    let previousGroup = '';
+    const pageCount = Math.max(1, Math.ceil(entries.length / RESULT_PAGE_SIZE));
+    const selectedCount = entries.length ? 0 : (await selections.list(actor)).length;
+    const pages: Array<{ text: string; channels: string[] }> = [];
+    const authors = new Map<string, string>();
     try {
-      for (const { channel, message, group, reason } of visible) {
-        if (group !== previousGroup) {
-          lines.push(group === 'clear' ? '*Unanswered for you*' : '*Possibly for you*');
-          previousGroup = group; previousChannel = '';
+      for (let page = 0; page < pageCount; page++) {
+        const visible = entries.slice(page * RESULT_PAGE_SIZE, (page + 1) * RESULT_PAGE_SIZE);
+        const lines = [`Messages from the 48 hours before your command (page ${page + 1}/${pageCount}):`];
+        if (!entries.length) lines.push('No confirmed unanswered messages found in your selected channels.');
+        if (!entries.length && !selectedCount) lines.push('Choose sources with slack channels.');
+        let previousChannel = '';
+        let previousGroup = '';
+        for (const { channel, message, group, reason } of visible) {
+          if (group !== previousGroup) {
+            lines.push(group === 'clear' ? '*Unanswered for you*' : '*Possibly for you*');
+            previousGroup = group; previousChannel = '';
+          }
+          if (channel.id !== previousChannel) lines.push(`*#${escapeCardValue(escapeSlack(channel.name))}*`);
+          previousChannel = channel.id;
+          if (!authors.has(message.user)) {
+            const names = await history.profile(message.user).catch(() => []);
+            authors.set(message.user, escapeCardValue(escapeSlack(names[0] ?? message.user)));
+          }
+          const time = new Date(Number(message.ts) * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+          const excerpt = escapeCardValue(escapeSlack(message.text.replace(/\s+/g, ' ').slice(0, 220)));
+          const link = await history.permalink(channel.id, message.ts);
+          lines.push(`• ${authors.get(message.user)} · ${time}: ${excerpt}${message.text.length > 220 ? '…' : ''} [Open message](${link})`);
+          if (group === 'possible') lines.push(`  Why it may concern you: ${escapeCardValue(escapeSlack(reason))}`);
         }
-        if (channel.id !== previousChannel) lines.push(`*#${escapeCardValue(escapeSlack(channel.name))}*`);
-        previousChannel = channel.id;
-        const names = await history.profile(message.user).catch(() => []);
-        const author = escapeCardValue(escapeSlack(names[0] ?? message.user));
-        const time = new Date(Number(message.ts) * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
-        const excerpt = escapeCardValue(escapeSlack(message.text.replace(/\s+/g, ' ').slice(0, 220)));
-        const link = await history.permalink(channel.id, message.ts);
-        lines.push(`• ${author} · ${time}: ${excerpt}${message.text.length > 220 ? '…' : ''} [Open message](${link})`);
-        if (group === 'possible') lines.push(`  Why it may concern you: ${escapeCardValue(escapeSlack(reason))}`);
+        if (results.skipped.length) lines.push(`Skipped inaccessible selected channels: ${results.skipped.join(', ')}. Your selections are saved.`);
+        if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Follow-up resolution could not be fully checked either. Direct mention and name matches are still shown.');
+        if (incomplete === 'provider') lines.push('Contextual matching and follow-up resolution could not be completed right now. Direct mention and name matches are still shown.');
+        if (incomplete === 'config') lines.push('Contextual matching and follow-up resolution are not configured. Direct mention and name matches are still shown.');
+        pages.push({ text: lines.join('\n'), channels: [...new Set(visible.map(item => item.channel.id))] });
       }
     } catch {
       await context.messenger.send(actor, { text: 'Could not load Slack message details right now. Try slack unanswered again.' });
       return;
     }
-    if (results.skipped.length) lines.push(`Skipped inaccessible selected channels: ${results.skipped.join(', ')}. Your selections are saved.`);
-    if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Follow-up resolution could not be fully checked either. Direct mention and name matches are still shown.');
-    if (incomplete === 'provider') lines.push('Contextual matching and follow-up resolution could not be completed right now. Direct mention and name matches are still shown.');
-    if (incomplete === 'config') lines.push('Contextual matching and follow-up resolution are not configured. Direct mention and name matches are still shown.');
-    const buttons: Button[] = [];
-    const anchorValue = String(anchor.getTime());
-    if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${anchorValue}|${page - 1}` });
-    if (page + 1 < pages) buttons.push({ label: 'Next', action: 'unanswered_page', value: `${anchorValue}|${page + 1}` });
-    await context.messenger.send(actor, { kind: 'Unanswered for you', text: lines.join('\n'), buttons: [...buttons, menuButton] });
+    await savedResults.save(actor, eventId, pages);
+    return sendUnansweredPage(actor, eventId, 0, context);
   }
 
   async function channelPage(actor: Actor, requestedPage = 0, notice = '', standalone = false): Promise<MenuPage> {
@@ -188,22 +214,22 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     if (payload.action === 'unanswered_page') {
       const page = parseResultsPage(payload.value);
       if (!page) return context.messenger.send(actor, { text: 'That results control is invalid. Run slack unanswered again.' });
-      return showUnanswered(actor, eventId, context, page.anchor, page.page);
+      return sendUnansweredPage(actor, page.sourceId, page.page, context);
     }
     return;
   }
 
   return {
     id: 'slack', name: 'Slack Unanswered', description: 'Find unanswered messages in selected Slack channels',
-    workOperations: [{ name: 'Find unanswered', commands: ['unanswered'], action: 'find_unanswered' }],
+    workOperations: [{ key: 'unanswered', label: 'Find unanswered', commands: ['unanswered'], action: 'find_unanswered' }],
     menuActions: ['channel_page', 'channel_select', 'channel_remove', 'find_unanswered'],
     async menu(actor, page) {
       if (page.startsWith('channels_')) return channelPage(actor, /^channels_(\d{1,6})$/.test(page) ? Number(page.slice(9)) : 0);
       return { kind: 'Slack Unanswered', text: 'Choose channels to manage your sources, or find unanswered messages. Shortcuts: slack channels, slack unanswered. Gmail is not required.',
         buttons: [{ label: 'Find unanswered', action: 'find_unanswered', value: 'unanswered', bound: true }], links: [{ label: 'Choose channels', page: 'channels_0' }] };
     },
-    async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); },
-    async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); },
+    async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); await database.query(slackResultsSchema); },
+    async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); await savedResults.cleanup(); },
     async handle(actor, payload, eventId, context) {
       if ((payload.type === 'text' && String(payload.text ?? '').trim().toLowerCase() === 'channels') ||
         (payload.type === 'menu_action' && ['channel_page', 'channel_select', 'channel_remove'].includes(String(payload.action)))) {

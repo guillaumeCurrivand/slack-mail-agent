@@ -15,7 +15,7 @@ export interface AssistantModule {
   name?: string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
   menuActions?: readonly string[];
-  workOperations?: readonly { name: string; commands: readonly string[]; action: string; snapshotUnknownText?: boolean }[];
+  workOperations?: readonly { key: string; label: string; commands: readonly string[]; action: string; snapshotUnknownText?: boolean }[];
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
   registerRoutes?(app: FastifyInstance): void;
@@ -39,14 +39,14 @@ export class ModuleRegistry {
   }
   all() { return [...this.modules.values()]; }
   enabledIds() { return ['core', ...this.modules.keys()]; }
-  operation(job: RoutedJob): string | undefined {
+  operation(job: RoutedJob): NonNullable<AssistantModule['workOperations']>[number] | undefined {
     const module = this.modules.get(job.module);
     return module?.workOperations?.find(operation => job.payload.type === 'text'
       ? operation.commands.includes(String(job.payload.text ?? '').trim().toLowerCase())
-      : job.payload.type === 'menu_action' && job.payload.action === operation.action)?.name;
+      : job.payload.type === 'menu_action' && job.payload.action === operation.action);
   }
   receiptOperation(job: RoutedJob): string | undefined {
-    return job.payload.type === 'text' ? this.modules.get(job.module)?.workOperations?.find(operation => operation.snapshotUnknownText)?.name : undefined;
+    return job.payload.type === 'text' ? this.modules.get(job.module)?.workOperations?.find(operation => operation.snapshotUnknownText)?.key : undefined;
   }
   text(text: string): RoutedJob {
     const [prefix = '', rest = ''] = text.trim().split(/\s+([\s\S]*)/, 2);

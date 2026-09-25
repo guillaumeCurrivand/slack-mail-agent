@@ -5,7 +5,7 @@ import type { Mailbox } from './gmail.js';
 import { escapeCardValue, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import { prune, Store } from './store.js';
 
-export const SORT_OPERATION = 'Sort inbox';
+export const SORT_OPERATION = 'sort';
 export type Event = { type: 'text'; text: string; resolved?: Intent; activeOperation?: string } | { type: 'action'; action: string; value: string } | { type: 'connection'; connection: Connection };
 export type EngineDependencies = {
   store: Store; intelligence: Intelligence; messenger: Messenger; budget: Budget;

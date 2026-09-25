@@ -161,11 +161,11 @@ it('keeps navigation and the other module responsive during a held mail scan whi
   const modules = createModules(config, sql, { ...mailEnv, ENABLED_MODULES: 'mail,slack' });
   for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
   const jobs = new JobStore(sql);
-  await jobs.enqueueOperation('a-sort-held', alice, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox');
-  await jobs.enqueueOperation('duplicate-held', alice, { type: 'text', text: 'sort' }, 'mail', 'Sort inbox');
+  await jobs.enqueueOperation('a-sort-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox');
+  await jobs.enqueueOperation('duplicate-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox');
   await jobs.enqueue('z-mail-conflict', alice, { type: 'text', text: 'report' }, 'mail');
   await jobs.enqueue('navigate', alice, { type: 'text', text: 'menu' });
-  await jobs.enqueueOperation('search-other', alice, { type: 'text', text: 'unanswered' }, 'slack', 'Find unanswered');
+  await jobs.enqueueOperation('search-other', alice, { type: 'text', text: 'unanswered' }, 'slack', 'unanswered', 'Find unanswered');
   const held = new Set<string>();
   const query = (text: string, values?: any[]) => text.includes('pg_try_advisory_lock')
     ? Promise.resolve({ rows: [{ locked: !held.has(values![0]) && Boolean(held.add(values![0])) }] })
