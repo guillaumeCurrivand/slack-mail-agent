@@ -566,6 +566,41 @@ it('finds new requests after a reply and distinguishes acknowledgements and thir
   } finally { await h.close(); }
 });
 
+it('keeps a follow-up request when the model cites the asker’s intervening explanation', async () => {
+  const now = Math.floor(Date.now() / 1000);
+  const stamp = (seconds: number) => `${seconds}.000001`;
+  const root = { type: 'message', ts: stamp(now - 100), user: 'UASKER', text: '<@UALICE> tu sais peut-être toi ?', reply_count: 3, latest_reply: stamp(now - 10) };
+  const answer = { type: 'message', ts: stamp(now - 30), user: 'UALICE', text: "D'où viennent ces questions ?" };
+  const explanation = { type: 'message', ts: stamp(now - 20), user: 'UASKER', text: "C'est juste pour m'assurer que tous les cas de figure seront bien traités." };
+  const followup = { type: 'message', ts: stamp(now - 10), user: 'UASKER', text: "Tu me diras si c'est bon pour toi" };
+  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
+    const request = new URL(url), method = request.pathname.split('/').at(-1);
+    if (request.hostname === 'api.openai.com') {
+      if (method === 'input_tokens') return Response.json({ input_tokens: 200 });
+      const input = JSON.parse(JSON.parse(String(options?.body)).input);
+      return Response.json({ status: 'completed', usage: { input_tokens: 200, output_tokens: 80 }, output: [{ content: [{
+        type: 'output_text', text: JSON.stringify({ results: input.candidates.map((candidate: any) => ({
+          id: candidate.id, decision: candidate.text === followup.text ? 'clear' : 'none',
+          evidenceTs: explanation.ts, reason: 'The asker is awaiting confirmation from the user.',
+        })) }),
+      }] }] });
+    }
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
+      ? { display_name: 'Alice', first_name: 'Alice' } : { display_name: 'Asker' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [root], response_metadata: { next_cursor: '' } });
+    if (method === 'conversations.replies') return Response.json({ ok: true, messages: [root, answer, explanation, followup], response_metadata: { next_cursor: '' } });
+    if (method === 'chat.getPermalink') return Response.json({ ok: true, permalink: 'https://example.slack.com/archives/CPUBLIC/followup' });
+    throw new Error(`Unexpected provider call: ${request.pathname}`);
+  }));
+  const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
+  try {
+    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    const result = await h.dm('slack unanswered');
+    expect(result.message.text).toContain(followup.text);
+  } finally { await h.close(); }
+});
+
 it('keeps direct follow-up requests but filters obvious thanks without AI budget', async () => {
   const now = Math.floor(Date.now() / 1000);
   const stamp = (seconds: number) => `${seconds}.000001`;
