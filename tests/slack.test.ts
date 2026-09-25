@@ -78,6 +78,11 @@ it('keeps existing buttons on a Reply', async () => {
   });
 });
 
+it('omits an empty optional button value from Slack blocks', async () => {
+  const body = await post({ text: 'Open the menu.', buttons: [{ label: 'Menu', action: 'core:menu', value: '' }] });
+  expect(body.blocks[1].elements[0]).not.toHaveProperty('value');
+});
+
 it('encodes a Card as a plain-text kind header plus markdown body', async () => {
   const body = await post({ kind: 'Help', text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' });
   expect(body.blocks.find((block: { type: string }) => block.type === 'header')).toMatchObject({

@@ -83,16 +83,31 @@ it('discovers enabled modules and shared commands in a private main menu without
   } finally { await h.close(); }
 });
 
+it('accepts a signed button callback when Slack omits its optional value', async () => {
+  const h = await harness();
+  try {
+    const guidance = await h.dm('sort');
+    const selected = button(guidance, 'Menu');
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team },
+      user: { id: alice.user }, channel: { id: alice.channel }, actions: [{ action_id: selected.action_id, action_ts: randomUUID() }] }) }).toString();
+    expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
+    const menu = await h.drain();
+    expect(menu.body.blocks[0].text.text).toBe('Menu');
+  } finally { await h.close(); }
+});
+
 it('starts menu work through the existing module handlers and explains missing prerequisites', async () => {
   const h = await harness(mailEnv);
   try {
     const main = await h.dm('menu');
     const mail = await h.click(main, 'Mail Sorter');
+    expect(buttons(mail).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
     const sorting = await h.click(mail, 'Sort inbox');
     expect(sorting.method).toBe('chat.postMessage');
     expect(sorting.body.text).toContain('Connect Gmail first');
     button(sorting, 'Menu');
     const slack = await h.click(await h.click(mail, 'Back to menu'), 'Slack Unanswered');
+    expect(buttons(slack).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
     const search = await h.click(slack, 'Find unanswered');
     expect(search.method).toBe('chat.postMessage');
     expect(search.body.text).toContain('Choose sources');
