@@ -43,3 +43,11 @@ If the readiness check fails, inspect the logs and keep the release marked unver
 ## Slack Unanswered channel picker fix
 
 When Slack Unanswered is enabled, `ENABLED_MODULES` must include `slack` (for example, `mail,slack`). This fix changes only how channel-selection buttons are arranged in outgoing Slack messages. It requires no new environment variables, Slack permissions, or manual database migration. Rebuild and restart the app using the procedure above, then verify that `slack channels` displays selectable channels and that a selection is retained. See [Slack Unanswered](slack-unanswered.md) for the feature contract and [README](../README.md) for the required Slack scopes and module configuration.
+
+## Slack Unanswered follow-up fixes: `93c000a` and `dea466d`
+
+These commits detect new requests after a user's reply in a selected channel thread, filter obvious follow-up acknowledgements, guide contextual matching to recognize indirect confirmation requests in any language, and accept a valid AI citation to the asker's intervening explanation. They add no required environment variables, Slack permissions, or manual database migration. Deploy the runtime change with the update-and-restart procedure above.
+
+After deployment, confirm `/ready`, then run `slack unanswered` for a selected channel containing a recent multi-turn exchange. Check that a new request after the user's reply links to that new message, while the earlier request remains cleared. Each candidate message must be within the command's rolling 48-hour window; an older thread root can still provide context. A private notice about incomplete contextual matching means this check did not establish a negative result. The command may use the shared AI budget.
+
+Local verification for `dea466d`: 106 automated tests passed, including a signed-DM replay of an indirect French confirmation request; `npm run check` and `npm run build` passed. Two PostgreSQL tests were skipped because `TEST_DATABASE_URL` was not set. The live model's decision for the reported thread and a successful production deployment of this fix have not been observed.
