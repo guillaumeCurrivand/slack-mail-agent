@@ -37,8 +37,9 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     const body = JSON.parse(new URLSearchParams(raw).get('payload') ?? '{}');
     if (body.team?.id !== config.SLACK_TEAM_ID || !/^[UW][A-Z0-9]+$/.test(body.user?.id ?? '') || !/^D[A-Z0-9]+$/.test(body.channel?.id ?? '')) return reply.code(403).send();
     const action = body.actions?.[0];
-    if (body.type !== 'block_actions' || typeof action?.action_id !== 'string' || typeof action.value !== 'string' || action.value.length > 500) return reply.code(400).send();
-    const route = modules.action(action.action_id, action.value);
+    if (body.type !== 'block_actions' || typeof action?.action_id !== 'string' ||
+      (action.value !== undefined && (typeof action.value !== 'string' || action.value.length > 500))) return reply.code(400).send();
+    const route = modules.action(action.action_id, action.value ?? '');
     if ((route.module === 'core' && route.payload.type === 'navigation') || route.payload.type === 'menu_action') {
       const timestamp = body.message?.ts;
       if (typeof timestamp !== 'string' || !/^\d+\.\d+$/.test(timestamp)) return reply.code(400).send();

@@ -53,7 +53,7 @@ For a single server running both app and database, start with 1 vCPU, 2 GB RAM a
 
 ## Slack setup
 
-Create a Slack app for your workspace using [slack-manifest.json](slack-manifest.json). Replace `https://YOUR_HOST` with your public origin. The endpoints are `/slack/events` and `/slack/actions`. Enable the app's Messages tab so users can DM the bot.
+Create or update the Slack app for your workspace using [slack-manifest.json](slack-manifest.json). Its Event Subscriptions and Interactivity Request URLs use `https://mail.tyrstats.com/slack/events` and `https://mail.tyrstats.com/slack/actions`. Confirm both URLs in the installed app's settings; changing the local manifest alone does not update Slack. Enable the app's Messages tab so users can DM the bot.
 
 The app uses `message.im` events and the bot scopes `im:history`, `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, and `users:read`. The read scopes support listing shared channels, reading selected channel histories and threads, and matching Slack profile names. Update the app's scopes and reinstall it to grant them before enabling `slack`; invite the bot to channels users should be able to choose. A private channel appears in `slack channels` only when both the requesting user and the bot belong to it and the installed bot token has `groups:read`. Put the installed bot token, signing secret, and workspace ID in `.env`. Set `SLACK_ADMIN_USER_ID` if one person should receive private operational spending alerts; it grants no access to other users' rules or mail. Otherwise the user whose request crosses the threshold receives the alert.
 

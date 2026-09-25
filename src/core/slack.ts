@@ -80,7 +80,8 @@ export class Slack implements Messenger {
     for (const button of buttons) {
       // Slack requires action IDs to be unique within each actions block.
       if (actionIds.has(button.action) || actionElements.length === 25) flushActions();
-      actionElements.push({ type: 'button', text: { type: 'plain_text', text: button.label.slice(0, 75) }, action_id: button.action, value: button.value, ...(button.style ? { style: button.style } : {}) });
+      actionElements.push({ type: 'button', text: { type: 'plain_text', text: button.label.slice(0, 75) }, action_id: button.action,
+        ...(button.value ? { value: button.value } : {}), ...(button.style ? { style: button.style } : {}) });
       actionIds.add(button.action);
     }
     flushActions();
