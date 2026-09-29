@@ -12,6 +12,8 @@
 
 ## Change discipline
 
+Make future changes directly on the existing `main` branch. Do not create new branches.
+
 Keep shared runtime code independent of mail workflows. Compose modules in the application layer; keep each module's domain behavior and data access within that module. Follow the module guide for new persistence and external integrations.
 
 Preserve the product specification's user ownership, explicit approval, mutation recovery, and spending safeguards. Exercise changes through the public routing/dispatch path as well as the affected workflow when those seams change. Use fake external providers for automated tests.
