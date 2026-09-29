@@ -28,7 +28,10 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
 type Posted = { method: string; body: any; ts: string };
-function buttons(message: Posted) { return message.body.blocks.flatMap((block: any) => block.elements ?? []); }
+function blocks(message: Posted) { return message.body.blocks.flatMap((block: any) => block.type === 'container' ? [block, ...block.child_blocks] : [block]); }
+function buttons(message: Posted) { return blocks(message).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements); }
+function title(message: Posted) { return message.body.blocks[0]?.title?.text; }
+function richParts(message: Posted) { return blocks(message).filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements.flatMap((section: any) => section.elements)); }
 function button(message: Posted, label: string) { const found = buttons(message).find((item: any) => item.text.text === label); expect(found, label).toBeTruthy(); return found; }
 async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: AssistantModule[] = []) {
   const config = readConfig(overrides), modules = new ModuleRegistry([...createModules(config, sql, overrides).all(), ...additionalModules]);
@@ -76,6 +79,7 @@ it('discovers enabled modules and shared commands in a private main menu without
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
       expect(buttons(menu).map((item: any) => item.text.text)).toEqual(['Slack Unanswered', 'Budget', 'Help']);
+      expect(buttons(menu).every((item: any) => item.style === undefined)).toBe(true);
     }
     const guidance = await h.dm('sort');
     expect(guidance.body.text).toContain('prefix');
@@ -92,7 +96,7 @@ it('accepts a signed button callback when Slack omits its optional value', async
       user: { id: alice.user }, channel: { id: alice.channel }, actions: [{ action_id: selected.action_id, action_ts: randomUUID() }] }) }).toString();
     expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
     const menu = await h.drain();
-    expect(menu.body.blocks[0].text.text).toBe('Menu');
+    expect(title(menu)).toBe('Menu');
   } finally { await h.close(); }
 });
 
@@ -102,12 +106,14 @@ it('starts menu work through the existing module handlers and explains missing p
     const main = await h.dm('menu');
     const mail = await h.click(main, 'Mail Sorter');
     expect(buttons(mail).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
+    expect(button(mail, 'Sort inbox').style).toBe('primary');
     const sorting = await h.click(mail, 'Sort inbox');
     expect(sorting.method).toBe('chat.postMessage');
     expect(sorting.body.text).toContain('Connect Gmail first');
     button(sorting, 'Menu');
     const slack = await h.click(await h.click(mail, 'Back to menu'), 'Slack Unanswered');
     expect(buttons(slack).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
+    expect(button(slack, 'Find unanswered').style).toBe('primary');
     const search = await h.click(slack, 'Find unanswered');
     expect(search.method).toBe('chat.postMessage');
     expect(search.body.text).toContain('Choose sources');
@@ -146,11 +152,11 @@ it('runs one paid mail Preview from signed menu starts and keeps approval separa
     await h.drain();
     expect(gmailLists).toBe(1);
     expect(paidCalls).toBe(1);
-    const preview = h.messages.find(message => message.body.blocks[0]?.text?.text === 'Preview')!;
+    const preview = h.messages.find(message => title(message) === 'Preview')!;
     expect(preview).toBeTruthy();
     button(preview, 'Confirm proposed changes');
     button(preview, 'Menu');
-    expect(h.messages.some(message => message.body.blocks[0]?.text?.text === 'Work in progress')).toBe(true);
+    expect(h.messages.some(message => title(message) === 'Work in progress')).toBe(true);
     expect((await new Store(sql).load(alice)).runs[0].status).toBe('preview');
   } finally { await h.close(); }
 });
@@ -361,7 +367,7 @@ it('connects through the existing invitation and confirms disconnect without era
     const invitation = await h.click(connection, 'Connect Gmail');
     expect(invitation.method).toBe('chat.postMessage');
     expect(invitation.body.text).toContain('single-use');
-    const connectUrl = invitation.body.blocks.find((block: any) => block.type === 'markdown').text.match(/https:\/\/agent\.example\.com\/auth\/google\?ticket=[\w-]+/)[0];
+    const connectUrl = richParts(invitation).find((part: any) => part.type === 'link').url;
     const path = new URL(connectUrl).pathname + new URL(connectUrl).search;
     const redirect = await h.get(path);
     expect(redirect.statusCode).toBe(302);
@@ -478,14 +484,14 @@ it('requires the originating User to approve the mailbox after the complete menu
     const mail = await h.click(await h.dm('menu'), 'Mail Sorter');
     const connection = await h.click(mail, 'Gmail connection');
     const invite = await h.click(connection, 'Connect Gmail');
-    const link = new URL(invite.body.blocks.find((block: any) => block.type === 'markdown').text.match(/https:\/\/agent\.example\.com\/auth\/google\?ticket=[\w-]+/)[0]);
+    const link = new URL(richParts(invite).find((part: any) => part.type === 'link').url);
     const start = await h.get(link.pathname + link.search);
     const authorize = new URL(String(start.headers.location));
     nonce = authorize.searchParams.get('nonce')!;
     const callback = `/auth/google/callback?state=${authorize.searchParams.get('state')}&code=fake-code`;
     expect((await h.get(callback, String(start.headers['set-cookie']).split(';')[0])).statusCode).toBe(200);
     const proposal = await h.drain();
-    expect(proposal.body.blocks[0].text.text).toBe('Confirm mailbox');
+    expect(title(proposal)).toBe('Confirm mailbox');
     expect(proposal.body.channel).toBe('DALICE');
     expect((await h.click(mail, 'Gmail connection')).body.text).toContain('not connected');
     expect((await h.click(proposal, 'Connect this mailbox', bob)).body.text).toContain('unavailable');
@@ -684,7 +690,7 @@ it('bounds long rule summaries while retaining every page and action', async () 
   try {
     let page = await h.click(await h.click(await h.dm('menu'), 'Mail Sorter'), 'Manage rules');
     for (let n = 0; n < 14; n++) {
-      const text = page.body.blocks.find((block: any) => block.type === 'markdown').text;
+      const text = richParts(page).map((part: any) => part.text).join('\n');
       expect(text.length).toBeLessThan(12_000);
       expect(text).toContain(`Long rule ${n * 3}`);
       expect(text).toContain('summarized');

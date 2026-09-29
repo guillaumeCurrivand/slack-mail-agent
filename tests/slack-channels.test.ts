@@ -154,7 +154,7 @@ it('delivers channel selection buttons with distinct action IDs in each Slack ac
     if (request.pathname.endsWith('/chat.postMessage')) {
       const body = JSON.parse(String(options?.body));
       posted.push(body);
-      const valid = body.blocks.filter((block: any) => block.type === 'actions').every((block: any) =>
+      const valid = body.blocks.flatMap((block: any) => block.type === 'container' ? block.child_blocks : [block]).filter((block: any) => block.type === 'actions').every((block: any) =>
         new Set(block.elements.map((element: any) => element.action_id)).size === block.elements.length);
       return Response.json(valid ? { ok: true, ts: '1234567890.000001' } : { ok: false, error: 'invalid_blocks' });
     }
