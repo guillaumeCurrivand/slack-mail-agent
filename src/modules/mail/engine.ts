@@ -115,7 +115,7 @@ export class Engine {
   private showDraft(actor: Actor, state: UserState, draft: Draft) {
     const description = draft.kind === 'delete' ? `Remove rule ${escapeCardValue(state.rules.find(r => r.id === draft.ruleId)?.name ?? '')}?` :
       `${draft.replaceId ? 'Replace existing rule with' : 'Proposed rules'}:\n\n${draft.rules!.map(r => `${escapeCardValue(r.name)}\n${escapeCardValue(r.condition)}\n${r.senders.length ? `Senders: ${r.senders.map(escapeCardValue).join(', ')}\n` : ''}Labels: ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'none'}; action: ${r.action}\nExamples: ${r.examples.map(escapeCardValue).join(' | ')}`).join('\n\n')}`;
-    return this.sendCard(actor, draft.kind === 'delete' ? 'Remove rule' : 'Rule proposal', `${description}\n\nNo rule changes until you approve.`, [{ label: 'Approve rule changes', action: 'approve_draft', value: draft.id, style: 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
+    return this.sendCard(actor, draft.kind === 'delete' ? 'Remove rule' : 'Rule proposal', `${description}\n\nNo rule changes until you approve.`, [{ label: 'Approve rule changes', action: 'approve_draft', value: draft.id, style: draft.kind === 'delete' ? 'danger' : 'primary' }, { label: 'Cancel', action: 'cancel_draft', value: draft.id }]);
   }
   private async action(actor: Actor, state: UserState, action: string, value: string) {
     if (action === 'menu_add_rule') return this.send(actor, 'Start your reply with mail and describe the condition, labels, action and exceptions. I will propose a rule with examples for your approval.');

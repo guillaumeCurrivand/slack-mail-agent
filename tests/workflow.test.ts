@@ -327,7 +327,7 @@ describe('Rules Cards', () => {
     expect(message.kind).toBe('Remove rule');
     expect(message.text).toContain('Urgent');
     expect(message.buttons).toEqual([
-      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'danger' },
       { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
     ]);
     expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);

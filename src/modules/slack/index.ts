@@ -171,7 +171,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     async menu(actor, page) {
       if (page.startsWith('channels_')) return channelMenu.page(actor, /^channels_(\d{1,6})$/.test(page) ? Number(page.slice(9)) : 0);
       return { kind: 'Slack Unanswered', text: 'Choose channels to manage your sources, or find unanswered messages. Shortcuts: slack channels, slack unanswered. Gmail is not required.',
-        buttons: [{ label: 'Find unanswered', action: 'find_unanswered', value: 'unanswered', bound: true }], links: [{ label: 'Choose channels', page: 'channels_0' }] };
+        buttons: [{ label: 'Find unanswered', action: 'find_unanswered', value: 'unanswered', bound: true, style: 'primary' }], links: [{ label: 'Choose channels', page: 'channels_0' }] };
     },
     async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); await database.query(slackResultsSchema); },
     async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); await savedResults.cleanup(); },
