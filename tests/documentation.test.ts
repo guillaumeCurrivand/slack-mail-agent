@@ -82,6 +82,196 @@ function interpreter(plan: unknown) {
   return provider;
 }
 
+it('counts distinct Projects with Technology and Host matches across separate Components through free queries', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create technology {"name":"React"}'), 'Confirm creation');
+    await h.click(await h.dm('documentation create host {"name":"Compute"}'), 'Confirm creation');
+    await h.click(await h.dm('documentation create project {"name":"Alpha"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Alpha')).match(/Identifier: ([\w-]+)/)![1]!;
+    for (const name of ['Web', 'Other web'])
+      await h.click(await h.dm(`documentation create component ${JSON.stringify({ name, projectId, technologies: ['React'] })}`), 'Confirm creation');
+    await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'API', projectId })}`), 'Confirm creation');
+    const componentId = bodyText(await h.dm('documentation component API')).match(/Identifier: ([\w-]+)/)![1]!;
+    for (const environment of ['production', 'staging'])
+      await h.click(await h.dm(`documentation create hosting ${JSON.stringify({ componentId, serviceId: 'Compute', environment })}`), 'Confirm creation');
+    const query = { target: 'project', filters: [{ kind: 'technology', selector: 'React' }, { kind: 'host', selector: 'Compute' }], scope: 'project' };
+    const answer = await h.dm(`documentation search ${JSON.stringify(query)}`);
+    expect(kind(answer)).toBe('Inventory answer');
+    expect(bodyText(answer)).toContain('Total matching Project records: 1');
+    expect(bodyText(answer)).toContain('Alpha');
+    expect(bodyText(await h.dm(`documentation count ${JSON.stringify(query)}`))).toContain('Total matching Project records: 1');
+    expect(bodyText(await h.dm(`documentation count ${JSON.stringify({ ...query, scope: 'same-component' })}`))).toContain('Total matching Project records: 0');
+    expect(bodyText(await h.dm(`documentation count ${JSON.stringify({ ...query, environment: 'production' })}`))).toContain('Total matching Project records: 1');
+    expect(bodyText(await h.dm(`documentation count ${JSON.stringify({ ...query, component: 'Web' })}`))).toContain('Total matching Project records: 0');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('pages complete current matches without paying again and restarts coverage after edits', async () => {
+  const h = await harness('documentation', 'TTEAM', { OPENAI_API_KEY: 'fake' });
+  try {
+    for (let i = 0; i < 10; i++)
+      await h.click(await h.dm(`documentation create project ${JSON.stringify({ name: `Project ${i}`, repositories: ['https://example.com/repo'] })}`), 'Confirm creation');
+    const provider = interpreter({ operation: 'inventory', selector: null, query: { target: 'project', result: 'list' } });
+    const first = await h.dm('documentation list all projects');
+    expect(bodyText(first)).toContain('Total matching Project records: 10');
+    expect(bodyText(first)).toContain('records 1–8 of 10');
+    expect(bodyText(first)).not.toContain('Project: Project 8');
+    expect(buttons(first).map(b => b.text.text)).toContain('Project 0');
+    expect(JSON.stringify(parts(first))).toContain('https://example.com/repo');
+    expect(kind(await h.click(first, 'Next', bob))).toBe('Menu unavailable');
+    expect(kind(await h.click(first, 'Next', { ...alice, channel: 'DOTHER' }))).toBe('Menu unavailable');
+    await h.restart();
+    const second = await h.click(first, 'Next');
+    expect(bodyText(second)).toContain('records 9–10 of 10');
+    expect(bodyText(second)).toContain('Project: Project 8');
+    expect(bodyText(second)).toContain('Project: Project 9');
+    expect(provider).toHaveBeenCalledTimes(2);
+    await h.click(await h.dm('documentation archive project Project 0', bob), 'Confirm archive', bob);
+    await h.enqueueClick(first, button(first, 'Next'));
+    h.fail('reject');
+    await expect(h.drain()).rejects.toThrow('Slack delivery was rejected');
+    const changed = await h.drain();
+    expect(bodyText(changed)).toContain('Inventory changed since the previous page');
+    expect(bodyText(changed)).toContain('records 1–8 of 9');
+    expect(bodyText(changed)).not.toContain('Project: Project 0');
+    const newLast = await h.click(changed, 'Next');
+    expect(bodyText(newLast)).toContain('records 9–9 of 9');
+    expect(provider).toHaveBeenCalledTimes(2);
+    expect(bodyText(await h.dm('documentation count {"target":"project","includeArchived":true}'))).toContain('Total matching Project records: 10');
+    expect(bodyText(await h.dm('documentation search {"target":"project","includeArchived":true}'))).toContain('Project 0 [Archived]');
+  } finally { await h.app.close(); }
+});
+
+it('queries every relationship direction and keeps company-wide Tools separate from Project usage', async () => {
+  const h = await harness();
+  try {
+    const create = async (kind: string, fields: unknown) => h.click(await h.dm(`documentation create ${kind} ${JSON.stringify(fields)}`), 'Confirm creation');
+    const id = async (kind: string, name: string) => bodyText(await h.dm(`documentation ${kind} ${name}`)).match(/Identifier: ([\w-]+)/)![1]!;
+    await create('project', { name: 'Alpha', aliases: ['A'] });
+    await create('project', { name: 'Unlinked' });
+    await create('technology', { name: 'React', category: 'Frontend' });
+    await create('host', { name: 'Compute' });
+    await create('host', { name: 'Other host' });
+    const projectId = await id('project', 'Alpha');
+    await create('component', { name: 'Web', projectId, type: 'frontend', technologies: ['React'] });
+    const componentId = await id('component', 'Web');
+    await create('hosting', { componentId, serviceId: 'Compute', environment: 'production', urls: ['https://example.com/app'] });
+    await create('hosting', { componentId, serviceId: 'Compute', environment: 'staging' });
+    await create('hosting', { componentId, serviceId: 'Other host', environment: 'other' });
+    await create('tool', { name: 'Shared', companyWide: true, projects: ['A'] });
+    await create('tool', { name: 'Company only', companyWide: true, projects: [] });
+    await create('tool', { name: 'Project only', companyWide: false, projects: ['Alpha'] });
+    await create('tool', { name: 'Unknown usage' });
+    const cases = [
+      ['project', 'technology', 'React', 1], ['project', 'host', 'Compute', 1], ['project', 'tool', 'Company only', 0],
+      ['project', 'tool', 'Shared', 1], ['component', 'project', 'A', 1], ['component', 'host', 'Compute', 1],
+      ['technology', 'project', 'Alpha', 1], ['technology', 'host', 'Compute', 1], ['technology', 'tool', 'Shared', 1],
+      ['host', 'technology', 'React', 2], ['host', 'project', 'Alpha', 2], ['host', 'tool', 'Shared', 2],
+      ['hosting', 'project', 'Alpha', 3], ['hosting', 'technology', 'React', 3], ['hosting', 'tool', 'Shared', 3],
+      ['tool', 'project', 'Alpha', 2], ['tool', 'host', 'Compute', 2], ['tool', 'technology', 'React', 2],
+    ] as const;
+    const titles = { project: 'Project', component: 'Component', technology: 'Technology', host: 'Host/service', hosting: 'Hosting entry', tool: 'Tool' };
+    for (const [target, relatedKind, selector, count] of cases) {
+      const answer = await h.dm(`documentation count ${JSON.stringify({ target, filters: [{ kind: relatedKind, selector }] })}`);
+      expect(bodyText(answer), `${target} via ${relatedKind}`).toContain(`Total matching ${titles[target]} records: ${count}`);
+    }
+    expect(bodyText(await h.dm('documentation count {"target":"tool","fields":[{"field":"companyWide","value":true}]}'))).toContain('Total matching Tool records: 2');
+    expect(bodyText(await h.dm('documentation count {"target":"tool","fields":[{"field":"companyWide","value":null}]}'))).toContain('Total matching Tool records: 1');
+    expect(bodyText(await h.dm('documentation count {"target":"host","fields":[{"field":"monthlyCost","value":0}]}'))).toContain('Total matching Host/service records: 0');
+    expect(bodyText(await h.dm('documentation count {"target":"host","fields":[{"field":"monthlyCost","value":null}]}'))).toContain('Total matching Host/service records: 2');
+    expect(bodyText(await h.dm('documentation count {"target":"hosting","filters":[{"kind":"host","selector":"Compute"}],"component":"Web"}'))).toContain('Total matching Hosting entry records: 2');
+    const filtered = await h.dm('documentation search {"target":"hosting","filters":[{"kind":"technology","selector":"React"}],"environment":"production"}');
+    expect(bodyText(filtered)).toContain('Total matching Hosting entry records: 1');
+    expect(JSON.stringify(parts(filtered))).toContain('https://example.com/app');
+    expect(bodyText(await h.dm('documentation count {"target":"component","fields":[{"field":"type","value":"frontend"}]}'))).toContain('Total matching Component records: 1');
+    await h.click(await h.dm('documentation archive technology React'), 'Confirm archive');
+    expect(kind(await h.dm('documentation count {"target":"project","filters":[{"kind":"technology","selector":"React"}]}'))).toBe('Filter not found');
+    expect(bodyText(await h.dm('documentation search {"target":"technology","includeArchived":true,"filters":[{"kind":"project","selector":"Alpha"}]}'))).toContain('React [Archived]');
+    const archivedReference = await h.dm('documentation search {"target":"project","includeArchived":true,"filters":[{"kind":"technology","selector":"React"}]}');
+    expect(bodyText(archivedReference)).toContain('Technology: React [Archived]');
+    expect(buttons(archivedReference).map(b => b.text.text)).toContain('React [Archived]');
+    expect(bodyText(await h.dm('documentation count {"target":"technology","filters":[{"kind":"project","selector":"Alpha"}]}'))).toContain('Total matching Technology records: 0');
+    const foreign = await harness('documentation', 'TOTHER');
+    try { expect(bodyText(await foreign.dm('documentation count {"target":"project"}', { ...alice, team: 'TOTHER' }))).toContain('Total matching Project records: 0'); }
+    finally { await foreign.app.close(); }
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('keeps every long-result identity visible and labels abbreviated fields with detail controls', async () => {
+  const h = await harness();
+  try {
+    for (let i = 0; i < 9; i++) await h.click(await h.dm(`documentation create project ${JSON.stringify({ name: `Long ${i}`, description: 'D'.repeat(1500), notes: 'N'.repeat(1500) })}`), 'Confirm creation');
+    const first = await h.dm('documentation search {"target":"project"}');
+    const text = bodyText(first);
+    for (let i = 0; i < 8; i++) expect(text).toContain(`Project: Long ${i}`);
+    expect(text).toContain('[abbreviated; open record details]');
+    expect(bodyText(await h.click(first, 'Long 7'))).toContain('D'.repeat(1500));
+    expect(bodyText(await h.click(first, 'Next'))).toContain('Project: Long 8');
+  } finally { await h.app.close(); }
+});
+
+it('keeps eight Tool identities visible when literal markup makes their escaped summaries exceed a Card', async () => {
+  const h = await harness();
+  try {
+    for (let i = 0; i < 9; i++) await h.click(await h.dm(`documentation create tool ${JSON.stringify({ name: `Tool ${i} ${'_'.repeat(110)}`, category: '_'.repeat(120), usage: '_'.repeat(1500), referent: '_'.repeat(1500), companyWide: true })}`), 'Confirm creation');
+    const first = await h.dm('documentation search {"target":"tool"}');
+    for (let i = 0; i < 8; i++) expect(bodyText(first)).toContain(`Tool: Tool ${i}`);
+    expect(bodyText(first)).toContain('abbreviated');
+    expect(bodyText(await h.click(first, 'Next'))).toContain('Tool: Tool 8');
+  } finally { await h.app.close(); }
+});
+
+it('clarifies ambiguous scopes and references and rejects unsupported or invented predicates', async () => {
+  const h = await harness('documentation', 'TTEAM', { OPENAI_API_KEY: 'fake' });
+  try {
+    await h.click(await h.dm('documentation create technology {"name":"React"}'), 'Confirm creation');
+    await h.click(await h.dm('documentation create host {"name":"Compute"}'), 'Confirm creation');
+    interpreter({ operation: 'inventory', selector: null, query: { target: 'project', filters: [{ kind: 'technology', selector: 'React' }, { kind: 'host', selector: 'Compute' }] } });
+    expect(kind(await h.dm('documentation which projects use React and Compute?'))).toBe('Clarify filter scope');
+    interpreter({ operation: 'inventory', selector: null, query: { target: 'project', fields: [{ field: 'password', value: 'secret' }] } });
+    expect(kind(await h.dm('documentation projects with password secret'))).toBe('Unsupported filter');
+    interpreter({ operation: 'inventory', selector: null, query: { target: 'project', filters: [{ kind: 'technology', selector: 'Invented' }] } });
+    expect(kind(await h.dm('documentation which projects use React?'))).toBe('Question unavailable');
+    interpreter({ operation: 'inventory', selector: null, query: { target: 'project', environment: 'invented' } });
+    expect(kind(await h.dm('documentation projects in production'))).toBe('Question unavailable');
+    expect(kind(await h.dm('documentation search {"target":"project","sql":"DELETE"}'))).toBe('Invalid inventory query');
+    expect(kind(await h.dm('documentation count {"target":"project","filters":[{"kind":"host","selector":"Missing"}]}'))).toBe('Filter not found');
+    for (let i = 0; i < 2; i++) await h.click(await h.dm('documentation create technology {"name":"Shared"}'), 'Confirm creation');
+    expect(kind(await h.dm('documentation count {"target":"project","filters":[{"kind":"technology","selector":"Shared"}]}'))).toBe('Ambiguous filter');
+    expect(bodyText(await h.dm('documentation technologies'))).toContain('3 Technologies');
+  } finally { await h.app.close(); }
+});
+
+it('keeps interpreted counts and private Project follow-ups grounded while free queries survive exhausted budget', async () => {
+  const h = await harness('documentation', 'TTEAM', { OPENAI_API_KEY: 'fake' });
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Alpha"}'), 'Confirm creation');
+    await h.dm('documentation project Alpha');
+    await h.click(await h.dm('documentation create tool {"name":"Shared","projects":["Alpha"],"companyWide":true}'), 'Confirm creation');
+    const provider = interpreter({ operation: 'inventory', selector: null, query: { target: 'tool', filters: [{ kind: 'project', selector: 'this project' }], result: 'count' } });
+    expect(bodyText(await h.dm('documentation how many tools does this project use?'))).toContain('Total matching Tool records: 1');
+    expect(provider).toHaveBeenCalledTimes(2);
+    expect(kind(await h.dm('documentation how many tools does this project use?', bob))).toBe('Choose a Project');
+    const generation = JSON.parse(String(provider.mock.calls[1]![1]?.body));
+    expect(generation.max_output_tokens).toBe(1536);
+    expect(generation.text.format.schema.required).toEqual(['operation', 'selector', 'query']);
+    expect(generation.text.format.schema.properties.query.anyOf[0].required).toContain('scope');
+    await sql.query("UPDATE documentation_project_context SET selected_at=now()-interval '30 minutes'");
+    expect(kind(await h.dm('documentation how many tools does this project use?'))).toBe('Choose a Project');
+    const budget = new Budget(sql);
+    await budget.reserve(alice, 10_000_000 - Math.round((await budget.usage()).charged * 1e6));
+    await budget.claimAlert(8_000_000);
+    const before = provider.mock.calls.filter(call => String(call[0]).endsWith('/responses')).length;
+    expect(kind(await h.dm('documentation how many tools does this project use?'))).toBe('Question unavailable');
+    expect(provider.mock.calls.filter(call => String(call[0]).endsWith('/responses')).length).toBe(before);
+    expect(bodyText(await h.dm('documentation count {"target":"tool"}'))).toContain('Total matching Tool records: 1');
+    expect(bodyText(await h.dm('documentation search {"target":"tool"}'))).toContain('Shared');
+  } finally { await h.app.close(); }
+});
+
 it('answers a prefixed hosting question from current records and saved sources without reading links', async () => {
   const h = await harness('documentation', 'TTEAM', { OPENAI_API_KEY: 'fake' });
   try {
@@ -152,7 +342,7 @@ it('retains an uncertain reservation and never repeats the provider call on rest
     await h.enqueueText('documentation where is Alpha hosted?');
     const job = (await sql.query("SELECT id FROM jobs WHERE status='queued'")).rows[0].id;
     expect(kind(await h.drain())).toBe('Question unavailable');
-    expect((await h.dm('budget')).body.text).toContain('documentation: $0.0000 recorded, $0.0009 reserved');
+    expect((await h.dm('budget')).body.text).toContain('documentation: $0.0000 recorded, $0.0025 reserved');
     await h.restart();
     await sql.query("UPDATE jobs SET status='queued' WHERE id=$1", [job]);
     await h.drain();

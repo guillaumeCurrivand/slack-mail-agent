@@ -8,11 +8,12 @@ import { documentationSchema, DocumentationStore } from './store.js';
 import { Lifecycle, lifecycleHelp, lifecycleButton, statusText, referenceLabel } from './lifecycle.js';
 import { Catalog, catalogHelp, componentHelp, hostHelp, hostingHelp, toolHelp, inventoryText, hostingEntryText } from './catalog.js';
 import { readDocumentationAIConfig, type QuestionAIConfig } from './ai.js';
-import { ProjectQuestions, questionSchema } from './questions.js';
+import { DocumentationQuestions, questionSchema } from './questions.js';
+import { inventoryQueryHelp } from './inventory-query.js';
 
 const literal = (value: string) => escapeCardValue(value);
-const questionHelp = 'Natural-language reads: documentation where is Alpha hosted?; documentation which technologies does this project use? Interpretation uses the shared AI budget; opening records and result controls is free. Project context is private and expires after 30 minutes. Filters/counts, natural-language mutations and import remain later slices.';
-const help = 'Use documentation projects [page] to browse (pages start at 0); documentation project <identifier, exact name or alias> for details; documentation history [identifier, exact name or alias] for shared or Project history.\nCreate one Project with documentation create project {"name":"Alpha","aliases":["A"],"description":"…","repositories":["https://example.com/repo"],"documentationLinks":["https://example.com/docs"],"notes":"…"}. Only name is required. Other fields remain Unknown when omitted. Names/aliases allow 120 characters, up to 20 aliases; description/notes allow 1,500 characters each; each link list allows 10 HTTP(S) URLs of up to 400 characters without credentials. A creation record or edit replacement object allows 5,000 JSON characters.\nEdit one Project with documentation edit project <identifier, exact name or alias> {"description":"Replacement","notes":null}. Supported fields: name, aliases, description, repositories, documentationLinks, notes. Only supplied fields change; null clears optional fields to Unknown. Names cannot be cleared. System identifiers, history and lifecycle metadata cannot be edited. Creation and editing need your separate confirmation within 24 hours. Edits overwrite selected fields even after intervening edits; unrelated fields remain. No AI or Gmail is needed. See the Project-question examples below; filters/counts, natural-language mutations and import are later slices.';
+const questionHelp = `Natural-language reads: documentation where is Alpha hosted?; documentation which technologies does this project use?; documentation which projects use React and Compute across any of their components?; documentation how many projects use React?; documentation which tools are company-wide? Interpretation uses the shared AI budget; opening records and result controls is free. Project context is private and expires after 30 minutes. Natural-language mutations and import remain later slices.\n${inventoryQueryHelp}`;
+const help = 'Use documentation projects [page] to browse (pages start at 0); documentation project <identifier, exact name or alias> for details; documentation history [identifier, exact name or alias] for shared or Project history.\nCreate one Project with documentation create project {"name":"Alpha","aliases":["A"],"description":"…","repositories":["https://example.com/repo"],"documentationLinks":["https://example.com/docs"],"notes":"…"}. Only name is required. Other fields remain Unknown when omitted. Names/aliases allow 120 characters, up to 20 aliases; description/notes allow 1,500 characters each; each link list allows 10 HTTP(S) URLs of up to 400 characters without credentials. A creation record or edit replacement object allows 5,000 JSON characters.\nEdit one Project with documentation edit project <identifier, exact name or alias> {"description":"Replacement","notes":null}. Supported fields: name, aliases, description, repositories, documentationLinks, notes. Only supplied fields change; null clears optional fields to Unknown. Names cannot be cleared. System identifiers, history and lifecycle metadata cannot be edited. Creation and editing need your separate confirmation within 24 hours. Edits overwrite selected fields even after intervening edits; unrelated fields remain. No AI or Gmail is needed. See the Project-question examples below; inventory filters/counts are available below; natural-language mutations and import are later slices.';
 const fieldsText = inventoryText;
 const resourceLinks = (fields: ProjectFields) => [...(fields.repositories ?? []).map(url => ({ label: `Repository: ${url}`, url })), ...(fields.documentationLinks ?? []).map(url => ({ label: `Documentation: ${url}`, url }))];
 const recordPage = (destination: string, id: string) => `${destination}_${id}${['history', 'components'].includes(destination) ? '_0' : ''}`;
@@ -29,7 +30,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
   const store = new DocumentationStore(sql);
   const catalog = new Catalog(store);
   const lifecycle = new Lifecycle(store);
-  const questions = new ProjectQuestions(sql, aiConfig);
+  const questions = new DocumentationQuestions(sql, aiConfig);
   async function deliver(actor: Actor, eventId: string, message: AgentMessage, context: ModuleContext) {
     if (!await store.claimDelivery(actor, eventId)) return;
     try { await context.messenger.send(actor, { ...message, buttons: [...(message.buttons ?? []), menuButton] }); }
@@ -132,6 +133,14 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       }
       if (payload.type !== 'text') return deliver(actor, eventId, { kind: 'Documentation help', text: help }, context);
       const text = String(payload.text ?? '').trim();
+      const query = /^(search|count)\s+([\s\S]+)$/i.exec(text);
+      if (query) {
+        let value: unknown;
+        try { value = JSON.parse(query[2]!); }
+        catch { return deliver(actor, eventId, { kind: 'Invalid inventory query', text: inventoryQueryHelp }, context); }
+        const result = await questions.structured(actor, value, query[1]!.toLowerCase() === 'count' ? 'count' : 'list', eventId);
+        return typeof result === 'string' ? show(result) : deliver(actor, eventId, result, context);
+      }
       if (/^edit project\s/i.test(text)) {
         const saved = await store.request(actor, eventId);
         let proposal = saved;

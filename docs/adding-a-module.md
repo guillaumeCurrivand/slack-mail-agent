@@ -30,7 +30,7 @@ Core records posted menu identities against owner and DM, then validates those r
 
 ## State and retries
 
-Documentation Project questions own constrained interpretation, attempt/reservation/plan checkpoints, private candidate choices and 30-minute Project identity context inside the Module. Inventory text never enters interpretation; rendering rereads workspace records without another paid step. Result controls and retries reuse saved plans, never redispatch uncertain paid attempts. Context/choice ownership includes the User and DM and cannot affect typed prefix routing. See [ticket 07](documentation.md#delivered-locally--ticket-07).
+Documentation questions own constrained interpretation, attempt/reservation/plan checkpoints, private candidate choices and 30-minute Project identity context inside the Module. Inventory text never enters interpretation; rendering rereads workspace records without another paid step. Result controls and retries reuse saved plans, never redispatch uncertain paid attempts. Context/choice ownership includes the User and DM and cannot affect typed prefix routing. Inventory queries resolve exact references to stable identifiers and compute page records/counts from one SQL statement; changed inventory restarts coverage with a visible notice. See [ticket 07](documentation.md#delivered-locally--ticket-07) and [ticket 08](documentation.md#delivered-locally--ticket-08).
 
 Own the module's tables, domain types, connection credentials, conversation history, and retention policy. Prefix new table names with the module ID. Scope every user-state lookup and update to `ownerKey(actor)`; do not read another module's state. The mail module retains its original `users` and `oauth_states` table names to preserve existing installations.
 

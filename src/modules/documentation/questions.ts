@@ -8,6 +8,7 @@ import { interpretQuestion, questionPlan, type QuestionAIConfig, type QuestionPl
 import { inventoryText, hostingEntryText } from './catalog.js';
 import { referenceLabel, statusText } from './lifecycle.js';
 import { DocumentationStore } from './store.js';
+import { InventoryQueries, inventoryQuery, inventoryQueryHelp, type InventoryQuery } from './inventory-query.js';
 
 export const questionSchema = `
 CREATE TABLE IF NOT EXISTS documentation_project_context (
@@ -20,11 +21,31 @@ CREATE TABLE IF NOT EXISTS documentation_questions (
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(owner,event_id)
 );`;
 type SavedQuestion = { id: string; status: string; plan: QuestionPlan | null; project_id: string | null; candidates: string[] | null; created_at: Date | string };
-const fallback = 'Natural-language interpretation is unavailable. Free paths remain available: Menu → Documentation; documentation projects; documentation project <identifier, exact name or alias>; documentation help for structured editing; documentation history. Saved links have not been read.';
+const fallback = `Natural-language interpretation is unavailable. Free paths remain available: Menu → Documentation; documentation projects; documentation project <identifier, exact name or alias>; documentation help for structured editing; documentation history. Saved links have not been read.\n${inventoryQueryHelp}`;
 const literal = escapeCardValue;
-export class ProjectQuestions {
+export class DocumentationQuestions {
   private store: DocumentationStore;
   constructor(private sql: Sql, private config: QuestionAIConfig) { this.store = new DocumentationStore(sql); }
+  async structured(actor: Actor, value: unknown, result: 'list' | 'count', eventId: string): Promise<string | MenuPage> {
+    const existing = (await this.sql.query('SELECT id FROM documentation_questions WHERE owner=$1 AND channel=$2 AND event_id=$3', [ownerKey(actor), actor.channel, eventId])).rows[0];
+    if (existing) return `question_${existing.id}_0`;
+    const parsed = inventoryQuery.safeParse(value);
+    if (!parsed.success) return { kind: 'Invalid inventory query', text: inventoryQueryHelp };
+    const query = { ...parsed.data, result };
+    const validated = await new InventoryQueries(this.sql).validate(actor, query);
+    if ('kind' in validated) return validated;
+    const id = uid();
+    await this.sql.query(`INSERT INTO documentation_questions(id,team,owner,channel,event_id,status,plan) VALUES($1,$2,$3,$4,$5,'validated',$6)`,
+      [id, actor.team, ownerKey(actor), actor.channel, eventId, JSON.stringify({ operation: 'inventory', selector: null, query: validated })]);
+    return `question_${id}_0`;
+  }
+  private async validateInventory(actor: Actor, saved: SavedQuestion, query: InventoryQuery): Promise<string | MenuPage> {
+    if (saved.status === 'validated') return `question_${saved.id}_0`;
+    const validated = await new InventoryQueries(this.sql).validate(actor, query);
+    if ('kind' in validated) return validated;
+    await this.sql.query("UPDATE documentation_questions SET plan=$2,status='validated' WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5", [saved.id, JSON.stringify({ operation: 'inventory', selector: null, query: validated }), actor.team, ownerKey(actor), actor.channel]);
+    return `question_${saved.id}_0`;
+  }
   async remember(actor: Actor, projectId: string) {
     await this.sql.query(`INSERT INTO documentation_project_context(owner,channel,team,project_id) VALUES($1,$2,$3,$4)
       ON CONFLICT(owner,channel) DO UPDATE SET project_id=excluded.project_id,selected_at=now()`, [ownerKey(actor), actor.channel, actor.team, projectId]);
@@ -53,8 +74,17 @@ export class ProjectQuestions {
       }
     }
     const plan = questionPlan.parse(saved.plan);
-    if (plan.operation === 'clarify') return { kind: 'Clarify question', text: 'Which Project and relationship? Ask documentation where is <Project> hosted? or documentation which technologies does <Project> use? Nothing has been selected.' };
-    if (plan.operation === 'unsupported') return { kind: 'Unsupported question', text: 'Ask where one Project is hosted or which Technologies it uses. Filters, counts and natural-language mutations are later slices. Use documentation help for free structured commands.' };
+    if (plan.operation === 'inventory' && plan.query) {
+      const query = plan.query;
+      if (saved.status !== 'validated' && query.filters.some(filter => filter.kind === 'project' && filter.selector === 'this project')) {
+        const projectId = (await this.sql.query(`SELECT project_id FROM documentation_project_context WHERE owner=$1 AND channel=$2 AND team=$3 AND selected_at>now()-interval '30 minutes' AND selected_at<=now()`, [ownerKey(actor), actor.channel, actor.team])).rows[0]?.project_id;
+        if (!projectId) return { kind: 'Choose a Project', text: 'Your private Project context is missing or expired. Repeat with an exact Project identifier.' };
+        query.filters = query.filters.map(filter => filter.kind === 'project' && filter.selector === 'this project' ? { ...filter, selector: projectId } : filter);
+      }
+      return this.validateInventory(actor, saved, query);
+    }
+    if (plan.operation === 'clarify') return { kind: 'Clarify question', text: `Which inventory records, relationships and exact filters? Specify whether combined matches may span Components. Nothing has been selected.\n${inventoryQueryHelp}` };
+    if (plan.operation === 'unsupported') return { kind: 'Unsupported question', text: `Use supported exact relationships, AND filters and distinct-record counts. Natural-language mutations and document contents are unavailable.\n${inventoryQueryHelp}` };
     if (!saved.project_id && !saved.candidates) {
       let projectId: string | undefined;
       if (plan.selector) {
@@ -91,13 +121,18 @@ export class ProjectQuestions {
     return `question_${saved.id}_0`;
   }
   async page(actor: Actor, destination: string): Promise<MenuPage | undefined> {
-    const match = /^question_([^_]+)_(\d{1,6})$/.exec(destination);
+    const match = /^question_([^_]+)_(?:([a-f0-9]{32})_)?(\d{1,6})$/.exec(destination);
     if (!match) return;
     const saved = await this.saved(actor, match[1]!);
     if (!saved?.plan) return { kind: 'Question unavailable', text: fallback };
+    const parsed = questionPlan.parse(saved.plan);
+    if (parsed.operation === 'inventory' && parsed.query && saved.status === 'validated') {
+      const result = await new InventoryQueries(this.sql).page(actor, parsed.query, Number(match[3]), match[2] ?? null);
+      return { ...result.content, links: [...this.pagination(`${saved.id}_${result.fingerprint}`, result.page, result.pages), ...(result.content.links ?? [])] };
+    }
     if (!saved.project_id) {
       if (new Date(saved.created_at).getTime() <= Date.now() - 30 * 60_000) return { kind: 'Choice expired', text: 'Repeat the documentation question to get fresh choices.' };
-      const ids = saved.candidates ?? [], pages = Math.max(1, Math.ceil(ids.length / 8)), page = Math.min(Number(match[2]), pages - 1);
+      const ids = saved.candidates ?? [], pages = Math.max(1, Math.ceil(ids.length / 8)), page = Math.min(Number(match[3]), pages - 1);
       const projects = (await Promise.all(ids.slice(page * 8, page * 8 + 8).map(id => this.store.project(actor, id)))).filter(p => p !== undefined);
       return { kind: 'Choose a Project', text: `Ambiguous Project. Choose by identifier. No Project context has been established.\nChoices page ${page + 1}/${pages}\n${projects.map(p => `${literal(referenceLabel(p.fields.name, p))} (${p.id})`).join('\n')}`,
         buttons: projects.map(p => ({ label: referenceLabel(p.fields.name, p), action: 'choose_question_project', value: `${saved.id}|${p.id}` })), links: this.pagination(saved.id, page, pages) };
@@ -109,7 +144,7 @@ export class ProjectQuestions {
     const resources = [...(project.fields.repositories ?? []).map(url => ({ label: 'Saved repository', url })), ...(project.fields.documentationLinks ?? []).map(url => ({ label: 'Saved documentation', url }))];
     let text = '', page = 0, pages = 1;
     if (plan.operation === 'hosting') {
-      const result = await this.store.projectHosting(actor, project.id, Number(match[2]));
+      const result = await this.store.projectHosting(actor, project.id, Number(match[3]));
       page = result.page; pages = result.pages;
       text = result.entries.map(entry => {
         links.push({ label: `Component: ${entry.component_name}`, page: `component_${entry.component_id}` });
@@ -120,7 +155,7 @@ export class ProjectQuestions {
       }).join('\n\n') || 'Components: Unknown\nHosting entries: Unknown';
     } else if (plan.operation === 'technologies') {
       const result = await this.sql.query(`SELECT id,fields,archived FROM documentation_records WHERE team=$1 AND kind='component' AND parent_id=$2 ORDER BY lower(fields->>'name'),id`, [actor.team, project.id]);
-      pages = Math.max(1, Math.ceil(result.rows.length / 8)); page = Math.min(Number(match[2]), pages - 1);
+      pages = Math.max(1, Math.ceil(result.rows.length / 8)); page = Math.min(Number(match[3]), pages - 1);
       const chunks: string[] = [];
       for (const component of result.rows.slice(page * 8, page * 8 + 8)) {
         links.push({ label: `Component: ${component.fields.name}`, page: `component_${component.id}` });

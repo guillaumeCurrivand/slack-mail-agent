@@ -6,6 +6,23 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Documentation inventory queries release candidate
+
+Ticket 08 adds constrained inventory questions, exact free `search`/`count` commands and current-data pagination. Keep the existing `ENABLED_MODULES` value with `documentation` enabled. No new required environment variables, secrets, permissions or manual migrations are needed. There are no schema changes; validated queries use the existing question table and inventory fingerprints travel in actor-bound page controls. Natural-language interpretation uses existing optional OpenAI credentials and shared spending safeguards. Preserve `.env`, the Compose project and the database volume; stop old workers through the existing deployment procedure.
+
+Deploy the reviewed `main` commit after it is pushed:
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+After readiness returns `{"ok":true}`, use consented synthetic Projects with multiple Components/environments and shared Technologies/Hosts/Tools. Compare `documentation search {"target":"project","filters":[{"kind":"technology","selector":"React"},{"kind":"host","selector":"Compute"}],"scope":"project"}` with `scope:"same-component"` and `documentation count` using the same JSON. Check exact component/environment qualifiers, total distinct counts beyond eight results, reverse relationships, saved links and Unknown values. Compare company-wide Tool fields with explicit Project filters. Page forward, edit or archive a record from another User, then page again: coverage must restart visibly at page one. Another User/DM must not use those controls. Missing/ambiguous selectors must request clarification. With AI unavailable, structured reads and paging must work. Evaluate live natural-language phrasing separately under the shared allowance; fake-provider tests do not establish model accuracy.
+
+This is a locally verified release candidate, not an observed production deployment. Real PostgreSQL locking checks require a disposable `TEST_DATABASE_URL`; live Slack/model evaluation, import and authority transition remain separate work.
+
 ## Update and restart
 
 Run this in Bash on the production server, as the account that owns the checkout and can run Docker. PostgreSQL must already be running. The host needs Git, Docker Compose, and curl **7.71.0 or newer** (check with `curl --version`). The readiness check uses [`--retry-all-errors`](https://curl.se/docs/manpage.html#--retry-all-errors) to retry connection resets as well as refused connections while Node starts behind Docker's published port. The checkout must be clean and on `main`; the checks stop the procedure if local changes need attention. Preserve the existing `.env`, particularly `ENCRYPTION_KEY` and database credentials.
