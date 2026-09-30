@@ -13,6 +13,7 @@ CREATE TABLE IF NOT EXISTS documentation_confirmations (
 ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS operation text NOT NULL DEFAULT 'create';
 ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS outcome text;
 ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS record_kind text NOT NULL DEFAULT 'project';
+ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'Slack structured';
 CREATE TABLE IF NOT EXISTS documentation_projects (
  team text NOT NULL, id text NOT NULL, fields jsonb NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(team,id)
@@ -63,11 +64,11 @@ type Confirmation = { id: string; target_id: string; fields: InventoryValues; re
 const confirmationColumns = 'id,target_id,fields,record_kind,operation,outcome,created_at,applied_at';
 export class DocumentationStore {
   constructor(private sql: Sql) {}
-  async proposeLifecycle(actor: Actor, eventId: string, kind: 'project' | RecordKind, targetId: string, operation: 'archive' | 'restore'): Promise<Confirmation> {
-    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind)
-      VALUES($1,$2,$3,$4,$5,$6,'{}'::jsonb,now(),$7,$8)
+  async proposeLifecycle(actor: Actor, eventId: string, kind: 'project' | RecordKind, targetId: string, operation: 'archive' | 'restore', source = 'Slack structured'): Promise<Confirmation> {
+    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind,source)
+      VALUES($1,$2,$3,$4,$5,$6,'{}'::jsonb,now(),$7,$8,$9)
       ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${confirmationColumns}`,
-    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, targetId, operation, kind])).rows[0];
+    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, targetId, operation, kind, source])).rows[0];
   }
   async confirmLifecycle(actor: Actor, id: string, kind: 'project' | RecordKind, operation: 'archive' | 'restore') {
     const project = kind === 'project';
@@ -93,7 +94,7 @@ export class DocumentationStore {
       FROM eligible e WHERE c.id=e.id RETURNING c.*
     ) INSERT INTO ${history}(team,id,${recordColumns},actor,source,before_values,after_values,changed_at)
       SELECT c.team,c.id,c.target_id,${project ? '' : 'c.record_kind,'}$5,
-        CASE WHEN c.operation='archive' THEN 'Slack structured archive' ELSE 'Slack structured restore' END,
+        c.source || CASE WHEN c.operation='archive' THEN ' archive' ELSE ' restore' END,
         jsonb_build_object('archived',l.archived),jsonb_build_object('archived',$8::boolean),c.applied_at
       FROM finished c JOIN locked l ON l.team=c.team AND l.id=c.target_id WHERE c.outcome='applied'`,
     [id, actor.team, ownerKey(actor), actor.channel, actor.user, kind, operation, operation === 'archive']);
@@ -108,25 +109,25 @@ export class DocumentationStore {
       WHERE team=$1 AND archived ORDER BY kind,lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 8 OFFSET $2`, [actor.team, page * 8])).rows;
     return { records, total, pages, page };
   }
-  async propose(actor: Actor, eventId: string, fields: ProjectFields): Promise<Confirmation> {
-    const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at)
-      VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
-      RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, uid(), JSON.stringify(fields)]);
+  async propose(actor: Actor, eventId: string, fields: ProjectFields, source = 'Slack structured'): Promise<Confirmation> {
+    const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,source)
+      VALUES($1,$2,$3,$4,$5,$6,$7,now(),$8) ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
+      RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, uid(), JSON.stringify(fields), source]);
     return result.rows[0];
   }
-  async proposeEdit(actor: Actor, eventId: string, project: Project, fields: ProjectEdit): Promise<Confirmation> {
-    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation)
-      VALUES($1,$2,$3,$4,$5,$6,$7,now(),'edit') ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
-      RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, project.id, JSON.stringify(fields)])).rows[0];
+  async proposeEdit(actor: Actor, eventId: string, project: Project, fields: ProjectEdit, source = 'Slack structured'): Promise<Confirmation> {
+    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,source)
+      VALUES($1,$2,$3,$4,$5,$6,$7,now(),'edit',$8) ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
+      RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, project.id, JSON.stringify(fields), source])).rows[0];
   }
   async request(actor: Actor, eventId: string): Promise<Confirmation | undefined> {
     return (await this.sql.query(`SELECT ${confirmationColumns} FROM documentation_confirmations
       WHERE team=$1 AND owner=$2 AND channel=$3 AND request_id=$4`, [actor.team, ownerKey(actor), actor.channel, eventId])).rows[0];
   }
-  async proposeRecord(actor: Actor, eventId: string, kind: RecordKind, fields: InventoryValues, target?: InventoryRecord): Promise<Confirmation> {
+  async proposeRecord(actor: Actor, eventId: string, kind: RecordKind, fields: InventoryValues, target?: InventoryRecord, source = 'Slack structured'): Promise<Confirmation> {
     if (!validSavedFields(kind, target ? 'edit' : 'create', fields)) throw new Error('Invalid inventory fields');
-    const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind)
-      SELECT $1,$2,$3,$4,$5,$6,$7,now(),$8,$9
+    const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind,source)
+      SELECT $1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$13
       WHERE ($8='create' OR EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND id=$6 AND kind=$9))
         AND ($9 IN ('technology','host') OR ($9='tool' AND
           (SELECT count(*) FROM documentation_projects WHERE team=$2
@@ -139,7 +140,7 @@ export class DocumentationStore {
           OR ($9='hosting' AND EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND kind='component' AND id=$11)
             AND EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND kind='host' AND id=$12)))
       ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${confirmationColumns}`,
-    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, target?.id ?? uid(), JSON.stringify(fields), target ? 'edit' : 'create', kind, fields.projectId ?? target?.fields.projectId ?? null, fields.componentId ?? target?.fields.componentId ?? null, fields.serviceId ?? target?.fields.serviceId ?? null]);
+    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, target?.id ?? uid(), JSON.stringify(fields), target ? 'edit' : 'create', kind, fields.projectId ?? target?.fields.projectId ?? null, fields.componentId ?? target?.fields.componentId ?? null, fields.serviceId ?? target?.fields.serviceId ?? null, source]);
     if (!result.rows.length) throw new Error('Inventory target or references changed; submit a fresh request');
     return result.rows[0];
   }
@@ -211,7 +212,7 @@ export class DocumentationStore {
       FROM validated e WHERE c.id=e.id AND NOT EXISTS(SELECT 1 FROM locked WHERE archived) RETURNING c.*
     ) INSERT INTO documentation_record_history(team,id,record_id,record_kind,actor,source,before_values,after_values,changed_at)
       SELECT c.team,c.id,c.target_id,c.record_kind,$5,
-        CASE WHEN c.operation='create' THEN 'Slack structured creation' ELSE 'Slack structured edit' END,
+        c.source || CASE WHEN c.operation='create' THEN ' creation' ELSE ' edit' END,
         CASE WHEN c.operation='create' THEN NULL ELSE d.before_values END,
         CASE WHEN c.operation='create' THEN c.fields ELSE d.after_values END,c.applied_at
       FROM finished c LEFT JOIN changes d ON d.team=c.team AND d.id=c.target_id WHERE c.outcome='applied'`,
@@ -234,12 +235,12 @@ export class DocumentationStore {
       UPDATE documentation_confirmations SET applied_at=now()
       WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND record_kind='project' AND operation='create' AND applied_at IS NULL
         AND created_at>now()-interval '24 hours' AND created_at<=now()
-      RETURNING id,team,target_id,fields,applied_at
+      RETURNING id,team,target_id,fields,applied_at,source
     ), created AS (
       INSERT INTO documentation_projects(team,id,fields,created_at)
       SELECT team,target_id,fields,applied_at FROM claimed RETURNING id
     ) INSERT INTO documentation_history(team,id,project_id,actor,source,before_values,after_values,changed_at)
-      SELECT team,id,target_id,$5,'Slack structured creation',NULL,fields,applied_at FROM claimed
+      SELECT team,id,target_id,$5,source || ' creation',NULL,fields,applied_at FROM claimed
       WHERE EXISTS(SELECT 1 FROM created)`, [id, actor.team, ownerKey(actor), actor.channel, actor.user]);
     return this.confirmation(actor, id);
   }
@@ -269,9 +270,9 @@ export class DocumentationStore {
       UPDATE documentation_confirmations c SET applied_at=clock_timestamp(),
         outcome=CASE WHEN NOT EXISTS(SELECT 1 FROM locked) THEN 'missing'
           WHEN EXISTS(SELECT 1 FROM edited) THEN 'applied' ELSE 'satisfied' END
-      FROM eligible e WHERE c.id=e.id AND NOT EXISTS(SELECT 1 FROM locked WHERE archived) RETURNING c.id,c.team,c.target_id,c.applied_at,c.outcome
+      FROM eligible e WHERE c.id=e.id AND NOT EXISTS(SELECT 1 FROM locked WHERE archived) RETURNING c.id,c.team,c.target_id,c.applied_at,c.outcome,c.source
     ) INSERT INTO documentation_history(team,id,project_id,actor,source,before_values,after_values,changed_at)
-      SELECT c.team,c.id,c.target_id,$5,'Slack structured edit',d.before_values,d.after_values,c.applied_at
+      SELECT c.team,c.id,c.target_id,$5,c.source || ' edit',d.before_values,d.after_values,c.applied_at
       FROM finished c JOIN changes d ON d.team=c.team AND d.id=c.target_id WHERE c.outcome='applied'`,
     [id, actor.team, ownerKey(actor), actor.channel, actor.user]);
     return this.confirmation(actor, id);

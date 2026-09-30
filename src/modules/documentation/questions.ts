@@ -9,6 +9,7 @@ import { inventoryText, hostingEntryText } from './catalog.js';
 import { referenceLabel, statusText } from './lifecycle.js';
 import { DocumentationStore } from './store.js';
 import { InventoryQueries, inventoryQuery, inventoryQueryHelp, type InventoryQuery } from './inventory-query.js';
+import { resolveMutation, type ResolvedMutation } from './mutations.js';
 
 export const questionSchema = `
 CREATE TABLE IF NOT EXISTS documentation_project_context (
@@ -19,13 +20,18 @@ CREATE TABLE IF NOT EXISTS documentation_questions (
  id text PRIMARY KEY, team text NOT NULL, owner text NOT NULL, channel text NOT NULL, event_id text NOT NULL,
  status text NOT NULL DEFAULT 'started', reservation_id text, plan jsonb, project_id text, candidates jsonb,
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(owner,event_id)
-);`;
-type SavedQuestion = { id: string; status: string; plan: QuestionPlan | null; project_id: string | null; candidates: string[] | null; created_at: Date | string };
+);
+ALTER TABLE documentation_questions ADD COLUMN IF NOT EXISTS resolved_command text;`;
+type SavedQuestion = { id: string; status: string; plan: QuestionPlan | null; project_id: string | null; candidates: string[] | null; created_at: Date | string; resolved_command: string | null };
 const fallback = `Natural-language interpretation is unavailable. Free paths remain available: Menu → Documentation; documentation projects; documentation project <identifier, exact name or alias>; documentation help for structured editing; documentation history. Saved links have not been read.\n${inventoryQueryHelp}`;
 const literal = escapeCardValue;
 export class DocumentationQuestions {
   private store: DocumentationStore;
   constructor(private sql: Sql, private config: QuestionAIConfig) { this.store = new DocumentationStore(sql); }
+  async source(actor: Actor, eventId: string): Promise<string> {
+    const saved = (await this.sql.query("SELECT id FROM documentation_questions WHERE team=$1 AND owner=$2 AND channel=$3 AND event_id=$4 AND plan->>'operation'='mutation'", [actor.team, ownerKey(actor), actor.channel, eventId])).rows[0];
+    return saved ? 'Slack natural-language' : 'Slack structured';
+  }
   async structured(actor: Actor, value: unknown, result: 'list' | 'count', eventId: string): Promise<string | MenuPage> {
     const existing = (await this.sql.query('SELECT id FROM documentation_questions WHERE owner=$1 AND channel=$2 AND event_id=$3', [ownerKey(actor), actor.channel, eventId])).rows[0];
     if (existing) return `question_${existing.id}_0`;
@@ -54,7 +60,7 @@ export class DocumentationQuestions {
     return (await this.sql.query(`SELECT * FROM documentation_questions WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4
       AND created_at>=now()-interval '30 days'`, [id, actor.team, ownerKey(actor), actor.channel])).rows[0];
   }
-  async ask(actor: Actor, question: string, eventId: string, context: ModuleContext): Promise<string | MenuPage> {
+  async ask(actor: Actor, question: string, eventId: string, context: ModuleContext): Promise<string | MenuPage | ResolvedMutation> {
     const inserted = await this.sql.query(`INSERT INTO documentation_questions(id,team,owner,channel,event_id) VALUES($1,$2,$3,$4,$5)
       ON CONFLICT(owner,event_id) DO NOTHING RETURNING id`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId]);
     let saved: SavedQuestion = (await this.sql.query('SELECT * FROM documentation_questions WHERE owner=$1 AND channel=$2 AND event_id=$3', [ownerKey(actor), actor.channel, eventId])).rows[0];
@@ -74,6 +80,15 @@ export class DocumentationQuestions {
       }
     }
     const plan = questionPlan.parse(saved.plan);
+    if (plan.operation === 'mutation' && plan.mutation) {
+      if (saved.resolved_command) return { command: saved.resolved_command, projectId: saved.project_id };
+      const result = await resolveMutation(this.sql, actor, plan.mutation, question);
+      if ('command' in result) {
+        await this.sql.query("UPDATE documentation_questions SET resolved_command=$2,project_id=$3,status='validated' WHERE id=$1", [saved.id, result.command, result.projectId]);
+        if (result.projectId) await this.remember(actor, result.projectId);
+      }
+      return result;
+    }
     if (plan.operation === 'inventory' && plan.query) {
       const query = plan.query;
       if (saved.status !== 'validated' && query.filters.some(filter => filter.kind === 'project' && filter.selector === 'this project')) {
@@ -83,8 +98,8 @@ export class DocumentationQuestions {
       }
       return this.validateInventory(actor, saved, query);
     }
-    if (plan.operation === 'clarify') return { kind: 'Clarify question', text: `Which inventory records, relationships and exact filters? Specify whether combined matches may span Components. Nothing has been selected.\n${inventoryQueryHelp}` };
-    if (plan.operation === 'unsupported') return { kind: 'Unsupported question', text: `Use supported exact relationships, AND filters and distinct-record counts. Natural-language mutations and document contents are unavailable.\n${inventoryQueryHelp}` };
+    if (plan.operation === 'clarify') return { kind: 'Clarify question', text: `Choose one individual-record operation, an exact target and explicit replacement values or required creation fields. Missing catalog records need separate confirmed creation. For reads, specify exact relationships and filters, including Component scope. Nothing has been selected or changed. Use documentation help for the fixed field set.\n${inventoryQueryHelp}` };
+    if (plan.operation === 'unsupported') return { kind: 'Unsupported question', text: `Use the fixed business fields and one record per confirmed operation. Bulk changes, schema changes, secrets, permanent deletion, dedicated history-value restoration and document contents are unavailable. Account/access information is limited to references, instructions and password-manager links. Use documentation help for the fixed field set.\n${inventoryQueryHelp}` };
     if (!saved.project_id && !saved.candidates) {
       let projectId: string | undefined;
       if (plan.selector) {

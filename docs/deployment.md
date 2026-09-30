@@ -6,6 +6,23 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Documentation natural-language changes release candidate
+
+Ticket 09 on `main` adds conversational individual-record changes through existing confirmation/commit/history paths. Keep the existing `ENABLED_MODULES` value with `documentation` enabled. No new required environment variables, secrets, Slack/Google permissions or manual migration commands are needed. Natural-language interpretation uses existing optional `OPENAI_API_KEY` and the reviewed pinned `OPENAI_MODEL`; structured alternatives remain free. Startup idempotently adds `resolved_command` to `documentation_questions` and `source` to `documentation_confirmations` (old rows retain `Slack structured` attribution). Stop old workers through the existing deployment script before starting this version; preserve `.env`, the Compose project and database volume.
+
+Deploy the reviewed `main` commit after it is pushed:
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+After readiness returns `{"ok":true}`, use the [consented/synthetic evaluation cases](testing/documentation-natural-language-changes.md) under the existing shared allowance. Inspect each proposal's exact target, selected values and resolved relationship identifiers before separately confirming one synthetic record. Check all six kinds across create/edit/archive/restore, Record details/History controls, cross-User/DM rejection, missing/ambiguous references and explicit context expiry. Verify Alice's selected field overwrites Bob's intervening selected-field edit, preserves unrelated fields, logs actual prior values and cannot reapply after a later edit. Archived edits require separate restoration within the original window. Confirm navigation and replay do not pay again, unavailable interpretation offers free alternatives, and history accurately distinguishes natural-language sources. Do not use real production mutations to measure interpretation quality.
+
+This is a local release candidate, not an observed production deployment. Live Slack/OpenAI quality and disposable real PostgreSQL locking tests remain release checks; fake-provider tests do not establish model accuracy. Import and authority transition remain separate work.
+
 ## Documentation inventory queries release candidate
 
 Ticket 08 adds constrained inventory questions, exact free `search`/`count` commands and current-data pagination. Keep the existing `ENABLED_MODULES` value with `documentation` enabled. No new required environment variables, secrets, permissions or manual migrations are needed. There are no schema changes; validated queries use the existing question table and inventory fingerprints travel in actor-bound page controls. Natural-language interpretation uses existing optional OpenAI credentials and shared spending safeguards. Preserve `.env`, the Compose project and the database volume; stop old workers through the existing deployment procedure.

@@ -2,7 +2,7 @@ import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
 import { recordSchemas, recordTitle, recordName, validSavedFields, parseEditRequest, type InventoryRecord, type InventoryValues, type RecordKind } from './domain.js';
-import { lifecycleButton, statusText, referenceLabel } from './lifecycle.js';
+import { lifecycleButton, statusText, referenceLabel, outcomeButtons } from './lifecycle.js';
 import type { DocumentationStore } from './store.js';
 
 const literal = escapeCardValue;
@@ -116,7 +116,7 @@ export class Catalog {
     return undefined;
   }
   async handle(actor: Actor, payload: Record<string, unknown>, eventId: string,
-    deliver: (message: AgentMessage) => Promise<void>, show: (destination: string) => Promise<void>): Promise<boolean> {
+    deliver: (message: AgentMessage) => Promise<void>, show: (destination: string) => Promise<void>, source = 'Slack structured'): Promise<boolean> {
     const action = /^confirm_(create|edit)_(technology|component|host|hosting|tool)$/.exec(String(payload.action));
     if (payload.type === 'action' && action) {
       const operation = action[1] as 'create' | 'edit', kind = action[2] as RecordKind, label = title(kind);
@@ -125,6 +125,7 @@ export class Catalog {
       else if (saved.outcome === 'archived') await deliver({ kind: 'Edit requires restoration', text: `${label} ${saved.target_id} is archived. Explicitly restore it, then retry this confirmation within its original 24-hour window.` });
       else if (!saved.applied_at) await deliver({ kind: 'Confirmation expired', text: `Submit a fresh documentation ${operation} ${kind} request.` });
       else await deliver({ kind: saved.outcome === 'missing' || saved.outcome === 'invalid' ? `${label} ${operation} failed` : saved.outcome === 'satisfied' ? 'Edit already satisfied' : `${label} ${operation === 'create' ? 'created' : 'edited'}`,
+        buttons: outcomeButtons(saved.id),
         text: `Saved outcome for ${label}: ${saved.target_id}\n${saved.outcome === 'missing' || saved.outcome === 'invalid' ? 'The target, fields or references were invalid or unavailable at confirmation. Nothing was changed.' : saved.outcome === 'satisfied' ? 'The selected fields already matched; no change or history entry was added.' : `Approved values saved once:\n${inventoryText(saved.fields)}\nLater edits may have changed current values.`}\nUse documentation ${lookupCommand(kind)} ${saved.target_id} to inspect current values.` });
       return true;
     }
@@ -196,7 +197,7 @@ export class Catalog {
         if (!validSavedFields(kind, operation as 'create' | 'edit', fields)) {
           await deliver({ kind: `Invalid ${label}${operation === 'edit' ? ' edit' : ''}`, text: `The normalized fields and resolved identifiers exceed the allowed constraints.\n${helpFor(kind)}` }); return true;
         }
-        try { proposal = await this.store.proposeRecord(actor, eventId, kind, fields, target); }
+        try { proposal = await this.store.proposeRecord(actor, eventId, kind, fields, target, source); }
         catch (error) {
           if (!(error instanceof Error) || !error.message.startsWith('Inventory target or references changed')) throw error;
           await deliver({ kind: 'Relationships unavailable', text: error.message }); return true;
