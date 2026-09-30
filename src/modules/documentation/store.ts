@@ -42,9 +42,9 @@ ALTER TABLE documentation_records ADD COLUMN IF NOT EXISTS component_id text;
 ALTER TABLE documentation_records DROP CONSTRAINT IF EXISTS documentation_records_component_id_fkey;
 ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_component_id_fkey
  FOREIGN KEY(team,component_id) REFERENCES documentation_records(team,id);
-ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_kind_check CHECK(kind IN ('technology','component','host','hosting'));
+ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_kind_check CHECK(kind IN ('technology','component','host','hosting','tool'));
 ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_check CHECK(
- (kind IN ('technology','host') AND parent_id IS NULL AND component_id IS NULL) OR
+ (kind IN ('technology','host','tool') AND parent_id IS NULL AND component_id IS NULL) OR
  (kind='component' AND parent_id IS NOT NULL AND fields->>'projectId'=parent_id AND component_id IS NULL) OR
  (kind='hosting' AND parent_id IS NULL AND component_id IS NOT NULL AND fields->>'componentId'=component_id));
 CREATE INDEX IF NOT EXISTS documentation_record_history_lookup ON documentation_record_history(team,record_id,changed_at,id);
@@ -81,7 +81,11 @@ export class DocumentationStore {
     const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind)
       SELECT $1,$2,$3,$4,$5,$6,$7,now(),$8,$9
       WHERE ($8='create' OR EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND id=$6 AND kind=$9))
-        AND ($9 IN ('technology','host') OR ($9='component' AND EXISTS(SELECT 1 FROM documentation_projects WHERE team=$2 AND id=$10)
+        AND ($9 IN ('technology','host') OR ($9='tool' AND
+          (SELECT count(*) FROM documentation_projects WHERE team=$2
+            AND id IN (SELECT jsonb_array_elements_text(COALESCE(NULLIF($7::jsonb->'projects','null'::jsonb),'[]'::jsonb))))
+          =jsonb_array_length(COALESCE(NULLIF($7::jsonb->'projects','null'::jsonb),'[]'::jsonb)))
+          OR ($9='component' AND EXISTS(SELECT 1 FROM documentation_projects WHERE team=$2 AND id=$10)
           AND (SELECT count(*) FROM documentation_records WHERE team=$2 AND kind='technology'
             AND id IN (SELECT jsonb_array_elements_text(COALESCE(NULLIF($7::jsonb->'technologies','null'::jsonb),'[]'::jsonb))))
           =jsonb_array_length(COALESCE(NULLIF($7::jsonb->'technologies','null'::jsonb),'[]'::jsonb)))
@@ -130,8 +134,15 @@ export class DocumentationStore {
       WHERE c.record_kind='hosting' AND ((r.kind='component' AND r.id=(SELECT replacement->>'componentId' FROM planned))
         OR (r.kind='host' AND r.id=(SELECT replacement->>'serviceId' FROM planned)))
       ORDER BY r.id FOR KEY SHARE OF r
+    ), tool_projects AS MATERIALIZED (
+      SELECT p.id FROM documentation_projects p JOIN eligible c ON p.team=c.team
+      WHERE c.record_kind='tool' AND p.id IN
+        (SELECT jsonb_array_elements_text(COALESCE(NULLIF((SELECT replacement->'projects' FROM planned),'null'::jsonb),'[]'::jsonb)))
+      ORDER BY p.id FOR KEY SHARE OF p
     ), validated AS MATERIALIZED (
       SELECT c.*, (c.record_kind='technology' OR
+        (c.record_kind='tool' AND (SELECT count(*) FROM tool_projects)=
+          jsonb_array_length(COALESCE(NULLIF((SELECT replacement->'projects' FROM planned),'null'::jsonb),'[]'::jsonb))) OR
         (c.record_kind='host' AND ((SELECT replacement->'monthlyCost' FROM planned)='null'::jsonb
           OR (SELECT replacement->'currency' FROM planned)<>'null'::jsonb)) OR
         (c.record_kind='hosting' AND (SELECT count(*) FROM hosting_references)=2) OR
@@ -237,7 +248,7 @@ export class DocumentationStore {
   }
   async records(actor: Actor, kind: RecordKind, requestedPage = 0, selector: string | null = null, parentId: string | null = null, referenceId: string | null = null) {
     const filter = `team=$1 AND kind=$2 AND ($3::text IS NULL OR id=$3 OR lower(fields->>'name')=lower($3))
-      AND ($4::text IS NULL OR parent_id=$4 OR component_id=$4) AND ($5::text IS NULL OR fields->'technologies' @> jsonb_build_array($5::text) OR fields->>'serviceId'=$5)`;
+      AND ($4::text IS NULL OR parent_id=$4 OR component_id=$4) AND ($5::text IS NULL OR fields->'technologies' @> jsonb_build_array($5::text) OR fields->>'serviceId'=$5 OR fields->'projects' @> jsonb_build_array($5::text))`;
     const values = [actor.team, kind, selector, parentId, referenceId];
     const total = Number((await this.sql.query(`SELECT count(*) total FROM documentation_records WHERE ${filter}`, values)).rows[0].total);
     const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);

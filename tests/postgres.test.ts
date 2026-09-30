@@ -165,7 +165,7 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     expect((await text('documentation history Atomic edit')).text).toContain('History page 1/2');
   });
 
-  it.each(['technology', 'component', 'host', 'hosting'] as const)('serializes cross-User %s overwrites and concurrent confirmations with actual history', async kind => {
+  it.each(['technology', 'component', 'host', 'hosting', 'tool'] as const)('serializes cross-User %s overwrites and concurrent confirmations with actual history', async kind => {
     const alice = { team: `TCATALOG${kind}`, user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
     const { module, options, messenger, text, confirm } = documentationDispatch(pool, alice);
     await module.initialize!(pool); await module.initialize!(pool);
@@ -178,15 +178,15 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
       const service = await text('documentation create host {"name":"Parent service"}');
       await confirm(service); serviceId = service.text.match(/Host\/service: ([\w-]+)/)![1]!;
     }
-    const initial = kind === 'technology' ? { name: 'Shared', category: 'Initial', notes: 'Initial' }
+    const initial = kind === 'tool' ? { name: 'Shared', usage: 'Initial', projects: [parent], notes: 'Initial' } : kind === 'technology' ? { name: 'Shared', category: 'Initial', notes: 'Initial' }
       : kind === 'component' ? { name: 'Shared', projectId: parent, type: 'Initial', technologies: [] }
       : kind === 'host' ? { name: 'Shared', role: 'Initial', notes: 'Initial' }
       : { componentId, serviceId, environment: 'Initial', notes: 'Initial' };
-    const field = { technology: 'category', component: 'type', host: 'role', hosting: 'environment' }[kind];
+    const field = { technology: 'category', component: 'type', host: 'role', hosting: 'environment', tool: 'usage' }[kind];
     const lookup = kind === 'hosting' ? 'hosting-entry' : kind;
     const creation = await text(`documentation create ${kind} ${JSON.stringify(initial)}`);
     await Promise.all(Array.from({ length: 4 }, () => confirm(creation)));
-    const id = creation.text.match(/(?:Technology|Component|Host\/service|Hosting entry): ([\w-]+)/)![1]!;
+    const id = creation.text.match(/(?:Technology|Component|Host\/service|Hosting entry|Tool): ([\w-]+)/)![1]!;
     const a = await text(`documentation edit ${kind} ${id} ${JSON.stringify({ [field]: 'A' })}`);
     const b = await text(`documentation edit ${kind} ${id} ${JSON.stringify({ [field]: 'B', ...(kind === 'component' ? { name: 'Bob name' } : { notes: 'Bob notes' }) })}`, bob);
     const client = await pool.connect(); let pending: Promise<void> | undefined;

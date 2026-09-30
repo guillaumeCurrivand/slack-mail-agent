@@ -76,7 +76,7 @@ it('creates a shared Project only after its owner confirms and lets another User
   try {
     const main = await h.dm('menu');
     const menu = await h.click(main, 'Documentation');
-    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'Hosts/services', 'History', 'Help', 'Back to menu']);
+    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'Hosts/services', 'Tools', 'History', 'Help', 'Back to menu']);
     const proposal = await h.dm('documentation create project {"name":"Alpha"}');
     expect(kind(proposal)).toBe('Create Project confirmation');
     expect(bodyText(proposal)).toContain('description: Unknown');
@@ -90,6 +90,128 @@ it('creates a shared Project only after its owner confirms and lets another User
     expect(bodyText(history)).toContain('Source: Slack structured creation');
     expect(bodyText(history)).toContain('Before: No record');
     expect(bodyText(history)).toContain('name: Alpha');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('maintains company-wide Tools with descriptive referents, shared edits and actual overwrite history without AI', async () => {
+  const h = await harness();
+  try {
+    const proposal = await h.dm('documentation create tool {"name":"Slack","category":"Communication","companyWide":true,"referent":"Alice"}');
+    expect(kind(proposal)).toBe('Create Tool confirmation');
+    expect(bodyText(proposal)).toContain('usage: Unknown');
+    expect(bodyText(proposal)).toContain('projects: Unknown');
+    expect(bodyText(await h.dm('documentation tools', bob))).toContain('No Tools');
+    await h.click(proposal, 'Confirm creation');
+    const detail = await h.dm('documentation tool slack', bob);
+    const id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(bodyText(detail)).toContain('companyWide: true');
+    expect(bodyText(await h.click(detail, 'Edit', bob))).toContain(`documentation edit tool ${id}`);
+    const pending = await h.dm(`documentation edit tool ${id} {"name":"Slack Chat","usage":"Company chat","referent":null}`);
+    await h.click(await h.dm(`documentation edit tool ${id} {"usage":"Bob usage","notes":"Bob notes"}`, bob), 'Confirm edit', bob);
+    await h.click(pending, 'Confirm edit');
+    const current = bodyText(await h.dm(`documentation tool ${id}`, bob));
+    expect(current).toContain('name: Slack Chat'); expect(current).toContain('usage: Company chat');
+    expect(current).toContain('referent: Unknown'); expect(current).toContain('notes: Bob notes');
+    const history = await h.click(await h.click(await h.dm(`documentation history tool ${id}`, bob), 'Next', bob), 'Next', bob);
+    expect(bodyText(history)).toContain('usage: Bob usage'); expect(bodyText(history)).toContain('usage: Company chat');
+    expect(bodyText(history)).toContain('Actor: UALICE');
+    await h.click(await h.dm(`documentation edit tool ${id} {"usage":"Later"}`, bob), 'Confirm edit', bob);
+    await h.restart(); await h.click(pending, 'Confirm edit'); await h.click(proposal, 'Confirm creation');
+    expect(bodyText(await h.dm(`documentation tool ${id}`))).toContain('usage: Later');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('links a Tool to multiple existing Projects and keeps reciprocal navigation through renames', async () => {
+  const h = await harness();
+  try {
+    const ids: string[] = [];
+    for (const name of ['Alpha', 'Beta']) {
+      await h.click(await h.dm(`documentation create project ${JSON.stringify({ name, aliases: [name + ' alias'] })}`), 'Confirm creation');
+      ids.push(bodyText(await h.dm(`documentation project ${name}`)).match(/Identifier: ([\w-]+)/)![1]!);
+    }
+    const proposal = await h.dm('documentation create tool {"name":"Sentry","companyWide":true,"projects":["Alpha alias","Beta","Alpha"],"usage":"Also used by unmatched Gamma"}');
+    expect(bodyText(proposal)).toContain(`projects: ${JSON.stringify(ids)}`);
+    await h.click(proposal, 'Confirm creation');
+    const tool = await h.dm('documentation tool Sentry');
+    const toolId = bodyText(tool).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(bodyText(await h.click(tool, 'Alpha'))).toContain(`Identifier: ${ids[0]}`);
+    const tools = await h.click(await h.dm(`documentation project ${ids[1]}`, bob), 'Tools', bob);
+    expect(bodyText(tools)).toContain('Sentry');
+    expect(bodyText(await h.click(tools, 'Sentry', bob))).toContain(`Identifier: ${toolId}`);
+    await h.click(await h.dm(`documentation edit project ${ids[0]} {"name":"Alpha renamed"}`), 'Confirm edit');
+    await h.click(await h.dm(`documentation edit tool ${toolId} {"name":"Sentry renamed"}`, bob), 'Confirm edit', bob);
+    expect(buttons(await h.dm(`documentation tool ${toolId}`)).map(item => item.text.text)).toContain('Alpha renamed');
+    const linked = await h.click(await h.dm(`documentation project ${ids[0]}`), 'Tools');
+    expect(bodyText(linked)).toContain('Sentry renamed');
+    const detach = await h.dm(`documentation edit tool ${toolId} {"projects":[]}`);
+    await h.click(await h.dm(`documentation edit tool ${toolId} {"notes":"Bob notes"}`, bob), 'Confirm edit', bob);
+    await h.click(detach, 'Confirm edit');
+    expect(bodyText(await h.click(await h.dm(`documentation project ${ids[0]}`), 'Tools'))).toContain('No Tools');
+    const current = bodyText(await h.dm(`documentation tool ${toolId}`));
+    expect(current).toContain('companyWide: true'); expect(current).toContain('notes: Bob notes');
+    expect(current).toContain('projects: []');
+    expect(kind(await h.dm('documentation project Gamma'))).toBe('Project not found');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('requires exact existing Project references for Tools and rejects invalid fields without proposing a mutation', async () => {
+  const h = await harness(), foreign = await harness('documentation', 'TOTHER');
+  try {
+    for (let index = 0; index < 2; index++) await h.click(await h.dm('documentation create project {"name":"Same","aliases":["ambiguous"]}'), 'Confirm creation');
+    await foreign.click(await foreign.dm('documentation create project {"name":"Foreign"}', { ...alice, team: 'TOTHER' }), 'Confirm creation', { ...alice, team: 'TOTHER' });
+    const foreignId = bodyText(await foreign.dm('documentation project Foreign', { ...alice, team: 'TOTHER' })).match(/Identifier: ([\w-]+)/)![1]!;
+    for (const selector of ['Missing', foreignId]) {
+      const response = await h.dm(`documentation create tool ${JSON.stringify({ name: 'Rejected', projects: [selector] })}`);
+      expect(kind(response)).toBe('Project not found');
+      expect(bodyText(response)).toContain('separate confirmed operation');
+    }
+    expect(kind(await h.dm('documentation create tool {"name":"Rejected","projects":["ambiguous"]}'))).toBe('Ambiguous Project reference');
+    const choice = await h.click(await h.dm('documentation project Same'), 'Same');
+    const projectId = bodyText(choice).match(/Identifier: ([\w-]+)/)![1]!;
+    const pending = await h.dm(`documentation create tool ${JSON.stringify({ name: 'Linked', projects: [projectId] })}`);
+    await h.click(await h.dm(`documentation edit project ${projectId} {"name":"Renamed"}`, bob), 'Confirm edit', bob);
+    await h.click(pending, 'Confirm creation');
+    expect(buttons(await h.dm('documentation tool Linked')).map(item => item.text.text)).toContain('Renamed');
+    for (const fields of [{ name: null }, { name: '' }, { id: projectId }, { actor: 'Alice' }, { archived: true }, { companyWide: 'yes' }, { projects: [''] }, { projects: Array(21).fill(projectId) }, { category: 'x'.repeat(121) }, { usage: 'x'.repeat(1501) }, { referent: 'x'.repeat(1501) }, {}, [{ name: 'A' }]]) {
+      expect(kind(await h.dm(`documentation edit tool Linked ${JSON.stringify(fields)}`))).toBe('Invalid Tool edit');
+    }
+    expect(kind(await h.dm('documentation edit tool Linked {"projects":["Missing"]}'))).toBe('Project not found');
+    expect(bodyText(await h.dm('documentation tools'))).toContain('1 Tools');
+    expect(bodyText(await h.dm('documentation projects'))).toContain('2 Projects');
+    expect(bodyText(await h.dm('documentation history tool Linked'))).toContain('History page 1/1');
+    // Unknown free text must never become an inferred Project relationship.
+    await h.click(await h.dm('documentation create tool {"name":"Text only","usage":"Same, Missing and Foreign"}'), 'Confirm creation');
+    expect(bodyText(await h.dm('documentation tool Text only'))).toContain('projects: Unknown');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); await foreign.app.close(); }
+});
+
+it('paginates Tools, ambiguous exact lookups, Project relationships and shared history using private controls', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+    const toolMenu = await h.click(await h.click(await h.dm('menu'), 'Documentation'), 'Tools');
+    expect(bodyText(await h.click(toolMenu, 'Add Tool'))).toContain('documentation create tool');
+    for (let index = 0; index < 9; index++) await h.click(await h.dm(`documentation create tool ${JSON.stringify({ name: 'Same', projects: [projectId] })}`), 'Confirm creation');
+    const list = await h.dm('documentation tools', bob);
+    expect(bodyText(list)).toContain('page 1/2 · 9 Tools');
+    expect(kind(await h.click(list, 'Next'))).toBe('Menu unavailable');
+    expect(bodyText(await h.click(list, 'Next', bob))).toContain('page 2/2');
+    const choices = await h.dm('documentation tool Same');
+    expect(kind(choices)).toBe('Choose a Tool');
+    const selected = await h.click(await h.click(choices, 'Next'), 'Same');
+    const id = bodyText(selected).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(kind(await h.dm('documentation edit tool Same {"usage":"Do not guess"}'))).toBe('Ambiguous Tool edit');
+    expect(kind(await h.click(await h.click(await h.dm('documentation history tool Same'), 'Next'), 'Same'))).toBe('Tool history');
+    expect(bodyText(await h.click(await h.click(await h.dm(`documentation project ${projectId}`), 'Tools'), 'Next'))).toContain('page 2/2');
+    expect(bodyText(await h.dm('documentation tools 999'))).toContain('page 2/2');
+    const history = await h.dm('documentation history');
+    expect(bodyText(await h.click(history, 'Next'))).toContain('Tool identifier:');
+    expect(bodyText(await h.dm(`documentation tool ${id}`, bob))).toContain(`Identifier: ${id}`);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); }
 });
@@ -407,14 +529,14 @@ it('paginates catalog, Component and ambiguity navigation privately and includes
   } finally { await h.app.close(); }
 });
 
-it.each(['technology', 'component', 'host', 'hosting'] as const)('keeps %s approvals actor/DM/workspace-bound, expiring, atomic and recoverable without repeating effects', async recordKind => {
+it.each(['technology', 'component', 'host', 'hosting', 'tool'] as const)('keeps %s approvals actor/DM/workspace-bound, expiring, atomic and recoverable without repeating effects', async recordKind => {
   const h = await harness(), foreign = await harness('documentation', 'TOTHER');
   try {
     await new Budget(sql, 10_000_000, 10_000_000, 'mail').reserve(alice, 10_000_000);
     await h.dm('budget');
     await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
     const projectId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
-    const label = { technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry' }[recordKind];
+    const label = { technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry', tool: 'Tool' }[recordKind];
     const lookupKind = recordKind === 'hosting' ? 'hosting-entry' : recordKind;
     let componentId = '', serviceId = '';
     if (recordKind === 'hosting') {
@@ -423,7 +545,7 @@ it.each(['technology', 'component', 'host', 'hosting'] as const)('keeps %s appro
       await h.click(await h.dm('documentation create host {"name":"Parent service"}'), 'Confirm creation');
       serviceId = bodyText(await h.dm('documentation host Parent service')).match(/Identifier: ([\w-]+)/)![1]!;
     }
-    const create = (name: string) => `documentation create ${recordKind} ${JSON.stringify(recordKind === 'technology' || recordKind === 'host' ? { name, notes: 'Initial' } : recordKind === 'hosting' ? { componentId, serviceId, environment: name, notes: 'Initial' } : { name, projectId, type: 'Initial' })}`;
+    const create = (name: string) => `documentation create ${recordKind} ${JSON.stringify(recordKind === 'technology' || recordKind === 'host' || recordKind === 'tool' ? { name, notes: 'Initial' } : recordKind === 'hosting' ? { componentId, serviceId, environment: name, notes: 'Initial' } : { name, projectId, type: 'Initial' })}`;
     const field = recordKind === 'component' ? 'type' : 'notes';
     const replacement = { [field]: 'A' };
     const proposal = await h.dm(create('Protected'));
@@ -435,7 +557,7 @@ it.each(['technology', 'component', 'host', 'hosting'] as const)('keeps %s appro
     await h.enqueueClick(proposal, button(proposal, 'Confirm creation'));
     await expect(h.drain()).rejects.toThrow('catalog creation history unavailable');
     await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
-    const targetId = bodyText(proposal).match(/(?:Technology|Component|Host\/service|Hosting entry): ([\w-]+)/)![1]!;
+    const targetId = bodyText(proposal).match(/(?:Technology|Component|Host\/service|Hosting entry|Tool): ([\w-]+)/)![1]!;
     expect(kind(await h.dm(`documentation ${lookupKind} ${targetId}`))).toBe(`${label} not found`);
     await db.exec('DROP TRIGGER fail_catalog_creation ON documentation_record_history; DROP FUNCTION fail_catalog_creation();');
     await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
@@ -472,11 +594,11 @@ it.each(['technology', 'component', 'host', 'hosting'] as const)('keeps %s appro
     const oldCreation = await h.dm(create('Expired'));
     await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(oldCreation, 'Confirm creation').value]);
     expect(kind(await h.click(oldCreation, 'Confirm creation'))).toBe('Confirmation expired');
-    const expiredTarget = bodyText(oldCreation).match(/(?:Technology|Component|Host\/service|Hosting entry): ([\w-]+)/)![1]!;
+    const expiredTarget = bodyText(oldCreation).match(/(?:Technology|Component|Host\/service|Hosting entry|Tool): ([\w-]+)/)![1]!;
     expect(kind(await h.dm(`documentation ${lookupKind} ${expiredTarget}`))).toBe(`${label} not found`);
-    const clear = recordKind === 'technology' ? { category: null, notes: '' } : recordKind === 'host' ? { monthlyCost: null, role: null } : recordKind === 'hosting' ? { environment: null, urls: [] } : { type: null, technologies: null };
+    const clear = recordKind === 'tool' ? { usage: null, projects: [], companyWide: false } : recordKind === 'technology' ? { category: null, notes: '' } : recordKind === 'host' ? { monthlyCost: null, role: null } : recordKind === 'hosting' ? { environment: null, urls: [] } : { type: null, technologies: null };
     await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(clear)}`), 'Confirm edit');
-    expect(bodyText(await h.dm(`documentation ${lookupKind} ${id}`))).toContain({ technology: 'category: Unknown', component: 'technologies: Unknown', host: 'monthlyCost: Unknown', hosting: 'environment: Unknown' }[recordKind]);
+    expect(bodyText(await h.dm(`documentation ${lookupKind} ${id}`))).toContain({ technology: 'category: Unknown', component: 'technologies: Unknown', host: 'monthlyCost: Unknown', hosting: 'environment: Unknown', tool: 'usage: Unknown' }[recordKind]);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); await foreign.app.close(); }
 });

@@ -30,7 +30,10 @@ export type Project = { id: string; fields: ProjectFields; created_at: Date | st
 const technologyDefinitions = { name, category: z.string().max(120).nullable(), notes: fieldDefinitions.notes };
 export const technologyFields = z.strictObject({ ...technologyDefinitions, category: technologyDefinitions.category.default(null), notes: technologyDefinitions.notes.default(null) });
 export const technologyEdit = z.strictObject(technologyDefinitions).partial().refine(value => Object.keys(value).length > 0);
-export type RecordKind = 'technology' | 'component' | 'host' | 'hosting';
+export type RecordKind = 'technology' | 'component' | 'host' | 'hosting' | 'tool';
+const toolDefinitions = { name, category: technologyDefinitions.category, usage: z.string().max(1500).nullable(), referent: z.string().max(1500).nullable(), companyWide: z.boolean().nullable(), projects: z.array(name).max(20).nullable(), notes: fieldDefinitions.notes };
+export const toolFields = z.strictObject({ ...toolDefinitions, category: toolDefinitions.category.default(null), usage: toolDefinitions.usage.default(null), referent: toolDefinitions.referent.default(null), companyWide: toolDefinitions.companyWide.default(null), projects: toolDefinitions.projects.default(null), notes: toolDefinitions.notes.default(null) }).refine(value => JSON.stringify(value).length <= 5000);
+export const toolEdit = z.strictObject(toolDefinitions).partial().refine(value => Object.keys(value).length > 0 && JSON.stringify(value).length <= 5000);
 const componentDefinitions = { name, type: z.string().max(120).nullable(), technologies: z.array(name).max(20).nullable() };
 export const componentFields = z.strictObject({ ...componentDefinitions, projectId: z.uuid(), type: componentDefinitions.type.default(null), technologies: componentDefinitions.technologies.default(null) });
 export const componentEdit = z.strictObject(componentDefinitions).partial().refine(value => Object.keys(value).length > 0);
@@ -47,10 +50,11 @@ export const recordSchemas = {
   component: { create: componentFields, edit: componentEdit },
   host: { create: hostFields, edit: hostEdit },
   hosting: { create: hostingFields, edit: hostingEdit },
+  tool: { create: toolFields, edit: toolEdit },
 };
-export const recordTitle = (kind: RecordKind | 'project') => ({ project: 'Project', technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry' })[kind];
+export const recordTitle = (kind: RecordKind | 'project') => ({ project: 'Project', technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry', tool: 'Tool' })[kind];
 export const recordName = (record: InventoryRecord) => String(record.fields.name ?? (record.fields.environment === '' ? 'Empty environment' : record.fields.environment) ?? 'Unknown environment');
-export type InventoryValues = Record<string, string | string[] | number | null>;
+export type InventoryValues = Record<string, string | string[] | number | boolean | null>;
 export type InventoryRecord = { id: string; kind: RecordKind; fields: InventoryValues; created_at: Date | string };
 export function parseEditRequest(body: string): { selector: string; value: unknown } {
   // Selectors and replacement strings can both contain braces. Find a complete
@@ -61,13 +65,16 @@ export function parseEditRequest(body: string): { selector: string; value: unkno
   }
   throw new Error('Expected one target and a replacement object');
 }
+const validReferenceIds = (ids: string[]) => ids.every(id => z.uuid().safeParse(id).success) && new Set(ids).size === ids.length;
 export function validSavedFields(kind: RecordKind, operation: 'create' | 'edit', fields: unknown): boolean {
   const schema = recordSchemas[kind][operation];
   const parsed = schema.safeParse(fields);
   if (!parsed.success) return false;
+  if ('projects' in parsed.data && Array.isArray(parsed.data.projects)) {
+    return validReferenceIds(parsed.data.projects);
+  }
   if ('technologies' in parsed.data && Array.isArray(parsed.data.technologies)) {
-    return parsed.data.technologies.every(id => z.uuid().safeParse(id).success)
-      && new Set(parsed.data.technologies).size === parsed.data.technologies.length;
+    return validReferenceIds(parsed.data.technologies);
   }
   return !('serviceId' in parsed.data) || z.uuid().safeParse(parsed.data.serviceId).success;
 }

@@ -1,6 +1,6 @@
 # Documentation module
 
-Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–04 are implemented locally; later slices below remain future work. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
+Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–05 are implemented locally; later slices below remain future work. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
 
 ## Delivered locally — ticket 01
 
@@ -47,7 +47,7 @@ Creation and editing reuse the 24-hour initiating-User/DM-bound confirmation and
 
 All delivered reads, instructions, proposals and confirmations use no AI or Gmail and remain available when the shared AI allowance is exhausted. Automated checks use fake messaging and an embedded database; real PostgreSQL concurrency requires `TEST_DATABASE_URL`, and live Slack/deployment remains unverified.
 
-Tools, archival/restoration, natural-language interpretation, remembered Project context and import are **later slices**, with no exposed controls yet. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
+Archival/restoration, natural-language interpretation, remembered Project context and import are **later slices**, with no exposed controls yet. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
 
 ## Delivered locally — ticket 04
 
@@ -62,7 +62,19 @@ Documentation adds **Hosts/services** and **Add Host/service** to its private me
 
 Project details show paginated Components and environments, production first, saved hosting URLs, stable detail controls and explicit missing values. Projects without recorded Components/entries show Unknown. Each page contains up to eight entries or Components without hosting; Previous/Next retains the Project. Long literal values use the existing value pagination. A saved link is available to open; the Agent does not read it. Several entries across Components/environments/Projects may reference the same service, without copying its cost.
 
-Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. Tools, archival, natural language and import remain later slices.
+Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. Archival, natural language and import remain later slices.
+
+## Delivered locally — ticket 05
+
+Documentation adds **Tools** and **Add Tool** to its private menu. Project details offer a paginated **Tools** list; Tool details navigate to every saved Project relationship and offer Edit/History. Lists show eight records per page. Exact names match case-insensitively; identifiers take precedence. Ambiguous lookups offer paginated choices, and ambiguous edits/references require a stable identifier.
+
+- `documentation tools [page]`, `documentation tool <identifier or exact name>` and `documentation history tool <identifier or exact name>` browse Tools, details and lifetime history. Shared History includes Tools and navigates to their details.
+- `documentation create tool {"name":"Slack","category":"Communication","usage":"Company chat","referent":"Team contact","companyWide":true,"projects":["Alpha","<Project identifier>"],"notes":"Example"}` proposes one Tool. Only name is required, trimmed, nonempty, one line and at most 120 characters. Category allows 120 characters; usage, referent and notes allow 1,500 each. `companyWide` accepts true, false or null. `projects` accepts up to 20 existing Project identifiers, exact names or aliases, resolved unambiguously and deduplicated to stable identifiers before proposing. Creation and selected replacements fit 5,000 normalized JSON characters.
+- `documentation edit tool <identifier or exact name> {"usage":"Replacement","referent":null,"projects":[]}` proposes any nonempty subset of name, category, usage, referent, companyWide, projects and notes. Omitted fields are preserved. Null clears optional fields to Unknown; empty text/lists remain empty. System identifiers, actor/time, lifecycle metadata and history cannot be edited as business fields.
+
+Company-wide and Project usage may coexist. Omitted usage, referent, company-wide status and Project links remain Unknown. Usage is descriptive text: unmatched words never create Projects or relationships. Missing Projects require a separate confirmed Project creation; ambiguous names/aliases require explicit resolution. Referents describe inventory contacts, confer no exclusive edit authority, trigger no notifications and add no membership check. Another User with existing bot/workspace access can read/edit the Tool using their own confirmation.
+
+Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. All delivered Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible. Archival, natural language, remembered context and import remain later slices.
 
 ## Requested outcomes
 

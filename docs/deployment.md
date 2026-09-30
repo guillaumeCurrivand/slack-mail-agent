@@ -68,6 +68,22 @@ After `/ready` returns `{"ok":true}`, check Documentation → Hosts/services →
 
 These are manual post-deployment checks, not observed live results. This remains a locally verified release candidate until production readiness and live Slack verification are observed. Without `TEST_DATABASE_URL`, real PostgreSQL locking tests are skipped; use a disposable PostgreSQL database before relying on cross-connection concurrency verification. These structured checks use no AI, Gmail or infrastructure-provider calls. Real data import and authority transition remain separate work.
 
+## Documentation Tools release candidate
+
+Ticket 05 adds shared Tools and Project relationships using the existing typed records/history/confirmation tables. Keep `documentation` in the existing `ENABLED_MODULES`, or append it while preserving other enabled Modules to expose Documentation. No new required environment variables, secrets, Slack/Google scopes or AI credentials are needed. Startup idempotently extends the record-kind/parent constraints for Tools; there are no new tables or manual migration commands. Existing inventory/history and pending controls remain compatible. Stop old workers before starting this version; they do not understand Tool confirmations. Preserve `.env`, the Compose project and database volume.
+
+Deploy the reviewed `main` commit with the [update-and-restart procedure](#update-and-restart):
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh
+```
+
+After `/ready` returns `{"ok":true}`, open Documentation → Tools → Add Tool and check Help, pagination and Back/Menu. With consented synthetic records, separately create/confirm two test Projects, then `documentation create tool {"name":"Tool smoke test","companyWide":true,"projects":["<first Project identifier>","<second Project identifier>"],"referent":"Test contact"}`. Check Unknown usage/notes, Tool → each Project and Project → Tools navigation. Rename a Project and the Tool using separately confirmed edits and verify stable links. A second User must see/edit the shared Tool through their own confirmation, but cannot approve the first User's Card or use their private navigation. Propose usage A, let another User confirm usage B and unrelated notes, then confirm A and inspect B → A history with notes retained. Replay A after a later edit and verify the later value remains. Missing/ambiguous Project references must ask for separate creation or explicit resolution without creating a Tool. Browse Tool and shared History. These checks use no AI or Gmail and referents cause no notifications.
+
+These are manual post-deployment checks, not observed live results. This remains a locally verified release candidate until production readiness and live Slack verification are observed. Real PostgreSQL Tool cross-User locking tests require a disposable `TEST_DATABASE_URL`; without it they are skipped. Import, authority transition and production deployment remain separate work.
+
 ## Safe work-launch release candidate
 
 Ticket 04 adds Sort inbox and Find unanswered to the Module menus. It also creates `core_operation_slots` and the module-owned `slack_unanswered_results` display cache automatically, and changes the worker advisory-lock scope. No manual database migration, new secret, Slack scope, or Google permission is required. Keep `WORKER_CONCURRENCY` at 2–4; the default and existing `.env.example` use 2. Stop the old app before starting this version, as the deployment script does, so old workers cannot process new operation jobs. Result pagination buttons from the old version ask for a fresh search; new result pages reuse the original calculation without another paid AI call and recheck current channel access.
