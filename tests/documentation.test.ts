@@ -76,7 +76,7 @@ it('creates a shared Project only after its owner confirms and lets another User
   try {
     const main = await h.dm('menu');
     const menu = await h.click(main, 'Documentation');
-    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'History', 'Help', 'Back to menu']);
+    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'Hosts/services', 'History', 'Help', 'Back to menu']);
     const proposal = await h.dm('documentation create project {"name":"Alpha"}');
     expect(kind(proposal)).toBe('Create Project confirmation');
     expect(bodyText(proposal)).toContain('description: Unknown');
@@ -90,6 +90,171 @@ it('creates a shared Project only after its owner confirms and lets another User
     expect(bodyText(history)).toContain('Source: Slack structured creation');
     expect(bodyText(history)).toContain('Before: No record');
     expect(bodyText(history)).toContain('name: Alpha');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('maintains shared Hosts/services with explicit costs, overwrite history and replay recovery', async () => {
+  const h = await harness();
+  try {
+    const proposal = await h.dm('documentation create host {"name":"OVH","role":"Compute"}');
+    expect(kind(proposal)).toBe('Create Host/service confirmation');
+    expect(bodyText(proposal)).toContain('monthlyCost: Unknown');
+    expect(kind(await h.click(proposal, 'Confirm creation', bob))).toBe('Confirmation unavailable');
+    await h.click(proposal, 'Confirm creation');
+    const detail = await h.dm('documentation host ovh', bob);
+    const id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(bodyText(await h.click(detail, 'Edit', bob))).toContain(`documentation edit host ${id}`);
+    const pending = await h.dm(`documentation edit host ${id} {"monthlyCost":12.5,"currency":"eur","name":"OVH Compute"}`);
+    await h.click(await h.dm(`documentation edit host ${id} {"monthlyCost":20,"currency":"EUR","notes":"Bob notes"}`, bob), 'Confirm edit', bob);
+    await h.click(pending, 'Confirm edit');
+    const current = bodyText(await h.dm(`documentation host ${id}`));
+    expect(current).toContain('monthlyCost: 12.5'); expect(current).toContain('currency: EUR'); expect(current).toContain('notes: Bob notes');
+    const history = await h.click(await h.click(await h.dm(`documentation history host ${id}`), 'Next'), 'Next');
+    expect(bodyText(history)).toContain('monthlyCost: 20');
+    expect(bodyText(history)).toContain('monthlyCost: 12.5');
+    await h.click(await h.dm(`documentation edit host ${id} {"role":"Later"}`, bob), 'Confirm edit', bob);
+    await h.restart(); await h.click(pending, 'Confirm edit');
+    expect(bodyText(await h.dm(`documentation host ${id}`))).toContain('role: Later');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('records distinct Component environments, shared services and production-first Project hosting with saved links', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create host {"name":"Shared cloud","monthlyCost":30,"currency":"EUR"}'), 'Confirm creation');
+    const hostId = bodyText(await h.dm('documentation host Shared cloud')).match(/Identifier: ([\w-]+)/)![1]!;
+    const projects: string[] = [], components: string[] = [], entries: string[] = [];
+    for (const projectName of ['Alpha', 'Beta']) {
+      await h.click(await h.dm(`documentation create project ${JSON.stringify({ name: projectName })}`), 'Confirm creation');
+      const projectId = bodyText(await h.dm(`documentation project ${projectName}`)).match(/Identifier: ([\w-]+)/)![1]!; projects.push(projectId);
+      for (const type of ['frontend', 'backend']) {
+        await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: `${projectName} ${type}`, projectId, type })}`), 'Confirm creation');
+        const component = await h.dm(`documentation component ${projectName} ${type}`);
+        const componentId = bodyText(component).match(/Identifier: ([\w-]+)/)![1]!; components.push(componentId);
+        expect(bodyText(await h.click(await h.click(component, 'Hosting entries'), 'Add Hosting entry'))).toContain(`"componentId":"${componentId}"`);
+        for (const environment of ['staging', 'production']) {
+          const proposal = await h.dm(`documentation create hosting ${JSON.stringify({ componentId, serviceId: 'Shared cloud', environment, urls: ['https://example.com/app'], accessInstructions: 'See password manager' })}`);
+          expect(kind(proposal)).toBe('Create Hosting entry confirmation');
+          expect(bodyText(proposal)).toContain(`serviceId: ${hostId}`);
+          entries.push(bodyText(proposal).match(/Hosting entry: ([\w-]+)/)![1]!);
+          await h.click(proposal, 'Confirm creation');
+        }
+      }
+    }
+    const project = await h.dm(`documentation project ${projects[0]}`, bob);
+    const text = bodyText(project);
+    expect(text).toContain('Alpha frontend'); expect(text).toContain('Alpha backend');
+    expect(text.indexOf('production')).toBeLessThan(text.indexOf('staging'));
+    expect(text).toContain('accountReference: Unknown');
+    expect(text).not.toContain('monthlyCost');
+    expect(JSON.stringify(project.body)).toContain('https://example.com/app');
+    expect(bodyText(await h.dm(`documentation hosting ${components[0]}`)).indexOf('production')).toBeLessThan(bodyText(await h.dm(`documentation hosting ${components[0]}`)).indexOf('staging'));
+    expect(bodyText(await h.click(await h.dm(`documentation host ${hostId}`), 'Hosting entries'))).toContain('8 Hosting entries');
+    await h.click(await h.dm(`documentation edit host ${hostId} {"name":"Cloud renamed"}`), 'Confirm edit');
+    await h.click(await h.dm(`documentation edit component ${components[0]} {"name":"Web renamed"}`), 'Confirm edit');
+    const detail = await h.dm(`documentation hosting-entry ${entries[0]}`);
+    expect(bodyText(detail)).toContain(`componentId: ${components[0]}`);
+    expect(bodyText(await h.click(detail, 'Cloud renamed'))).toContain(`Identifier: ${hostId}`);
+    expect(kind(await h.click(detail, 'History'))).toBe('Hosting entry history');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('paginates Hosts/services and Hosting entries and rejects missing, ambiguous, foreign and invalid references', async () => {
+  const h = await harness(), foreign = await harness('documentation', 'TOTHER');
+  const other = { ...alice, team: 'TOTHER' };
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'API', projectId })}`), 'Confirm creation');
+    const componentId = bodyText(await h.dm('documentation component API')).match(/Identifier: ([\w-]+)/)![1]!;
+    for (let i = 0; i < 9; i++) await h.click(await h.dm('documentation create host {"name":"Duplicate"}'), 'Confirm creation');
+    expect(bodyText(await h.dm('documentation hosts 999'))).toContain('page 2/2');
+    const choice = await h.dm('documentation history host Duplicate');
+    expect(kind(choice)).toBe('Choose a Host/service');
+    expect(kind(await h.click(await h.click(choice, 'Next'), 'Duplicate'))).toBe('Host/service history');
+    const serviceId = bodyText(await h.click(await h.dm('documentation host Duplicate'), 'Duplicate')).match(/Identifier: ([\w-]+)/)![1]!;
+    await foreign.click(await foreign.dm('documentation create host {"name":"Foreign"}', other), 'Confirm creation', other);
+    const foreignId = bodyText(await foreign.dm('documentation host Foreign', other)).match(/Identifier: ([\w-]+)/)![1]!;
+    const request = (serviceId: string, parent = componentId) => `documentation create hosting ${JSON.stringify({ componentId: parent, serviceId })}`;
+    expect(kind(await h.dm(request('Missing')))).toBe('Host/service not found');
+    expect(kind(await h.dm(request('Duplicate')))).toBe('Ambiguous Host/service reference');
+    expect(kind(await h.dm(request(foreignId)))).toBe('Host/service not found');
+    expect(kind(await h.dm(request(serviceId, projectId)))).toBe('Component not found');
+    expect(kind(await foreign.dm(request(foreignId), other))).toBe('Component not found');
+    for (const fields of [{ name: 'Invalid', monthlyCost: 1 }, { name: 'Invalid', monthlyCost: -1, currency: 'EUR' }, { name: 'Invalid', monthlyCost: '20', currency: 'EUR' }, { name: 'Invalid', currency: 'EU' }, { name: 'Invalid', password: 'secret' }]) {
+      expect(kind(await h.dm(`documentation create host ${JSON.stringify(fields)}`))).toBe('Invalid Host/service');
+    }
+    for (const fields of [{ componentId, serviceId, urls: ['https://user:password@example.com'] }, { componentId, serviceId, environment: 'Two\nLines' }, { componentId, serviceId, apiKey: 'secret' }, [{ componentId, serviceId }]]) {
+      expect(kind(await h.dm(`documentation create hosting ${JSON.stringify(fields)}`))).toBe('Invalid Hosting entry');
+    }
+    const invalidated = await h.dm(request(serviceId));
+    await sql.query("UPDATE documentation_confirmations SET fields=jsonb_set(fields,'{serviceId}',to_jsonb($2::text)) WHERE id=$1", [button(invalidated, 'Confirm creation').value, foreignId]);
+    expect(kind(await h.click(invalidated, 'Confirm creation'))).toBe('Hosting entry create failed');
+    expect(bodyText(await h.dm(`documentation hosting ${componentId}`))).toContain('No Hosting entries');
+    let entryId = '';
+    for (let i = 0; i < 9; i++) {
+      const proposal = await h.dm(`documentation create hosting ${JSON.stringify({ componentId, serviceId, environment: i ? 'staging' : 'production' })}`);
+      if (!i) entryId = bodyText(proposal).match(/Hosting entry: ([\w-]+)/)![1]!;
+      await h.click(proposal, 'Confirm creation');
+    }
+    const entries = await h.dm(`documentation hosting ${componentId}`);
+    expect(bodyText(entries)).toContain(`Component: API (${componentId})`);
+    expect(bodyText(await h.click(entries, 'Next'))).toContain('page 2/2');
+    expect(bodyText(await h.click(await h.dm(`documentation project ${projectId}`), 'Next'))).toContain('Hosting page 2/2');
+    const pending = await h.dm(`documentation edit hosting ${entryId} {"environment":"development"}`);
+    await h.click(await h.dm(`documentation edit hosting ${entryId} {"environment":"Bob environment","notes":"Bob notes"}`, bob), 'Confirm edit', bob);
+    await h.click(pending, 'Confirm edit');
+    const current = bodyText(await h.dm(`documentation hosting-entry ${entryId}`));
+    expect(current).toContain('environment: development'); expect(current).toContain('notes: Bob notes');
+    const history = await h.click(await h.click(await h.dm(`documentation history hosting-entry ${entryId}`), 'Next'), 'Next');
+    expect(bodyText(history)).toContain('Before:\nenvironment: Bob environment\nAfter:\nenvironment: development');
+    for (const fields of [{ componentId }, { serviceId: null }, { id: entryId }, { notes: 'x'.repeat(1501) }, {}]) {
+      expect(kind(await h.dm(`documentation edit hosting ${entryId} ${JSON.stringify(fields)}`))).toBe('Invalid Hosting entry edit');
+    }
+    await h.click(await h.dm(`documentation edit host ${serviceId} {"monthlyCost":0,"currency":"EUR"}`), 'Confirm edit');
+    expect(kind(await h.dm(`documentation edit host ${serviceId} {"currency":null}`))).toBe('Invalid Host/service edit');
+    const clearCurrency = await h.dm(`documentation edit host ${serviceId} {"monthlyCost":null,"currency":null}`);
+    await h.click(clearCurrency, 'Confirm edit');
+    const currencyOnly = await h.dm(`documentation edit host ${serviceId} {"currency":null}`);
+    await h.click(await h.dm(`documentation edit host ${serviceId} {"monthlyCost":20,"currency":"EUR"}`, bob), 'Confirm edit', bob);
+    expect(kind(await h.click(currencyOnly, 'Confirm edit'))).toBe('Host/service edit failed');
+    expect(bodyText(await h.dm(`documentation host ${serviceId}`))).toContain('monthlyCost: 20');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); await foreign.app.close(); }
+});
+
+it('upgrades existing catalog records and pending controls and preserves empty hosting values in navigation', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Existing"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Existing')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm('documentation create technology {"name":"Existing technology"}'), 'Confirm creation');
+    const component = await h.dm(`documentation create component ${JSON.stringify({ name: 'Existing API', projectId, technologies: ['Existing technology'] })}`);
+    const edit = await h.dm('documentation edit technology Existing technology {"notes":"Pending"}');
+    // Recreate ticket 03's table shape as an upgrade fixture, with saved inventory
+    // and pending controls already present. Assertions use the public workflow.
+    await db.exec(`ALTER TABLE documentation_records DROP CONSTRAINT documentation_records_check;
+      ALTER TABLE documentation_records DROP CONSTRAINT documentation_records_kind_check;
+      ALTER TABLE documentation_records DROP COLUMN component_id CASCADE;
+      ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_kind_check CHECK(kind IN ('technology','component'));
+      ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_check CHECK((kind='technology' AND parent_id IS NULL) OR (kind='component' AND parent_id IS NOT NULL AND fields->>'projectId'=parent_id));`);
+    await h.restart(); await h.restart();
+    expect(kind(await h.click(component, 'Confirm creation'))).toBe('Component created');
+    expect(kind(await h.click(edit, 'Confirm edit'))).toBe('Technology edited');
+    expect(bodyText(await h.dm('documentation technology Existing technology'))).toContain('notes: Pending');
+    const componentId = bodyText(await h.dm('documentation component Existing API')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm('documentation create host {"name":"New service"}'), 'Confirm creation');
+    const entry = await h.dm(`documentation create hosting ${JSON.stringify({ componentId, serviceId: 'New service', environment: '', accountReference: '', urls: [], accessInstructions: '' })}`);
+    const saved = await h.click(entry, 'Confirm creation');
+    const entryId = bodyText(saved).match(/Hosting entry: ([\w-]+)/)![1]!;
+    expect(bodyText(saved)).toContain(`documentation hosting-entry ${entryId}`);
+    const details = await h.click(await h.dm(`documentation hosting ${componentId}`), 'Empty environment');
+    expect(bodyText(details)).toContain('urls: []');
+    expect(bodyText(details)).not.toContain('environment: Unknown');
+    expect(bodyText(await h.dm('documentation project Existing'))).toContain('Existing API');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); }
 });
@@ -242,16 +407,25 @@ it('paginates catalog, Component and ambiguity navigation privately and includes
   } finally { await h.app.close(); }
 });
 
-it.each(['technology', 'component'] as const)('keeps %s approvals actor/DM/workspace-bound, expiring, atomic and recoverable without repeating effects', async recordKind => {
+it.each(['technology', 'component', 'host', 'hosting'] as const)('keeps %s approvals actor/DM/workspace-bound, expiring, atomic and recoverable without repeating effects', async recordKind => {
   const h = await harness(), foreign = await harness('documentation', 'TOTHER');
   try {
     await new Budget(sql, 10_000_000, 10_000_000, 'mail').reserve(alice, 10_000_000);
     await h.dm('budget');
     await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
     const projectId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
-    const label = recordKind === 'technology' ? 'Technology' : 'Component';
-    const create = (name: string) => `documentation create ${recordKind} ${JSON.stringify(recordKind === 'technology' ? { name, notes: 'Initial' } : { name, projectId, type: 'Initial' })}`;
-    const replacement = recordKind === 'technology' ? { notes: 'A' } : { type: 'A' };
+    const label = { technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry' }[recordKind];
+    const lookupKind = recordKind === 'hosting' ? 'hosting-entry' : recordKind;
+    let componentId = '', serviceId = '';
+    if (recordKind === 'hosting') {
+      await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'Parent', projectId })}`), 'Confirm creation');
+      componentId = bodyText(await h.dm('documentation component Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+      await h.click(await h.dm('documentation create host {"name":"Parent service"}'), 'Confirm creation');
+      serviceId = bodyText(await h.dm('documentation host Parent service')).match(/Identifier: ([\w-]+)/)![1]!;
+    }
+    const create = (name: string) => `documentation create ${recordKind} ${JSON.stringify(recordKind === 'technology' || recordKind === 'host' ? { name, notes: 'Initial' } : recordKind === 'hosting' ? { componentId, serviceId, environment: name, notes: 'Initial' } : { name, projectId, type: 'Initial' })}`;
+    const field = recordKind === 'component' ? 'type' : 'notes';
+    const replacement = { [field]: 'A' };
     const proposal = await h.dm(create('Protected'));
     expect(kind(await h.click(proposal, 'Confirm creation', bob))).toBe('Confirmation unavailable');
     expect(kind(await h.click(proposal, 'Confirm creation', { ...alice, channel: 'DOTHER' }))).toBe('Confirmation unavailable');
@@ -261,16 +435,16 @@ it.each(['technology', 'component'] as const)('keeps %s approvals actor/DM/works
     await h.enqueueClick(proposal, button(proposal, 'Confirm creation'));
     await expect(h.drain()).rejects.toThrow('catalog creation history unavailable');
     await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
-    expect(kind(await h.dm(`documentation ${recordKind} Protected`))).toBe(`${label} not found`);
-    expect(bodyText(await h.dm('documentation history'))).toContain('History page 1/1');
+    const targetId = bodyText(proposal).match(/(?:Technology|Component|Host\/service|Hosting entry): ([\w-]+)/)![1]!;
+    expect(kind(await h.dm(`documentation ${lookupKind} ${targetId}`))).toBe(`${label} not found`);
     await db.exec('DROP TRIGGER fail_catalog_creation ON documentation_record_history; DROP FUNCTION fail_catalog_creation();');
     await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
     h.fail('uncertain');
     await expect(h.drain()).rejects.toThrow('Lost response');
     const messages = h.messages.length; await h.restart(); await h.drain(); expect(h.messages).toHaveLength(messages);
     await h.click(proposal, 'Confirm creation');
-    const detail = await h.dm(`documentation ${recordKind} Protected`, bob), id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
-    expect(kind(await foreign.dm(`documentation ${recordKind} ${id}`, { ...alice, team: 'TOTHER' }))).toBe(`${label} not found`);
+    const detail = await h.dm(`documentation ${lookupKind} ${targetId}`, bob), id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(kind(await foreign.dm(`documentation ${lookupKind} ${id}`, { ...alice, team: 'TOTHER' }))).toBe(`${label} not found`);
     expect(kind(await foreign.click(detail, 'History', { ...alice, team: 'TOTHER' }))).toBe('Menu unavailable');
     const edit = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(replacement)}`);
     expect(kind(await h.click(edit, 'Confirm edit', bob))).toBe('Confirmation unavailable');
@@ -279,29 +453,30 @@ it.each(['technology', 'component'] as const)('keeps %s approvals actor/DM/works
       CREATE TRIGGER fail_catalog_history BEFORE INSERT ON documentation_record_history FOR EACH ROW EXECUTE FUNCTION fail_catalog_history();`);
     await h.enqueueClick(edit, button(edit, 'Confirm edit')); await expect(h.drain()).rejects.toThrow('catalog history unavailable');
     await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
-    expect(bodyText(await h.dm(`documentation ${recordKind} ${id}`))).toContain(recordKind === 'technology' ? 'notes: Initial' : 'type: Initial');
-    expect(bodyText(await h.dm(`documentation history ${recordKind} ${id}`))).toContain('History page 1/1');
+    expect(bodyText(await h.dm(`documentation ${lookupKind} ${id}`))).toContain(`${field}: Initial`);
+    expect(bodyText(await h.dm(`documentation history ${lookupKind} ${id}`))).toContain('History page 1/1');
     await db.exec('DROP TRIGGER fail_catalog_history ON documentation_record_history; DROP FUNCTION fail_catalog_history();');
     await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
     h.fail('reject'); await expect(h.drain()).rejects.toThrow('rejected');
     await h.restart(); await h.drain(); expect(kind(h.messages.at(-1)!)).toBe(`${label} edited`);
     const satisfied = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(replacement)}`);
     expect(kind(await h.click(satisfied, 'Confirm edit'))).toBe('Edit already satisfied');
-    expect(bodyText(await h.dm(`documentation history ${recordKind} ${id}`))).toContain('History page 1/2');
-    const later = recordKind === 'technology' ? { notes: 'Later' } : { type: 'Later' };
+    expect(bodyText(await h.dm(`documentation history ${lookupKind} ${id}`))).toContain('History page 1/2');
+    const later = { [field]: 'Later' };
     await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(later)}`, bob), 'Confirm edit', bob);
     await h.click(edit, 'Confirm edit'); await h.click(proposal, 'Confirm creation');
-    expect(bodyText(await h.dm(`documentation ${recordKind} ${id}`))).toContain(recordKind === 'technology' ? 'notes: Later' : 'type: Later');
+    expect(bodyText(await h.dm(`documentation ${lookupKind} ${id}`))).toContain(`${field}: Later`);
     const expired = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(replacement)}`);
     await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(expired, 'Confirm edit').value]);
     expect(kind(await h.click(expired, 'Confirm edit'))).toBe('Confirmation expired');
     const oldCreation = await h.dm(create('Expired'));
     await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(oldCreation, 'Confirm creation').value]);
     expect(kind(await h.click(oldCreation, 'Confirm creation'))).toBe('Confirmation expired');
-    expect(kind(await h.dm(`documentation ${recordKind} Expired`))).toBe(`${label} not found`);
-    const clear = recordKind === 'technology' ? { category: null, notes: '' } : { type: null, technologies: null };
+    const expiredTarget = bodyText(oldCreation).match(/(?:Technology|Component|Host\/service|Hosting entry): ([\w-]+)/)![1]!;
+    expect(kind(await h.dm(`documentation ${lookupKind} ${expiredTarget}`))).toBe(`${label} not found`);
+    const clear = recordKind === 'technology' ? { category: null, notes: '' } : recordKind === 'host' ? { monthlyCost: null, role: null } : recordKind === 'hosting' ? { environment: null, urls: [] } : { type: null, technologies: null };
     await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(clear)}`), 'Confirm edit');
-    expect(bodyText(await h.dm(`documentation ${recordKind} ${id}`))).toContain(recordKind === 'technology' ? 'category: Unknown' : 'technologies: Unknown');
+    expect(bodyText(await h.dm(`documentation ${lookupKind} ${id}`))).toContain({ technology: 'category: Unknown', component: 'technologies: Unknown', host: 'monthlyCost: Unknown', hosting: 'environment: Unknown' }[recordKind]);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); await foreign.app.close(); }
 });

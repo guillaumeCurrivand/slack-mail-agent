@@ -36,6 +36,17 @@ CREATE TABLE IF NOT EXISTS documentation_record_history (
  changed_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(team,id),
  FOREIGN KEY(team,record_id) REFERENCES documentation_records(team,id)
 );
+ALTER TABLE documentation_records DROP CONSTRAINT IF EXISTS documentation_records_kind_check;
+ALTER TABLE documentation_records DROP CONSTRAINT IF EXISTS documentation_records_check;
+ALTER TABLE documentation_records ADD COLUMN IF NOT EXISTS component_id text;
+ALTER TABLE documentation_records DROP CONSTRAINT IF EXISTS documentation_records_component_id_fkey;
+ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_component_id_fkey
+ FOREIGN KEY(team,component_id) REFERENCES documentation_records(team,id);
+ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_kind_check CHECK(kind IN ('technology','component','host','hosting'));
+ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_check CHECK(
+ (kind IN ('technology','host') AND parent_id IS NULL AND component_id IS NULL) OR
+ (kind='component' AND parent_id IS NOT NULL AND fields->>'projectId'=parent_id AND component_id IS NULL) OR
+ (kind='hosting' AND parent_id IS NULL AND component_id IS NOT NULL AND fields->>'componentId'=component_id));
 CREATE INDEX IF NOT EXISTS documentation_record_history_lookup ON documentation_record_history(team,record_id,changed_at,id);
 CREATE TABLE IF NOT EXISTS documentation_deliveries (
  owner text NOT NULL, event_id text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(owner,event_id)
@@ -70,12 +81,14 @@ export class DocumentationStore {
     const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind)
       SELECT $1,$2,$3,$4,$5,$6,$7,now(),$8,$9
       WHERE ($8='create' OR EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND id=$6 AND kind=$9))
-        AND ($9='technology' OR (EXISTS(SELECT 1 FROM documentation_projects WHERE team=$2 AND id=$10)
+        AND ($9 IN ('technology','host') OR ($9='component' AND EXISTS(SELECT 1 FROM documentation_projects WHERE team=$2 AND id=$10)
           AND (SELECT count(*) FROM documentation_records WHERE team=$2 AND kind='technology'
             AND id IN (SELECT jsonb_array_elements_text(COALESCE(NULLIF($7::jsonb->'technologies','null'::jsonb),'[]'::jsonb))))
-          =jsonb_array_length(COALESCE(NULLIF($7::jsonb->'technologies','null'::jsonb),'[]'::jsonb))))
+          =jsonb_array_length(COALESCE(NULLIF($7::jsonb->'technologies','null'::jsonb),'[]'::jsonb)))
+          OR ($9='hosting' AND EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND kind='component' AND id=$11)
+            AND EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND kind='host' AND id=$12)))
       ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${confirmationColumns}`,
-    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, target?.id ?? uid(), JSON.stringify(fields), target ? 'edit' : 'create', kind, fields.projectId ?? target?.fields.projectId ?? null]);
+    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, target?.id ?? uid(), JSON.stringify(fields), target ? 'edit' : 'create', kind, fields.projectId ?? target?.fields.projectId ?? null, fields.componentId ?? target?.fields.componentId ?? null, fields.serviceId ?? target?.fields.serviceId ?? null]);
     if (!result.rows.length) throw new Error('Inventory target or references changed; submit a fresh request');
     return result.rows[0];
   }
@@ -112,14 +125,23 @@ export class DocumentationStore {
       SELECT r.id FROM documentation_records r JOIN eligible c ON r.team=c.team AND r.kind='technology'
       WHERE r.id IN (SELECT jsonb_array_elements_text(COALESCE(NULLIF((SELECT replacement->'technologies' FROM planned),'null'::jsonb),'[]'::jsonb)))
       ORDER BY r.id FOR KEY SHARE OF r
+    ), hosting_references AS MATERIALIZED (
+      SELECT r.id FROM documentation_records r JOIN eligible c ON r.team=c.team
+      WHERE c.record_kind='hosting' AND ((r.kind='component' AND r.id=(SELECT replacement->>'componentId' FROM planned))
+        OR (r.kind='host' AND r.id=(SELECT replacement->>'serviceId' FROM planned)))
+      ORDER BY r.id FOR KEY SHARE OF r
     ), validated AS MATERIALIZED (
       SELECT c.*, (c.record_kind='technology' OR
+        (c.record_kind='host' AND ((SELECT replacement->'monthlyCost' FROM planned)='null'::jsonb
+          OR (SELECT replacement->'currency' FROM planned)<>'null'::jsonb)) OR
+        (c.record_kind='hosting' AND (SELECT count(*) FROM hosting_references)=2) OR
+        (c.record_kind='component' AND
         (EXISTS(SELECT 1 FROM parents) AND (SELECT count(*) FROM technologies)=
-          jsonb_array_length(COALESCE(NULLIF((SELECT replacement->'technologies' FROM planned),'null'::jsonb),'[]'::jsonb)))) AS valid
+          jsonb_array_length(COALESCE(NULLIF((SELECT replacement->'technologies' FROM planned),'null'::jsonb),'[]'::jsonb))))) AS valid
       FROM eligible c
     ), created AS (
-      INSERT INTO documentation_records(team,id,kind,fields,parent_id)
-      SELECT team,target_id,record_kind,fields,fields->>'projectId' FROM validated WHERE operation='create' AND valid RETURNING id
+      INSERT INTO documentation_records(team,id,kind,fields,parent_id,component_id)
+      SELECT team,target_id,record_kind,fields,fields->>'projectId',fields->>'componentId' FROM validated WHERE operation='create' AND valid RETURNING id
     ), edited AS (
       UPDATE documentation_records r SET fields=d.replacement FROM changes d,validated c
       WHERE r.team=d.team AND r.id=d.id AND d.after_values<>'{}'::jsonb AND c.valid RETURNING r.id
@@ -213,18 +235,32 @@ export class DocumentationStore {
     [uid(), actor.team, ownerKey(actor), actor.channel, eventId, selector, destination]);
     return result.rows[0].id;
   }
-  async records(actor: Actor, kind: RecordKind, requestedPage = 0, selector: string | null = null, parentId: string | null = null, technologyId: string | null = null) {
+  async records(actor: Actor, kind: RecordKind, requestedPage = 0, selector: string | null = null, parentId: string | null = null, referenceId: string | null = null) {
     const filter = `team=$1 AND kind=$2 AND ($3::text IS NULL OR id=$3 OR lower(fields->>'name')=lower($3))
-      AND ($4::text IS NULL OR parent_id=$4) AND ($5::text IS NULL OR fields->'technologies' @> jsonb_build_array($5::text))`;
-    const values = [actor.team, kind, selector, parentId, technologyId];
+      AND ($4::text IS NULL OR parent_id=$4 OR component_id=$4) AND ($5::text IS NULL OR fields->'technologies' @> jsonb_build_array($5::text) OR fields->>'serviceId'=$5)`;
+    const values = [actor.team, kind, selector, parentId, referenceId];
     const total = Number((await this.sql.query(`SELECT count(*) total FROM documentation_records WHERE ${filter}`, values)).rows[0].total);
     const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
     const records: InventoryRecord[] = (await this.sql.query(`SELECT id,kind,fields,created_at FROM documentation_records WHERE ${filter}
-      ORDER BY lower(fields->>'name'),id LIMIT 8 OFFSET $6`, [...values, page * 8])).rows;
+      ORDER BY CASE WHEN lower(fields->>'environment')='production' THEN 0 ELSE 1 END,
+        lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 8 OFFSET $6`, [...values, page * 8])).rows;
     return { records, total, page, pages };
   }
   async record(actor: Actor, kind: RecordKind, id: string): Promise<InventoryRecord | undefined> {
     return (await this.sql.query('SELECT id,kind,fields,created_at FROM documentation_records WHERE team=$1 AND kind=$2 AND id=$3', [actor.team, kind, id])).rows[0];
+  }
+  async projectHosting(actor: Actor, projectId: string, requestedPage = 0) {
+    const from = `FROM documentation_records c LEFT JOIN documentation_records h
+      ON h.team=c.team AND h.kind='hosting' AND h.component_id=c.id
+      LEFT JOIN documentation_records s ON s.team=h.team AND s.kind='host' AND s.id=h.fields->>'serviceId'
+      WHERE c.team=$1 AND c.kind='component' AND c.parent_id=$2`;
+    const total = Number((await this.sql.query(`SELECT count(*) total ${from}`, [actor.team, projectId])).rows[0].total);
+    const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
+    const entries: { component_id: string; component_name: string; hosting_id: string | null; fields: InventoryValues | null; service_name: string | null }[] =
+      (await this.sql.query(`SELECT c.id component_id,c.fields->>'name' component_name,h.id hosting_id,h.fields,s.fields->>'name' service_name ${from}
+        ORDER BY CASE WHEN lower(h.fields->>'environment')='production' THEN 0 ELSE 1 END,
+          lower(c.fields->>'name'),c.id,lower(h.fields->>'environment'),h.id LIMIT 8 OFFSET $3`, [actor.team, projectId, page * 8])).rows;
+    return { entries, total, page, pages };
   }
   async lookupRecord(actor: Actor, kind: RecordKind, selector: string) {
     const exact = await this.record(actor, kind, selector);

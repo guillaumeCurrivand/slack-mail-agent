@@ -52,6 +52,22 @@ After `/ready` succeeds, DM `documentation help` and open Documentation → Tech
 
 Check Technology, Component and shared History, Add/Edit instructions, Back/Menu and pagination where there are enough records. Check another User can read the shared records but cannot approve the first User's pending Card or operate their private navigation. Apply Bob's edit between Alice's proposal and confirmation, verify actual overwrite history and preservation of unrelated fields, then replay Alice's Card after a later edit and verify that later values remain. A Component request referencing a missing or ambiguous Technology must require explicit resolution or separately confirmed Technology creation, without saving a Component. These paths use no AI or Gmail. These are post-deployment checks, not live results observed during local implementation; hosting, import and authority transition remain later work.
 
+## Documentation Hosts/services and Hosting entries release candidate
+
+Ticket 04 extends Documentation's existing typed records/history tables with Hosts/services and Hosting entries. Keep `documentation` in the existing `ENABLED_MODULES`, or append it to enable this opt-in Module. No new required environment variables, secrets, Slack/Google scopes, or AI credentials are needed. Startup idempotently extends the record-kind/parent constraints and adds `component_id` with a workspace-composite self foreign key. No manual migration command is required. Existing inventory/history and pending controls remain compatible. Stop old workers before starting the new version; they do not understand Host/service or Hosting entry confirmations. Preserve `.env`, the Compose project and database volume.
+
+Deploy the reviewed `main` commit using the [update-and-restart procedure](#update-and-restart):
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh
+```
+
+After `/ready` returns `{"ok":true}`, check Documentation → Hosts/services → Add Host/service and a consented synthetic Component → Hosting entries → Add Hosting entry. Separately create/confirm `documentation create host {"name":"Hosting smoke test"}`, then `documentation create hosting {"componentId":"<test Component identifier>","serviceId":"Hosting smoke test","environment":"production","urls":["https://example.com"],"accessInstructions":"See password manager"}`. Add a separately confirmed staging entry and another Component using the same service. Project details must show distinct Components/environments, production first, saved links and Unknown missing values; costs appear only on the Host/service record. Check navigation, history, Add/Edit instructions, and private ownership. Rename the service and Component and confirm links still identify the original records. With two Users, apply an intervening selected-field edit plus unrelated notes, confirm the first edit, and inspect actual overwrite history and retained notes. Replay the first confirmation after a later edit and verify that later values remain.
+
+These are manual post-deployment checks, not observed live results. This remains a locally verified release candidate until production readiness and live Slack verification are observed. Without `TEST_DATABASE_URL`, real PostgreSQL locking tests are skipped; use a disposable PostgreSQL database before relying on cross-connection concurrency verification. These structured checks use no AI, Gmail or infrastructure-provider calls. Real data import and authority transition remain separate work.
+
 ## Safe work-launch release candidate
 
 Ticket 04 adds Sort inbox and Find unanswered to the Module menus. It also creates `core_operation_slots` and the module-owned `slack_unanswered_results` display cache automatically, and changes the worker advisory-lock scope. No manual database migration, new secret, Slack scope, or Google permission is required. Keep `WORKER_CONCURRENCY` at 2–4; the default and existing `.env.example` use 2. Stop the old app before starting this version, as the deployment script does, so old workers cannot process new operation jobs. Result pagination buttons from the old version ask for a fresh search; new result pages reuse the original calculation without another paid AI call and recheck current channel access.

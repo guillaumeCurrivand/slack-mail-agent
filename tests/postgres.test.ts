@@ -165,18 +165,30 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     expect((await text('documentation history Atomic edit')).text).toContain('History page 1/2');
   });
 
-  it.each(['technology', 'component'] as const)('serializes cross-User %s overwrites and concurrent confirmations with actual history', async kind => {
+  it.each(['technology', 'component', 'host', 'hosting'] as const)('serializes cross-User %s overwrites and concurrent confirmations with actual history', async kind => {
     const alice = { team: `TCATALOG${kind}`, user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
     const { module, options, messenger, text, confirm } = documentationDispatch(pool, alice);
     await module.initialize!(pool); await module.initialize!(pool);
     await confirm(await text('documentation create project {"name":"Parent"}'));
     const parent = (await text('documentation project Parent')).text.match(/Identifier: ([\w-]+)/)![1]!;
-    const initial = kind === 'technology' ? { name: 'Shared', category: 'Initial', notes: 'Initial' } : { name: 'Shared', projectId: parent, type: 'Initial', technologies: [] };
+    let componentId = '', serviceId = '';
+    if (kind === 'hosting') {
+      const component = await text(`documentation create component ${JSON.stringify({ name: 'Parent component', projectId: parent })}`);
+      await confirm(component); componentId = component.text.match(/Component: ([\w-]+)/)![1]!;
+      const service = await text('documentation create host {"name":"Parent service"}');
+      await confirm(service); serviceId = service.text.match(/Host\/service: ([\w-]+)/)![1]!;
+    }
+    const initial = kind === 'technology' ? { name: 'Shared', category: 'Initial', notes: 'Initial' }
+      : kind === 'component' ? { name: 'Shared', projectId: parent, type: 'Initial', technologies: [] }
+      : kind === 'host' ? { name: 'Shared', role: 'Initial', notes: 'Initial' }
+      : { componentId, serviceId, environment: 'Initial', notes: 'Initial' };
+    const field = { technology: 'category', component: 'type', host: 'role', hosting: 'environment' }[kind];
+    const lookup = kind === 'hosting' ? 'hosting-entry' : kind;
     const creation = await text(`documentation create ${kind} ${JSON.stringify(initial)}`);
     await Promise.all(Array.from({ length: 4 }, () => confirm(creation)));
-    const id = (await text(`documentation ${kind} Shared`)).text.match(/Identifier: ([\w-]+)/)![1]!;
-    const a = await text(`documentation edit ${kind} ${id} ${JSON.stringify(kind === 'technology' ? { category: 'A' } : { type: 'A' })}`);
-    const b = await text(`documentation edit ${kind} ${id} ${JSON.stringify(kind === 'technology' ? { category: 'B', notes: 'Bob notes' } : { type: 'B', name: 'Bob name' })}`, bob);
+    const id = creation.text.match(/(?:Technology|Component|Host\/service|Hosting entry): ([\w-]+)/)![1]!;
+    const a = await text(`documentation edit ${kind} ${id} ${JSON.stringify({ [field]: 'A' })}`);
+    const b = await text(`documentation edit ${kind} ${id} ${JSON.stringify({ [field]: 'B', ...(kind === 'component' ? { name: 'Bob name' } : { notes: 'Bob notes' }) })}`, bob);
     const client = await pool.connect(); let pending: Promise<void> | undefined;
     try {
       await client.query('BEGIN');
@@ -194,15 +206,15 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
       expect(waiting, 'Alice must wait for the shared record held by Bob').toBe(true);
       await client.query('COMMIT'); await pending;
       await Promise.all(Array.from({ length: 4 }, () => confirm(a)));
-      const current = await text(`documentation ${kind} ${id}`);
-      expect(current.text).toContain(kind === 'technology' ? 'category: A' : 'type: A');
-      expect(current.text).toContain(kind === 'technology' ? 'notes: Bob notes' : 'name: Bob name');
+      const current = await text(`documentation ${lookup} ${id}`);
+      expect(current.text).toContain(`${field}: A`);
+      expect(current.text).toContain(kind === 'component' ? 'name: Bob name' : 'notes: Bob notes');
       const history = await module.menu!(alice, `history${kind}_${id}_2`, { sql: pool });
       expect(history.text).toContain('History page 3/3');
-      expect(history.text).toContain(kind === 'technology' ? 'Before:\ncategory: B\nAfter:\ncategory: A' : 'Before:\ntype: B\nAfter:\ntype: A');
-      await confirm(await text(`documentation edit ${kind} ${id} ${JSON.stringify(kind === 'technology' ? { category: 'Later' } : { type: 'Later' })}`, bob), bob);
+      expect(history.text).toContain(`Before:\n${field}: B\nAfter:\n${field}: A`);
+      await confirm(await text(`documentation edit ${kind} ${id} ${JSON.stringify({ [field]: 'Later' })}`, bob), bob);
       await confirm(a); await confirm(creation);
-      expect((await text(`documentation ${kind} ${id}`)).text).toContain(kind === 'technology' ? 'category: Later' : 'type: Later');
+      expect((await text(`documentation ${lookup} ${id}`)).text).toContain(`${field}: Later`);
     } finally { try { await client.query('ROLLBACK'); await pending; } finally { client.release(); } }
   });
 });
