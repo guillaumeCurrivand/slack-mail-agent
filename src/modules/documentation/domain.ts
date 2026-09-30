@@ -36,6 +36,15 @@ export const componentFields = z.strictObject({ ...componentDefinitions, project
 export const componentEdit = z.strictObject(componentDefinitions).partial().refine(value => Object.keys(value).length > 0);
 export type InventoryValues = Record<string, string | string[] | null>;
 export type InventoryRecord = { id: string; kind: RecordKind; fields: InventoryValues; created_at: Date | string };
+export function parseEditRequest(body: string): { selector: string; value: unknown } {
+  // Selectors and replacement strings can both contain braces. Find a complete
+  // trailing JSON value before validating fields rather than guessing a delimiter.
+  for (const boundary of [...body.matchAll(/\s+(?=\{)/g)].reverse()) {
+    try { return { selector: body.slice(0, boundary.index).trim(), value: JSON.parse(body.slice(boundary.index + boundary[0].length)) }; }
+    catch { continue; }
+  }
+  throw new Error('Expected one target and a replacement object');
+}
 export function validSavedFields(kind: RecordKind, operation: 'create' | 'edit', fields: unknown): boolean {
   const schema = kind === 'technology' ? (operation === 'create' ? technologyFields : technologyEdit)
     : operation === 'create' ? componentFields : componentEdit;

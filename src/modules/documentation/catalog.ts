@@ -1,7 +1,7 @@
 import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
-import { technologyEdit, technologyFields, componentEdit, componentFields, type InventoryRecord, type InventoryValues, type RecordKind } from './domain.js';
+import { technologyEdit, technologyFields, componentEdit, componentFields, parseEditRequest, type InventoryRecord, type InventoryValues, type RecordKind } from './domain.js';
 import type { DocumentationStore } from './store.js';
 
 const literal = escapeCardValue;
@@ -13,14 +13,6 @@ const pages = (prefix: string, page: number, count: number) => [
   ...(page > 0 ? [{ label: 'Previous', page: `${prefix}_${page - 1}` }] : []),
   ...(page + 1 < count ? [{ label: 'Next', page: `${prefix}_${page + 1}` }] : []),
 ];
-function editBody(body: string) {
-  for (const boundary of [...body.matchAll(/\s+(?=\{)/g)].reverse()) {
-    try { return { selector: body.slice(0, boundary.index).trim(), value: JSON.parse(body.slice(boundary.index + boundary[0].length)) }; }
-    catch { continue; }
-  }
-  throw new Error('Expected one target and a JSON object');
-}
-
 // Catalog navigation shares the Module's existing private menus and transport
 // recovery. Every selector is re-read within the actor's workspace.
 export class Catalog {
@@ -104,7 +96,7 @@ export class Catalog {
         try {
           if (operation === 'create') fields = (kind === 'technology' ? technologyFields : componentFields).parse(JSON.parse(mutation[3]!));
           else {
-            const request = editBody(mutation[3]!); fields = (kind === 'technology' ? technologyEdit : componentEdit).parse(request.value); selector = request.selector;
+            const request = parseEditRequest(mutation[3]!); fields = (kind === 'technology' ? technologyEdit : componentEdit).parse(request.value); selector = request.selector;
           }
         } catch { await deliver({ kind: `Invalid ${label}${operation === 'edit' ? ' edit' : ''}`, text: `Choose one record and one valid JSON object of supported fields.\n${kind === 'technology' ? catalogHelp : componentHelp}` }); return true; }
         if (selector !== undefined) {

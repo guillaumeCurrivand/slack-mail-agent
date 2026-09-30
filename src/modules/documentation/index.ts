@@ -3,7 +3,7 @@ import type { AssistantModule, ModuleContext } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, menuButton, SlackDeliveryRejected, type AgentMessage } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
-import { projectEdit, projectFields, type ProjectFields, type ProjectEdit } from './domain.js';
+import { projectEdit, projectFields, parseEditRequest, type ProjectFields, type ProjectEdit } from './domain.js';
 import { documentationSchema, DocumentationStore } from './store.js';
 import { Catalog, catalogHelp, componentHelp, inventoryText } from './catalog.js';
 
@@ -17,16 +17,8 @@ const pageLinks = (prefix: string, page: number, pages: number) => [
   ...(page + 1 < pages ? [{ label: 'Next', page: `${prefix}_${page + 1}` }] : []),
 ];
 function editRequest(text: string): { selector: string; fields: ProjectEdit } {
-  const body = text.replace(/^edit project\s+/i, '');
-  // Names and replacement strings can both contain braces. Find a complete
-  // trailing JSON value before validating it, rather than guessing a delimiter.
-  for (const boundary of [...body.matchAll(/\s+(?=\{)/g)].reverse()) {
-    let value: unknown;
-    try { value = JSON.parse(body.slice(boundary.index + boundary[0].length)); }
-    catch { continue; }
-    return { selector: body.slice(0, boundary.index).trim(), fields: projectEdit.parse(value) };
-  }
-  throw new Error('Expected one target and a replacement object');
+  const request = parseEditRequest(text.replace(/^edit project\s+/i, ''));
+  return { selector: request.selector, fields: projectEdit.parse(request.value) };
 }
 
 export function createDocumentationModule(sql: Sql): AssistantModule {
