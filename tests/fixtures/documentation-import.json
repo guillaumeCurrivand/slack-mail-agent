@@ -1,0 +1,23 @@
+{
+  "version": 1,
+  "source": "Synthetic workbook",
+  "sheets": [
+    { "name": "Projects", "cells": [
+      { "address": "A1", "value": "name" },
+      { "address": "A2", "value": "Alpha", "formula": "=HYPERLINK(\"https://example.com/alpha\",\"Alpha\")" }
+    ] },
+    { "name": "Tools", "cells": [
+      { "address": "A1", "value": "name" }, { "address": "B1", "value": "usage" },
+      { "address": "A2", "value": "Tracker" }, { "address": "B2", "value": "Alpha / Unknown project" }
+    ] },
+    { "name": "Hosts", "cells": [
+      { "address": "A1", "value": "name" }, { "address": "A2", "value": "Cloud" }, { "address": "A3", "value": "Cloud" }
+    ] },
+    { "name": "Components", "cells": [
+      { "address": "A1", "value": "name" }, { "address": "B1", "value": "project" }, { "address": "C1", "value": "technologies" },
+      { "address": "D1", "value": "environment" }, { "address": "E1", "value": "host" },
+      { "address": "A2", "value": "Web" }, { "address": "B2", "value": "Alpha" }, { "address": "C2", "value": "React + Node" },
+      { "address": "D2", "value": "production" }, { "address": "E2", "value": "Cloud (compute)" }
+    ] }
+  ]
+}

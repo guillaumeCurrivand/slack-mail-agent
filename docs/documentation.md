@@ -1,6 +1,6 @@
 # Documentation module
 
-Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–09 are implemented locally; later slices below remain future work. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
+Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–10 are implemented locally. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
 
 ## Delivered locally — ticket 01
 
@@ -47,7 +47,7 @@ Creation and editing reuse the 24-hour initiating-User/DM-bound confirmation and
 
 All delivered reads, instructions, proposals and confirmations use no AI or Gmail and remain available when the shared AI allowance is exhausted. Automated checks use fake messaging and an embedded database; real PostgreSQL concurrency requires `TEST_DATABASE_URL`, and live Slack/deployment remains unverified.
 
-Project questions and private context are delivered in ticket 07 below; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; import remains a later slice. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
+Project questions and private context are delivered in ticket 07 below; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
 
 ## Delivered locally — ticket 04
 
@@ -62,7 +62,7 @@ Documentation adds **Hosts/services** and **Add Host/service** to its private me
 
 Project details show paginated Components and environments, production first, saved hosting URLs, stable detail controls and explicit missing values. Projects without recorded Components/entries show Unknown. Each page contains up to eight entries or Components without hosting; Previous/Next retains the Project. Long literal values use the existing value pagination. A saved link is available to open; the Agent does not read it. Several entries across Components/environments/Projects may reference the same service, without copying its cost.
 
-Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. See ticket 07 for Project questions; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; import remains a later slice.
+Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. See ticket 07 for Project questions; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10.
 
 ## Delivered locally — ticket 05
 
@@ -74,7 +74,7 @@ Documentation adds **Tools** and **Add Tool** to its private menu. Project detai
 
 Company-wide and Project usage may coexist. Omitted usage, referent, company-wide status and Project links remain Unknown. Usage is descriptive text: unmatched words never create Projects or relationships. Missing Projects require a separate confirmed Project creation; ambiguous names/aliases require explicit resolution. Referents describe inventory contacts, confer no exclusive edit authority, trigger no notifications and add no membership check. Another User with existing bot/workspace access can read/edit the Tool using their own confirmation.
 
-Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. All delivered Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible. Project questions and private context are delivered in ticket 07; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; import remains a later slice.
+Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. All delivered Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible. Project questions and private context are delivered in ticket 07; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10.
 
 ## Delivered locally — ticket 06
 
@@ -231,6 +231,14 @@ Use an operator workflow to inspect a spreadsheet snapshot and produce a mapping
 The review lists resolved mappings, remaining ambiguous references, potentially distinct provider/services with the same name, and original text needed to make those decisions. The User resolves uncertain mappings before the database becomes authoritative; do not silently merge same-named records, discard unknown usage, or infer company-wide tool usage merely because a project-name match failed. Operator input and the reviewed snapshot determine the approved import batch.
 
 Import is deduplicated and checkpointed so retrying the same reviewed batch cannot create duplicate records or initial history. Record provenance and the applied outcome, and verify imported records/relationships against the approved mapping. On failed or incomplete import, report its actual state and retain recovery information. Transition occurs only after the reviewed import is successfully applied and verified. Subsequent changes use Slack; editing the old spreadsheet does not update the inventory. A real production import is separate from local implementation and synthetic testing.
+
+### Delivered locally — ticket 10
+
+The [operator procedure](documentation-import.md) provides offline review/approve/apply/reconcile/status/recover commands for an explicit JSON cell snapshot and the configured workspace. It does not access live Sheets or consume binary XLSX files; preparing and verifying a complete cell snapshot from an independently obtained export is an operator prerequisite. Review preserves all original cells/formulas and literal hyperlink display/link values, proposes clear names, and requires explicit dispositions, field evidence and User resolutions before approval. Combined values, environment/component assignments, ambiguous usage and same-named identities are never guessed.
+
+Approval binds the exact snapshot bytes and resolved mapping. Import creates all six record kinds through module-owned atomic record/history/effect transactions; existing reviewed identities are referenced only when their complete expected fields match, without overwriting them. A workspace accepts one initial effect-bearing batch. Lifetime provenance includes snapshot, review, approval attribution, effect identities and outcomes. Retry/restart skips completed effects, reports partial failures and permits recovery of saved artifacts; fresh review can replace only a batch with zero committed effects. Reconciliation verifies counts, fields, relationships and source-attributed initial history under shared target locks before recording the authority timestamp. Replaying a successful import cannot overwrite later Slack edits.
+
+Imported inventory uses the existing structured lists/details/history and requires no AI, Gmail or archived-record mutation controls. Synthetic verification is separate from an authorized real review/import and production rollout. No real source data has been imported and spreadsheet authority has not changed in production. See [deployment readiness](deployment.md#documentation-import-release-candidate).
 
 ## Implementation and verification requirements
 

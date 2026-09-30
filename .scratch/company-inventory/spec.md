@@ -1,8 +1,10 @@
 # Documentation — approved feature work
 
-Status: the User approved the ten-ticket breakdown and authorized tickets 01–09 implementation. The authoritative target contract and delivered-slice status now live in [Documentation](../../docs/documentation.md). This work plan does not authorize production deployment or real data import.
+Status: the User approved the ten-ticket breakdown and authorized tickets 01–10 implementation. The authoritative target contract and delivered-slice status now live in [Documentation](../../docs/documentation.md). This work plan does not authorize production deployment or real data import.
 
 Use that contract for initial fields, shared workspace ownership, private navigation/context, confirmations, overwrite/recovery, history, AI safeguards, later slices and import requirements. Current delivery covers [ticket 01](issues/01-create-and-browse-shared-projects.md), [ticket 02](issues/02-edit-projects-with-overwrite-and-history.md), [ticket 03](issues/03-manage-technologies-and-project-components.md), [ticket 04](issues/04-manage-hosts-services-and-hosting-entries.md), [ticket 05](issues/05-manage-tools-and-their-usage.md), [ticket 06](issues/06-archive-and-restore-inventory-records.md), [ticket 07](issues/07-answer-natural-language-project-questions.md), [ticket 08](issues/08-answer-inventory-filters-and-counts.md) and [ticket 09](issues/09-propose-natural-language-inventory-changes.md); their local verification is recorded in those issues.
+
+The offline reviewed import is delivered in [ticket 10](issues/10-review-and-import-the-spreadsheet.md), with transition/recovery in the [operator procedure](../../docs/documentation-import.md). Real source review/import and deployment remain separately authorized actions.
 
 ## Implementation and verification requirements
 

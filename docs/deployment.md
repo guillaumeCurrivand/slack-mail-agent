@@ -6,6 +6,32 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Documentation import release candidate
+
+Ticket 10 on `main` adds the [offline operator import workflow](documentation-import.md). Keep the existing `ENABLED_MODULES` with `documentation` enabled for inventory access/import. No new environment variables, credentials, Slack/Google scopes or manual migrations are required. Startup idempotently adds `documentation_import_batches` and `documentation_import_effects`; existing records/history, environment and database volume remain. Deploying the code does not review/apply real source data or change inventory authority. Real source review, User approval, import and rollout remain separately authorized operator actions.
+
+After the reviewed commit is pushed, use the confirmed server checkout and existing deployment script:
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready &&
+docker compose exec -T app node dist/modules/documentation/import-cli.js --help
+```
+
+Check the checkout revision against the handoff's target commit with `git rev-parse HEAD`. The script backs up the database and recreates only the app, preserving `.env`, the Compose project and its existing volume. Post-deploy, confirm `/ready`, normal Documentation lists/details/history and CLI help. These checks do not apply inventory data or use AI/Gmail. Synthetic operator import testing belongs in a disposable test database; do not run fixtures against the production workspace as a deployment smoke test.
+
+For a separately authorized real import, follow the [operator procedure](documentation-import.md), take a new protected database backup immediately before apply, and check workspace, snapshot completeness, mapping evidence/ambiguities, existing-record identities and actual User approval. Container paths below are **operator-selected placeholders**; copy the frozen files into a protected directory readable by the app's `node` user before using them:
+
+```bash
+docker compose exec -T app node dist/modules/documentation/import-cli.js apply /operator-selected/snapshot.json /operator-selected/review.json /operator-selected/approval.json
+docker compose exec -T app node dist/modules/documentation/import-cli.js reconcile /operator-selected/snapshot.json /operator-selected/review.json /operator-selected/approval.json
+docker compose exec -T app node dist/modules/documentation/import-cli.js status
+```
+
+Inspect the report and Slack inventory/history against approved counts and relationships. Only a successfully applied and reconciled batch establishes database authority; an incomplete/failed batch retains recoverable checkpoints. Subsequent spreadsheet edits do not synchronize. A local release candidate is distinct from observed deployment/import success. Real PostgreSQL recovery/concurrency checks require disposable `TEST_DATABASE_URL`; live Slack and actual source-data validation remain separate checks.
+
 ## Documentation natural-language changes release candidate
 
 Ticket 09 on `main` adds conversational individual-record changes through existing confirmation/commit/history paths. Keep the existing `ENABLED_MODULES` value with `documentation` enabled. No new required environment variables, secrets, Slack/Google permissions or manual migration commands are needed. Natural-language interpretation uses existing optional `OPENAI_API_KEY` and the reviewed pinned `OPENAI_MODEL`; structured alternatives remain free. Startup idempotently adds `resolved_command` to `documentation_questions` and `source` to `documentation_confirmations` (old rows retain `Slack structured` attribution). Stop old workers through the existing deployment script before starting this version; preserve `.env`, the Compose project and database volume.
