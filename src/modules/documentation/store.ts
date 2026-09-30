@@ -1,6 +1,6 @@
 import { ownerKey, uid, type Actor } from '../../core/identity.js';
 import type { Sql } from '../../core/store.js';
-import type { Project, ProjectFields } from './domain.js';
+import type { Project, ProjectFields, ProjectEdit } from './domain.js';
 
 export const documentationSchema = `
 CREATE TABLE IF NOT EXISTS documentation_confirmations (
@@ -9,6 +9,8 @@ CREATE TABLE IF NOT EXISTS documentation_confirmations (
  created_at timestamptz NOT NULL, applied_at timestamptz,
  UNIQUE(owner,request_id)
 );
+ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS operation text NOT NULL DEFAULT 'create';
+ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS outcome text;
 CREATE TABLE IF NOT EXISTS documentation_projects (
  team text NOT NULL, id text NOT NULL, fields jsonb NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(team,id)
@@ -29,17 +31,27 @@ CREATE TABLE IF NOT EXISTS documentation_lookups (
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(owner,event_id)
 );`;
 
-type Confirmation = { id: string; target_id: string; fields: ProjectFields; created_at: Date | string; applied_at: Date | string | null };
+type Confirmation = { id: string; target_id: string; fields: ProjectEdit; operation: 'create' | 'edit'; outcome: 'applied' | 'satisfied' | 'missing' | null; created_at: Date | string; applied_at: Date | string | null };
+const confirmationColumns = 'id,target_id,fields,operation,outcome,created_at,applied_at';
 export class DocumentationStore {
   constructor(private sql: Sql) {}
   async propose(actor: Actor, eventId: string, fields: ProjectFields): Promise<Confirmation> {
     const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
-      RETURNING id,target_id,fields,created_at,applied_at`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, uid(), JSON.stringify(fields)]);
+      RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, uid(), JSON.stringify(fields)]);
     return result.rows[0];
   }
+  async proposeEdit(actor: Actor, eventId: string, project: Project, fields: ProjectEdit): Promise<Confirmation> {
+    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation)
+      VALUES($1,$2,$3,$4,$5,$6,$7,now(),'edit') ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
+      RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, project.id, JSON.stringify(fields)])).rows[0];
+  }
+  async request(actor: Actor, eventId: string): Promise<Confirmation | undefined> {
+    return (await this.sql.query(`SELECT ${confirmationColumns} FROM documentation_confirmations
+      WHERE team=$1 AND owner=$2 AND channel=$3 AND request_id=$4`, [actor.team, ownerKey(actor), actor.channel, eventId])).rows[0];
+  }
   async confirmation(actor: Actor, id: string): Promise<Confirmation | undefined> {
-    return (await this.sql.query(`SELECT id,target_id,fields,created_at,applied_at FROM documentation_confirmations
+    return (await this.sql.query(`SELECT ${confirmationColumns} FROM documentation_confirmations
       WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4`, [id, actor.team, ownerKey(actor), actor.channel])).rows[0];
   }
   async confirm(actor: Actor, id: string): Promise<Confirmation | undefined> {
@@ -47,7 +59,7 @@ export class DocumentationStore {
     // and commits the record, initial history, and effect checkpoint together.
     await this.sql.query(`WITH claimed AS (
       UPDATE documentation_confirmations SET applied_at=now()
-      WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND applied_at IS NULL
+      WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND operation='create' AND applied_at IS NULL
         AND created_at>now()-interval '24 hours' AND created_at<=now()
       RETURNING id,team,target_id,fields,applied_at
     ), created AS (
@@ -56,6 +68,39 @@ export class DocumentationStore {
     ) INSERT INTO documentation_history(team,id,project_id,actor,source,before_values,after_values,changed_at)
       SELECT team,id,target_id,$5,'Slack structured creation',NULL,fields,applied_at FROM claimed
       WHERE EXISTS(SELECT 1 FROM created)`, [id, actor.team, ownerKey(actor), actor.channel, actor.user]);
+    return this.confirmation(actor, id);
+  }
+  async confirmEdit(actor: Actor, id: string): Promise<Confirmation | undefined> {
+    // Lock the confirmation first, then the shared Project. FOR UPDATE reads the
+    // current row after waiting for another actor; history uses those locked values.
+    // All effects and the terminal checkpoint are in this one atomic statement.
+    await this.sql.query(`WITH eligible AS MATERIALIZED (
+      SELECT * FROM documentation_confirmations
+      WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND operation='edit' AND applied_at IS NULL
+        AND created_at>now()-interval '24 hours' AND created_at<=now() FOR UPDATE
+    ), locked AS MATERIALIZED (
+      SELECT p.team,p.id,p.fields FROM documentation_projects p JOIN eligible c ON p.team=c.team AND p.id=c.target_id
+      FOR UPDATE OF p
+    ), changes AS MATERIALIZED (
+      SELECT p.team,p.id,
+        COALESCE((SELECT jsonb_object_agg(e.key,p.fields->e.key) FROM jsonb_each(c.fields) e
+          WHERE p.fields->e.key IS DISTINCT FROM e.value),'{}'::jsonb) AS before_values,
+        COALESCE((SELECT jsonb_object_agg(e.key,e.value) FROM jsonb_each(c.fields) e
+          WHERE p.fields->e.key IS DISTINCT FROM e.value),'{}'::jsonb) AS after_values,
+        p.fields || c.fields AS replacement
+      FROM locked p JOIN eligible c ON c.team=p.team AND c.target_id=p.id
+    ), edited AS (
+      UPDATE documentation_projects p SET fields=d.replacement FROM changes d
+      WHERE p.team=d.team AND p.id=d.id AND d.after_values<>'{}'::jsonb RETURNING p.id
+    ), finished AS (
+      UPDATE documentation_confirmations c SET applied_at=clock_timestamp(),
+        outcome=CASE WHEN NOT EXISTS(SELECT 1 FROM locked) THEN 'missing'
+          WHEN EXISTS(SELECT 1 FROM edited) THEN 'applied' ELSE 'satisfied' END
+      FROM eligible e WHERE c.id=e.id RETURNING c.id,c.team,c.target_id,c.applied_at,c.outcome
+    ) INSERT INTO documentation_history(team,id,project_id,actor,source,before_values,after_values,changed_at)
+      SELECT c.team,c.id,c.target_id,$5,'Slack structured edit',d.before_values,d.after_values,c.applied_at
+      FROM finished c JOIN changes d ON d.team=c.team AND d.id=c.target_id WHERE c.outcome='applied'`,
+    [id, actor.team, ownerKey(actor), actor.channel, actor.user]);
     return this.confirmation(actor, id);
   }
   async projects(actor: Actor, requestedPage = 0, selector: string | null = null): Promise<{ projects: Project[]; total: number; page: number; pages: number }> {
@@ -84,11 +129,11 @@ export class DocumentationStore {
     return (await this.sql.query(`SELECT selector,destination FROM documentation_lookups
       WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND created_at>=now()-interval '30 days'`, [id, actor.team, ownerKey(actor), actor.channel])).rows[0];
   }
-  async history(actor: Actor, id: string, requestedPage = 0) {
-    const total = Number((await this.sql.query('SELECT count(*) AS total FROM documentation_history WHERE team=$1 AND project_id=$2', [actor.team, id])).rows[0].total);
+  async history(actor: Actor, id: string | null, requestedPage = 0) {
+    const total = Number((await this.sql.query('SELECT count(*) AS total FROM documentation_history WHERE team=$1 AND ($2::text IS NULL OR project_id=$2)', [actor.team, id])).rows[0].total);
     const pages = Math.max(1, total), page = Math.min(requestedPage, pages - 1);
-    const changes = (await this.sql.query(`SELECT actor,source,before_values,after_values,changed_at FROM documentation_history
-      WHERE team=$1 AND project_id=$2 ORDER BY changed_at,id LIMIT 1 OFFSET $3`, [actor.team, id, page])).rows;
+    const changes = (await this.sql.query(`SELECT project_id,actor,source,before_values,after_values,changed_at FROM documentation_history
+      WHERE team=$1 AND ($2::text IS NULL OR project_id=$2) ORDER BY changed_at,id LIMIT 1 OFFSET $3`, [actor.team, id, page])).rows;
     return { changes, total, page, pages };
   }
   async claimDelivery(actor: Actor, eventId: string) {

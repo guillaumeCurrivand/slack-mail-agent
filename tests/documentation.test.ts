@@ -76,7 +76,7 @@ it('creates a shared Project only after its owner confirms and lets another User
   try {
     const main = await h.dm('menu');
     const menu = await h.click(main, 'Documentation');
-    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Help', 'Back to menu']);
+    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'History', 'Help', 'Back to menu']);
     const proposal = await h.dm('documentation create project {"name":"Alpha"}');
     expect(kind(proposal)).toBe('Create Project confirmation');
     expect(bodyText(proposal)).toContain('description: Unknown');
@@ -91,6 +91,212 @@ it('creates a shared Project only after its owner confirms and lets another User
     expect(bodyText(history)).toContain('Before: No record');
     expect(bodyText(history)).toContain('name: Alpha');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('overwrites only confirmed fields after another User edits them and records actual before/after history', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Original","description":"Initial","notes":"Initial notes"}'), 'Confirm creation');
+    const details = await h.dm('documentation project Original');
+    const id = bodyText(details).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(bodyText(await h.click(details, 'Edit'))).toContain(`documentation edit project ${id}`);
+    const proposal = await h.dm(`documentation edit project ${id} {"name":"Alice name","description":"A"}`);
+    expect(kind(proposal)).toBe('Edit Project confirmation');
+    expect(bodyText(proposal)).toContain('name: Alice name');
+    expect(bodyText(proposal)).not.toContain('notes:');
+    expect(bodyText(await h.dm('documentation project Original', bob))).toContain('description: Initial');
+    const bobProposal = await h.dm(`documentation edit project ${id} {"description":"B","notes":"Bob notes"}`, bob);
+    await h.click(bobProposal, 'Confirm edit', bob);
+    await h.click(proposal, 'Confirm edit');
+    const after = await h.dm(`documentation project ${id}`, bob);
+    expect(bodyText(after)).toContain('name: Alice name');
+    expect(bodyText(after)).toContain('description: A');
+    expect(bodyText(after)).toContain('notes: Bob notes');
+    const history = await h.dm(`documentation history ${id}`, bob);
+    expect(bodyText(history)).toContain('History page 1/3');
+    const bobHistory = await h.click(history, 'Next', bob);
+    const aliceHistory = await h.click(bobHistory, 'Next', bob);
+    expect(bodyText(aliceHistory)).toContain('Actor: UALICE');
+    expect(bodyText(aliceHistory)).toContain('Before:\nname: Original\ndescription: B');
+    expect(bodyText(aliceHistory)).toContain('After:\nname: Alice name\ndescription: A');
+    expect(bodyText(aliceHistory)).not.toContain('notes:');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('validates one-record edits, optional clearing, alias ambiguity and stable identity across renames', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Alpha","aliases":["Shared"],"notes":"Keep"}'), 'Confirm creation');
+    await h.click(await h.dm('documentation create project {"name":"Other","aliases":["Shared"]}'), 'Confirm creation');
+    expect(kind(await h.dm('documentation edit project Shared {"notes":"No"}'))).toBe('Ambiguous Project edit');
+    expect(kind(await h.dm('documentation edit project Missing {"notes":"No"}'))).toBe('Project not found');
+    for (const fields of [{}, { name: null }, { name: ' ' }, { name: 'Two\nLines' }, { aliases: [''] }, { id: 'x' }, { actor: 'x' }, { changed_at: 'x' }, { archived: true }, { repositories: ['javascript:alert(1)'] }, { notes: 'x'.repeat(1501) }, [{ name: 'A' }, { name: 'B' }]]) {
+      expect(kind(await h.dm(`documentation edit project Alpha ${JSON.stringify(fields)}`))).toBe('Invalid Project edit');
+    }
+    const details = await h.dm('documentation project Alpha');
+    const id = bodyText(details).match(/Identifier: ([\w-]+)/)![1]!;
+    const pending = await h.dm('documentation edit project Alpha {"description":"Pending"}');
+    const rename = await h.dm(`documentation edit project ${id} {"name":"  Renamed  ","aliases":["New alias"],"notes":null,"repositories":[]}`);
+    await h.click(rename, 'Confirm edit');
+    await h.click(pending, 'Confirm edit');
+    const current = await h.dm('documentation project new ALIAS', bob);
+    expect(bodyText(current)).toContain(`Identifier: ${id}`);
+    expect(bodyText(current)).toContain('name: Renamed');
+    expect(bodyText(current)).toContain('notes: Unknown');
+    expect(bodyText(current)).toContain('repositories: []');
+    expect(bodyText(current)).toContain('description: Pending');
+    expect(kind(await h.dm('documentation project Alpha'))).toBe('Project not found');
+    expect(bodyText(await h.dm(`documentation history ${id}`, bob))).toContain('History page 1/3');
+    const shared = await h.dm('documentation history', bob);
+    expect(kind(shared)).toBe('Shared history');
+    expect(bodyText(shared)).toContain('History page 1/4');
+    expect(kind(await h.click(shared, 'Next'))).toBe('Menu unavailable');
+    expect(bodyText(await h.click(shared, 'Next', bob))).toContain('name: Other');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('binds edit confirmations to actor, DM, workspace and operation, with fixed expiry', async () => {
+  const h = await harness(), foreign = await harness('documentation', 'TOTHER');
+  try {
+    const creation = await h.dm('documentation create project {"name":"Private edit"}');
+    await h.enqueueClick(creation, { ...button(creation, 'Confirm creation'), action_id: 'documentation:confirm_edit' });
+    expect(kind(await h.drain())).toBe('Confirmation unavailable');
+    await h.click(creation, 'Confirm creation');
+    const pending = await h.dm('documentation edit project Private edit {"notes":"Secret replacement"}');
+    expect(kind(await h.click(pending, 'Confirm edit', bob))).toBe('Confirmation unavailable');
+    expect(kind(await h.click(pending, 'Confirm edit', { ...alice, channel: 'DOTHER' }))).toBe('Confirmation unavailable');
+    expect(kind(await foreign.click(pending, 'Confirm edit', { ...alice, team: 'TOTHER' }))).toBe('Confirmation unavailable');
+    await h.enqueueClick(pending, { ...button(pending, 'Confirm edit'), action_id: 'documentation:confirm_create' });
+    expect(kind(await h.drain())).toBe('Confirmation unavailable');
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(pending, 'Confirm edit').value]);
+    await h.restart();
+    expect(kind(await h.click(pending, 'Confirm edit'))).toBe('Confirmation expired');
+    expect(bodyText(await h.dm('documentation project Private edit'))).toContain('notes: Unknown');
+    expect(bodyText(await h.dm('documentation history Private edit'))).toContain('History page 1/1');
+  } finally { await h.app.close(); await foreign.app.close(); }
+});
+
+it('replays saved edit outcomes after intervening edits, restart, expiry and uncertain or rejected delivery', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Recovery edit"}'), 'Confirm creation');
+    for (const failure of ['uncertain', 'reject'] as const) {
+      const pending = await h.dm(`documentation edit project Recovery edit {"description":"${failure}"}`);
+      await h.enqueueClick(pending, button(pending, 'Confirm edit'));
+      h.fail(failure); await expect(h.drain()).rejects.toThrow();
+      const count = h.messages.length;
+      await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
+      const later = await h.dm('documentation edit project Recovery edit {"description":"Later"}', bob);
+      await h.click(later, 'Confirm edit', bob);
+      await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '2 days' WHERE id=$1", [button(pending, 'Confirm edit').value]);
+      await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
+      await h.restart(); await h.drain();
+      if (failure === 'uncertain') expect(h.messages.length).toBe(count + 2);
+      else expect(kind(h.messages.at(-1)!)).toBe('Project edited');
+      expect(kind(await h.click(pending, 'Confirm edit'))).toBe('Project edited');
+      expect(bodyText(await h.dm('documentation project Recovery edit'))).toContain('description: Later');
+    }
+    expect(bodyText(await h.dm('documentation history Recovery edit'))).toContain('History page 1/5');
+    const satisfied = await h.dm('documentation edit project Recovery edit {"description":"Later"}');
+    expect(kind(await h.click(satisfied, 'Confirm edit'))).toBe('Edit already satisfied');
+    await h.click(await h.dm('documentation edit project Recovery edit {"description":"New"}', bob), 'Confirm edit', bob);
+    expect(kind(await h.click(satisfied, 'Confirm edit'))).toBe('Edit already satisfied');
+    expect(bodyText(await h.dm('documentation project Recovery edit'))).toContain('description: New');
+    expect(bodyText(await h.dm('documentation history Recovery edit'))).toContain('History page 1/6');
+  } finally { await h.app.close(); }
+});
+
+it('rolls back edits and effect checkpoints when history fails, then records values current at retry', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Atomic edit","description":"Initial"}'), 'Confirm creation');
+    const proposal = await h.dm('documentation edit project Atomic edit {"description":"A"}');
+    await db.exec(`CREATE FUNCTION fail_edit_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'edit history unavailable'; END; $$;
+      CREATE TRIGGER fail_edit_history BEFORE INSERT ON documentation_history FOR EACH ROW EXECUTE FUNCTION fail_edit_history();`);
+    await h.enqueueClick(proposal, button(proposal, 'Confirm edit'));
+    await expect(h.drain()).rejects.toThrow('edit history unavailable');
+    await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
+    expect(bodyText(await h.dm('documentation project Atomic edit', bob))).toContain('description: Initial');
+    await db.exec('DROP TRIGGER fail_edit_history ON documentation_history; DROP FUNCTION fail_edit_history();');
+    await h.click(await h.dm('documentation edit project Atomic edit {"description":"B"}', bob), 'Confirm edit', bob);
+    await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
+    await h.restart(); await h.drain();
+    const initial = await h.dm('documentation history Atomic edit', bob);
+    const bobChange = await h.click(initial, 'Next', bob);
+    const aliceChange = await h.click(bobChange, 'Next', bob);
+    expect(bodyText(aliceChange)).toContain('History page 3/3');
+    expect(bodyText(aliceChange)).toContain('Before:\ndescription: B\nAfter:\ndescription: A');
+  } finally { await h.app.close(); }
+});
+
+it('shows every value in long shared history and Projects grown by independent confirmed edits', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Long"}'), 'Confirm creation');
+    const links = Array.from({ length: 10 }, (_, index) => `https://example.com/${index}/` + '-'.repeat(350));
+    await h.click(await h.dm(`documentation edit project Long ${JSON.stringify({ repositories: links })}`), 'Confirm edit');
+    await h.click(await h.dm(`documentation edit project Long ${JSON.stringify({ documentationLinks: links, notes: '*'.repeat(900) + 'FINAL VALUE' })}`), 'Confirm edit');
+    let details = await h.dm('documentation project Long');
+    let all = bodyText(details);
+    while (buttons(details).some(control => control.text.text === 'More values')) { details = await h.click(details, 'More values'); all += bodyText(details); }
+    expect(all).toContain('notes: ' + '*'.repeat(900) + 'FINAL VALUE');
+    expect(all).toContain('documentationLinks: ' + JSON.stringify(links));
+    await h.click(await h.dm(`documentation edit project Long ${JSON.stringify({ documentationLinks: links.map(url => url.replaceAll('-', '~')), notes: '*'.repeat(900) + 'FINAL REPLACEMENT' })}`), 'Confirm edit');
+    let history = await h.dm('documentation history Long');
+    for (let index = 0; index < 3; index++) history = await h.click(history, 'Next');
+    let historyText = bodyText(history);
+    while (buttons(history).some(control => control.text.text === 'More values')) { history = await h.click(history, 'More values'); historyText += bodyText(history); }
+    expect(historyText).toContain('*'.repeat(900) + 'FINAL VALUE');
+    expect(historyText).toContain('*'.repeat(900) + 'FINAL REPLACEMENT');
+    expect(historyText).toContain('documentationLinks: ' + JSON.stringify(links.map(url => url.replaceAll('-', '~'))));
+  } finally { await h.app.close(); }
+});
+
+it('preserves the saved edit target and expiry on proposal retry after a rename, and reports missing targets accurately', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Retry target"}'), 'Confirm creation');
+    const initial = await h.dm('documentation project Retry target');
+    const id = bodyText(initial).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.enqueueText('documentation edit project Retry target {"notes":"Original replacement"}');
+    h.fail('reject'); await expect(h.drain()).rejects.toThrow('rejected');
+    await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
+    await h.click(await h.dm(`documentation edit project ${id} {"name":"New name"}`, bob), 'Confirm edit', bob);
+    await h.click(await h.dm('documentation create project {"name":"Retry target"}', bob), 'Confirm creation', bob);
+    await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
+    await h.restart(); const retry = await h.drain();
+    expect(bodyText(retry)).toContain(`Edit shared Project: ${id}`);
+    await h.click(retry, 'Confirm edit');
+    expect(bodyText(await h.dm('documentation project New name'))).toContain('notes: Original replacement');
+    expect(bodyText(await h.dm('documentation project Retry target'))).toContain('notes: Unknown');
+    const missing = await h.dm(`documentation edit project ${id} {"notes":"Missing"}`);
+    // Simulate a damaged reference; record removal is not a supported User action.
+    await sql.query("UPDATE documentation_confirmations SET target_id='missing-target' WHERE id=$1", [button(missing, 'Confirm edit').value]);
+    expect(kind(await h.click(missing, 'Confirm edit'))).toBe('Edit failed');
+    await h.restart(); expect(kind(await h.click(missing, 'Confirm edit'))).toBe('Edit failed');
+    expect(bodyText(await h.dm('documentation project New name'))).toContain('notes: Original replacement');
+    expect(bodyText(await h.dm('documentation history New name'))).toContain('History page 1/3');
+  } finally { await h.app.close(); }
+});
+
+it('edits exact names and aliases containing braces with JSON braces inside replacement strings', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Alpha {Beta}","aliases":["Alias {with braces}"]}'), 'Confirm creation');
+    const notes = 'Literal {braces} and a nested-looking {"notes":"value"}';
+    const named = await h.dm(`documentation edit project Alpha {Beta} ${JSON.stringify({ notes })}`);
+    expect(kind(named)).toBe('Edit Project confirmation');
+    expect(bodyText(named)).toContain(`notes: ${notes}`);
+    await h.click(named, 'Confirm edit');
+    const aliased = await h.dm('documentation edit project Alias {with braces} {"description":"Alias edit"}', bob);
+    expect(kind(aliased)).toBe('Edit Project confirmation');
+    await h.click(aliased, 'Confirm edit', bob);
+    const current = await h.dm('documentation project Alpha {Beta}');
+    expect(bodyText(current)).toContain(`notes: ${notes}`);
+    expect(bodyText(current)).toContain('description: Alias edit');
   } finally { await h.app.close(); }
 });
 
@@ -305,6 +511,9 @@ it('keeps all delivered Documentation paths available when the shared AI allowan
     const identifier = bodyText(project).match(/Identifier: ([\w-]+)/)![1]!;
     expect(bodyText(await h.dm(`documentation project ${identifier}`))).toContain('name: No AI needed');
     expect(bodyText(await h.dm('documentation history Budgetless', bob))).toContain('Source: Slack structured creation');
+    const edit = await h.dm('documentation edit project Budgetless {"notes":"Still no AI needed"}', bob);
+    expect(kind(await h.click(edit, 'Confirm edit', bob))).toBe('Project edited');
+    expect(bodyText(await h.dm('documentation project Budgetless'))).toContain('notes: Still no AI needed');
     expect(kind(await h.dm('documentation'))).toBe('Documentation help');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); }

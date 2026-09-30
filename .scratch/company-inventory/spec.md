@@ -1,8 +1,8 @@
 # Documentation — approved feature work
 
-Status: the User approved the ten-ticket breakdown and authorized ticket 01 implementation. The authoritative target contract and delivered-slice status now live in [Documentation](../../docs/documentation.md). This work plan does not authorize production deployment or real data import.
+Status: the User approved the ten-ticket breakdown and authorized tickets 01 and 02 implementation. The authoritative target contract and delivered-slice status now live in [Documentation](../../docs/documentation.md). This work plan does not authorize production deployment or real data import.
 
-Use that contract for initial fields, shared workspace ownership, private navigation/context, confirmations, overwrite/recovery, history, AI safeguards, later slices and import requirements. Current delivery is limited to [ticket 01](issues/01-create-and-browse-shared-projects.md); its local verification is recorded in that issue.
+Use that contract for initial fields, shared workspace ownership, private navigation/context, confirmations, overwrite/recovery, history, AI safeguards, later slices and import requirements. Current delivery covers [ticket 01](issues/01-create-and-browse-shared-projects.md) and [ticket 02](issues/02-edit-projects-with-overwrite-and-history.md); their local verification is recorded in those issues.
 
 ## Implementation and verification requirements
 

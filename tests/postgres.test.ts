@@ -2,7 +2,7 @@ import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { Budget } from '../src/core/budget.js';
 import { schema } from '../src/app/schema.js';
-import { JobStore, withOwner } from '../src/core/store.js';
+import { JobStore, withOwner, type Sql } from '../src/core/store.js';
 import { uid } from '../src/modules/mail/domain.js';
 import { createDocumentationModule } from '../src/modules/documentation/index.js';
 import { ModuleRegistry } from '../src/core/modules.js';
@@ -11,12 +11,26 @@ import type { Actor } from '../src/core/identity.js';
 import type { AgentMessage, Messenger } from '../src/core/slack.js';
 
 const url = process.env.TEST_DATABASE_URL;
+function documentationDispatch(sql: Sql, defaultActor: Actor) {
+  const module = createDocumentationModule(sql), modules = new ModuleRegistry([module]);
+  const options = { AI_MONTHLY_LIMIT_USD: 10, AI_USER_MONTHLY_LIMIT_USD: 10, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' };
+  const messages: AgentMessage[] = [];
+  const messenger: Messenger = { async send(_actor, message) { messages.push(message); } };
+  const text = async (request: string, actor = defaultActor) => {
+    await dispatchJob(sql, options, modules, messenger, { ...modules.text(request), actor, id: uid() }); return messages.at(-1)!;
+  };
+  const confirm = (message: AgentMessage, actor = defaultActor) => {
+    const control = message.buttons!.find(button => button.action.startsWith('documentation:confirm'))!;
+    return dispatchJob(sql, options, modules, messenger, { ...modules.action(control.action, control.value), actor, id: uid() });
+  };
+  return { module, options, messenger, text, confirm };
+}
 describe.skipIf(!url)('real PostgreSQL concurrency', () => {
   const namespace = `test_${uid().replaceAll('-', '')}`;
   let admin: pg.Pool, pool: pg.Pool;
   beforeAll(async () => {
     admin = new pg.Pool({ connectionString: url }); await admin.query(`CREATE SCHEMA ${namespace}`);
-    pool = new pg.Pool({ connectionString: url, options: `-c search_path=${namespace}` }); await pool.query(schema);
+    pool = new pg.Pool({ connectionString: url, options: `-c search_path=${namespace}`, application_name: namespace }); await pool.query(schema);
   });
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); await admin.end(); } });
   it('admits only one of two simultaneous requests that together exceed the team allowance', async () => {
@@ -90,5 +104,64 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     expect(messages.at(-1)!.text).toContain('History page 1/1');
     expect(messages.at(-1)!.text).toContain('Actor: UALICE');
     expect(messages.at(-1)!.text).toContain('Before: No record');
+  });
+
+  it('waits for another actor to commit, overwrites selected fields using current values and never replays the effect', async () => {
+    const alice = { team: 'TOVERWRITE', user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+    const { module, options, messenger, text, confirm } = documentationDispatch(pool, alice);
+    await module.initialize!(pool);
+    await confirm(await text('documentation create project {"name":"Shared","description":"Initial"}'));
+    const a = await text('documentation edit project Shared {"description":"A"}');
+    const b = await text('documentation edit project Shared {"description":"B","notes":"Bob notes"}', bob);
+    const client = await pool.connect();
+    let pending: Promise<void> | undefined;
+    try {
+      await client.query('BEGIN');
+      const bobModules = new ModuleRegistry([createDocumentationModule(client)]);
+      const control = b.buttons!.find(button => button.action === 'documentation:confirm_edit')!;
+      await dispatchJob(client, options, bobModules, messenger, { ...bobModules.action(control.action, control.value), actor: bob, id: uid() });
+      pending = confirm(a);
+      const deadline = Date.now() + 5000;
+      let waiting = false;
+      while (Date.now() < deadline) {
+        waiting = (await pool.query(`SELECT 1 FROM pg_stat_activity WHERE application_name=$1
+          AND wait_event_type='Lock' AND query LIKE 'WITH eligible AS MATERIALIZED%'`, [namespace])).rows.length > 0;
+        if (waiting) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      expect(waiting, 'Alice must wait on the shared Project while Bob holds its uncommitted edit').toBe(true);
+      await client.query('COMMIT'); await pending;
+      await Promise.all(Array.from({ length: 4 }, () => confirm(a)));
+      const current = await text('documentation project Shared', bob);
+      expect(current.text).toContain('description: A'); expect(current.text).toContain('notes: Bob notes');
+      const history = await module.menu!(bob, `history_${current.text.match(/Identifier: ([\w-]+)/)![1]}_2`, { sql: pool });
+      expect(history.text).toContain('History page 3/3');
+      expect(history.text).toContain('Actor: UALICE');
+      expect(history.text).toContain('Before:\ndescription: B\nAfter:\ndescription: A');
+      await confirm(await text('documentation edit project Shared {"description":"Later"}', bob), bob);
+      await confirm(a);
+      expect((await text('documentation project Shared')).text).toContain('description: Later');
+    } finally {
+      try { await client.query('ROLLBACK'); await pending; }
+      finally { client.release(); }
+    }
+  });
+
+  it('rolls back an edit, history and saved outcome on PostgreSQL failure and safely retries', async () => {
+    const actor = { team: 'TROLLBACK', user: 'UALICE', channel: 'DALICE' };
+    const { module, text, confirm } = documentationDispatch(pool, actor);
+    await module.initialize!(pool);
+    await confirm(await text('documentation create project {"name":"Atomic edit","notes":"Initial"}'));
+    const edit = await text('documentation edit project Atomic edit {"notes":"Replacement"}');
+    await pool.query(`CREATE FUNCTION reject_edit_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'history failure'; END; $$;
+      CREATE TRIGGER reject_edit_history BEFORE INSERT ON documentation_history FOR EACH ROW EXECUTE FUNCTION reject_edit_history();`);
+    try {
+      await expect(confirm(edit)).rejects.toThrow('history failure');
+      expect((await text('documentation project Atomic edit')).text).toContain('notes: Initial');
+      expect((await text('documentation history Atomic edit')).text).toContain('History page 1/1');
+    } finally { await pool.query('DROP TRIGGER reject_edit_history ON documentation_history; DROP FUNCTION reject_edit_history();'); }
+    await confirm(edit); await confirm(edit);
+    expect((await text('documentation project Atomic edit')).text).toContain('notes: Replacement');
+    expect((await text('documentation history Atomic edit')).text).toContain('History page 1/2');
   });
 });
