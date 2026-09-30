@@ -32,6 +32,22 @@ The script requires a successful readiness request with `{"ok":true}`, then show
 
 If the readiness check fails, inspect the logs and keep the release marked unverified. If failure occurred after stopping the old app but before `docker compose up`, `docker compose start app` can restart the still-existing old container. Once the new app has started, database migrations may already have run: assess schema and queued-work compatibility before reverting code or restoring a backup. Do not remove the database volume to retry an update.
 
+## Documentation Project questions release candidate
+
+Ticket 07 on `main` adds Project hosting/Technology questions with private 30-minute context. Keep the existing `ENABLED_MODULES` with `documentation` enabled. No new required environment variables, secrets or permissions are introduced. Natural-language interpretation uses the existing optional `OPENAI_API_KEY` and pinned `OPENAI_MODEL`; structured operations work without them. Startup idempotently creates `documentation_questions` and `documentation_project_context`; no manual migration is required. Existing records/history and pending confirmations are retained. Stop old workers before starting the new image and preserve `.env`, the Compose project and database volume.
+
+Deploy the reviewed commit with the existing procedure:
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh
+```
+
+After readiness succeeds, use a consented synthetic Project and DM `documentation where is <Project> hosted?`, then `documentation which technologies does this project use?`. Check production-first Components/environments, Unknown fields, archived references, stable detail controls, saved links and pagination. Rename/edit through separately confirmed structured controls and verify a follow-up uses current values. A second User must not inherit context or use the first User's choices. After 30 minutes, a follow-up must ask which Project. Check free lookup/editing/history without a key or remaining budget and inspect `budget` for Documentation attribution. Use the [synthetic cases](testing/documentation-project-questions.md) for separate model-quality evaluation; these checks can spend from the shared allowance.
+
+This is a locally verified release candidate until production readiness, live Slack and model evaluation are observed. Real PostgreSQL locking tests require `TEST_DATABASE_URL`; report skips separately. Spreadsheet import and inventory authority transition remain separate work.
+
 ## Documentation Projects release candidate
 
 Documentation tickets 01 and 02 add opt-in shared Projects, lifetime history, private structured creation/edit confirmations, exact lookup and paginated navigation. To expose it, append `documentation` to the server's existing `ENABLED_MODULES` value while preserving other module identifiers. Keeping the current value leaves Documentation disabled. There are no new secrets, Slack permissions, Google permissions or AI credentials. Startup idempotently creates five Module-owned `documentation_*` tables; ticket 02 adds `operation` (existing rows default to creation) and `outcome` columns to confirmations. No manual migration command is required. Existing creation controls remain valid. Existing inventory/history and private state remain when disabled. Lifetime inventory/history are excluded from interaction cleanup.

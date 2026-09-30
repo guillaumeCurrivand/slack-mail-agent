@@ -30,6 +30,8 @@ Core records posted menu identities against owner and DM, then validates those r
 
 ## State and retries
 
+Documentation Project questions own constrained interpretation, attempt/reservation/plan checkpoints, private candidate choices and 30-minute Project identity context inside the Module. Inventory text never enters interpretation; rendering rereads workspace records without another paid step. Result controls and retries reuse saved plans, never redispatch uncertain paid attempts. Context/choice ownership includes the User and DM and cannot affect typed prefix routing. See [ticket 07](documentation.md#delivered-locally--ticket-07).
+
 Own the module's tables, domain types, connection credentials, conversation history, and retention policy. Prefix new table names with the module ID. Scope every user-state lookup and update to `ownerKey(actor)`; do not read another module's state. The mail module retains its original `users` and `oauth_states` table names to preserve existing installations.
 
 An explicitly approved shared domain can instead own workspace-scoped records: [Documentation](documentation.md) scopes every inventory/history read and write to the authenticated actor's workspace. Its pending confirmations, ambiguity selectors and delivery bookkeeping remain actor-scoped, with DM binding for private controls. Existing signed ingress and configured-workspace validation establish access; no additional permitted-user list is required. This extension does not allow reading another User's Mail Sorter or Slack Unanswered state. Inventory and history retain their lifetime policy, separately from ephemeral interaction cleanup.
