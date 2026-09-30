@@ -23,8 +23,11 @@ Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specifi
 - `src/core/`: Slack transport, explicit routing, durable jobs, identity and locking, messaging, and shared AI budget.
 - `src/modules/mail/`: mail commands, Gmail/OAuth, rules, previews, undo, mail AI, state, and retention.
 - `src/modules/slack/`: per-user Slack channel choices, shared-channel discovery, and on-demand unanswered-message search with contextual AI matching.
+- `src/modules/documentation/`: workspace-shared Projects and initial history, structured creation with private confirmations, and inventory navigation.
 
 `ENABLED_MODULES=mail` is the default. An empty value starts only shared help, budget, and health endpoints; Gmail, encryption, and AI credentials are then unnecessary. Unknown or duplicate module identifiers fail startup. Availability is deployment-wide; each user still owns their connections and data. Restart to apply a module configuration change.
+
+Documentation ticket 01 is implemented locally and opt-in: add `documentation` to the existing `ENABLED_MODULES` value, or use it alone. It needs no AI or Gmail credentials. Its Projects menu, exact lookup, initial history and structured creation use no AI. Projects/history are shared within the configured Slack workspace; confirmations and navigation remain private. Send `documentation help`, `documentation projects`, `documentation project <identifier, exact name or alias>`, or `documentation history <identifier, exact name or alias>`. To create one record, send `documentation create project {"name":"Alpha"}` (other fixed fields are optional), review the separate Card and confirm within 24 hours. Missing fields remain Unknown. See [Documentation](docs/documentation.md) for exact fields, constraints, recovery and later slices; editing, other inventories, archival, natural language and import have no controls yet.
 
 Disabled modules expose no routes and execute no queued work. Their pending jobs and state are retained for re-enablement, and their module-specific retention cleanup is paused while disabled. Other modules and shared commands continue processing. Modules are trusted code deployed together, not sandboxed plugins.
 

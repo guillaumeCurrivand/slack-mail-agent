@@ -1,7 +1,7 @@
 import type { Actor } from './identity.js';
 
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core'; bound?: boolean };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[] };
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; resourceLinks?: Array<{ label: string; url: string }> };
 export interface Messenger {
   send(actor: Actor, message: AgentMessage): Promise<void>;
   post?(actor: Actor, message: AgentMessage): Promise<string>;
@@ -96,6 +96,13 @@ export class Slack implements Messenger {
     if (!message.kind && text) blocks.push({ type: 'markdown', text: text.slice(0, 12_000) });
     const cardBlocks: any[] = [];
     if (message.kind) cardBlocks.push(cardBody(message.kind, text || ' '));
+    if (message.kind && message.resourceLinks?.length) {
+      const links = message.resourceLinks.filter(link => {
+        try { const url = new URL(link.url); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>]/.test(link.url); }
+        catch { return false; }
+      });
+      if (links.length) cardBlocks.push({ type: 'rich_text', elements: links.map(link => ({ type: 'rich_text_section', elements: [{ type: 'link', text: link.label, url: link.url }] })) });
+    }
     if (message.kind && buttons.length) cardBlocks.push({ type: 'divider' });
     let actionElements: any[] = [];
     let actionIds = new Set<string>();

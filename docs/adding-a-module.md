@@ -1,6 +1,6 @@
 # Adding a built-in module
 
-Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter and Slack Unanswered ship today.
+Modules live in `src/modules/<id>/` and are composed in `src/app/modules.ts`. A module is trusted code in the same process and deployment; independent enablement is not process or security isolation. Mail Sorter, Slack Unanswered and Documentation have local implementations; see their authoritative contracts for delivered slices.
 
 ## Interface and routing
 
@@ -24,11 +24,17 @@ For an explicit work-start button among ordinary menu buttons, mark that button 
 
 `Messenger.send` remains compatible with existing workflow callers. Navigation-capable adapters also implement `post` (return the posted message timestamp) and `update` (edit that timestamp). The production Slack adapter shares rendering/sanitization for posts and updates. Send-only test adapters remain valid for existing workflow tests; navigation tests need message identities and updates.
 
+Cards can supply typed `resourceLinks` with plain labels and HTTP(S) URLs for saved resources. The transport validates protocols and excludes credential-bearing URLs; it renders these as native links without interpreting inventory text as markdown links, mentions or authorization. Domain validation remains the Module's responsibility. Navigation `links` on `MenuPage` continue to mean private page destinations.
+
 Core records posted menu identities against owner and DM, then validates those records against signed action message timestamps before editing. A workflow Card is never an in-place navigation target. Menu metadata expires after 30 days; send `menu` to recover. This is shared delivery metadata, not Module state, and it can expire while a Module is disabled without changing that Module's saved work. Navigation delivery markers are written before contacting Slack: definite rejection allows retry, while an uncertain outcome requires a fresh User request. Markers for pending jobs survive cleanup.
 
 ## State and retries
 
 Own the module's tables, domain types, connection credentials, conversation history, and retention policy. Prefix new table names with the module ID. Scope every user-state lookup and update to `ownerKey(actor)`; do not read another module's state. The mail module retains its original `users` and `oauth_states` table names to preserve existing installations.
+
+An explicitly approved shared domain can instead own workspace-scoped records: [Documentation](documentation.md) scopes every inventory/history read and write to the authenticated actor's workspace. Its pending confirmations, ambiguity selectors and delivery bookkeeping remain actor-scoped, with DM binding for private controls. Existing signed ingress and configured-workspace validation establish access; no additional permitted-user list is required. This extension does not allow reading another User's Mail Sorter or Slack Unanswered state. Inventory and history retain their lifetime policy, separately from ephemeral interaction cleanup.
+
+Per-User worker locks do not serialize shared-record commits across Users. Documentation creation uses a single data-modifying SQL statement that locks the saved confirmation row and writes the Project, initial history and effect checkpoint atomically. Distinct click IDs cannot repeat it. Future editing must also coordinate on shared target rows, preserve unrelated fields and record actual overwritten values; per-User locks alone are insufficient. See [the ownership ADR](adr/0004-authoritative-documentation-inventory.md). Cleanup preserves checkpoints needed by queued/running jobs and never expires lifetime inventory/history.
 
 The shared worker processes jobs under a `team:user:module` advisory lock, preserving order for conflicting work inside each Module while leaving core navigation and another Module responsive. Run at least two worker lanes. Work is durable and can be retried after a restart or delivery error. Handlers must deduplicate effects using `eventId`, persist execution checkpoints before external mutations, and handle uncertain outcomes without blindly repeating changes. The existing mail module demonstrates these requirements. Duplicate Slack deliveries are deduplicated on enqueue; registered work operations additionally deduplicate distinct starts while active. The [admission and locking decision](adr/0003-operation-admission-and-module-locks.md) explains the boundary.
 

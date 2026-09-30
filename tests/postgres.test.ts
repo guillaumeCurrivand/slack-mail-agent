@@ -4,6 +4,11 @@ import { Budget } from '../src/core/budget.js';
 import { schema } from '../src/app/schema.js';
 import { JobStore, withOwner } from '../src/core/store.js';
 import { uid } from '../src/modules/mail/domain.js';
+import { createDocumentationModule } from '../src/modules/documentation/index.js';
+import { ModuleRegistry } from '../src/core/modules.js';
+import { dispatchJob } from '../src/core/dispatch.js';
+import type { Actor } from '../src/core/identity.js';
+import type { AgentMessage, Messenger } from '../src/core/slack.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)('real PostgreSQL concurrency', () => {
@@ -67,5 +72,23 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
       expect(await withOwner(pool, actor, async () => 'search', 'slack')).toBe('search');
       expect(await withOwner(pool, { ...actor, user: 'B' }, async () => 'other', 'mail')).toBe('other');
     } finally { release(); await first; }
+  });
+  it('atomically creates one shared Project and initial history under simultaneous confirmation deliveries', async () => {
+    const module = createDocumentationModule(pool);
+    await module.initialize!(pool); await module.initialize!(pool);
+    const modules = new ModuleRegistry([module]);
+    const alice = { team: 'TDOCS', user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+    const options = { AI_MONTHLY_LIMIT_USD: 10, AI_USER_MONTHLY_LIMIT_USD: 10, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' };
+    const messages: Array<AgentMessage & { actor: Actor }> = [];
+    const messenger: Messenger = { async send(actor, message) { messages.push({ ...message, actor }); } };
+    await dispatchJob(pool, options, modules, messenger, { ...modules.text('documentation create project {"name":"Concurrent"}'), actor: alice, id: uid() });
+    const control = messages.find(message => message.kind === 'Create Project confirmation')!.buttons!.find(button => button.action === 'documentation:confirm_create')!;
+    await Promise.all(Array.from({ length: 4 }, () => dispatchJob(pool, options, modules, messenger, { ...modules.action(control.action, control.value), actor: alice, id: uid() })));
+    await dispatchJob(pool, options, modules, messenger, { ...modules.text('documentation projects'), actor: bob, id: uid() });
+    expect(messages.at(-1)!.text).toContain('1 Projects');
+    await dispatchJob(pool, options, modules, messenger, { ...modules.text('documentation history Concurrent'), actor: bob, id: uid() });
+    expect(messages.at(-1)!.text).toContain('History page 1/1');
+    expect(messages.at(-1)!.text).toContain('Actor: UALICE');
+    expect(messages.at(-1)!.text).toContain('Before: No record');
   });
 });
