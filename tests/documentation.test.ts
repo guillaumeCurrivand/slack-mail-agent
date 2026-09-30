@@ -71,12 +71,214 @@ async function harness(enabled = 'documentation', team = 'TTEAM') {
     restart: async (ids = enabled) => { await app.close(); modules = createModules(readConfig({ ...moduleEnv, ENABLED_MODULES: ids }), sql, { ...moduleEnv, ENABLED_MODULES: ids }); await initialize(); app = createServer(config, jobs, modules); } };
 }
 
+it('archives and restores a Project through actor-bound controls while retaining its identifier and history', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Lifecycle"}'), 'Confirm creation');
+    const details = await h.dm('documentation project Lifecycle');
+    const id = bodyText(details).match(/Identifier: ([\w-]+)/)![1]!;
+    const archive = await h.click(details, 'Archive');
+    expect(kind(archive)).toBe('Archive Project confirmation');
+    expect(kind(await h.click(archive, 'Confirm archive', bob))).toBe('Confirmation unavailable');
+    await h.click(archive, 'Confirm archive');
+    expect(bodyText(await h.dm('documentation projects'))).toContain('No Projects');
+    const archived = await h.dm(`documentation project ${id}`, bob);
+    expect(bodyText(archived)).toContain('Status: Archived');
+    const view = await h.dm('documentation archived', bob);
+    expect(bodyText(view)).toContain(id);
+    const restore = await h.click(archived, 'Restore', bob);
+    await h.click(restore, 'Confirm restore', bob);
+    await h.click(archive, 'Confirm archive');
+    expect(bodyText(await h.dm(`documentation project ${id}`))).toContain('Status: Active');
+    const history = await h.dm(`documentation history ${id}`);
+    const archivedHistory = await h.click(history, 'Next');
+    expect(bodyText(archivedHistory)).toContain('Before:\narchived: false\nAfter:\narchived: true');
+    expect(bodyText(await h.click(archivedHistory, 'Next'))).toContain('Before:\narchived: true\nAfter:\narchived: false');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('labels archived Projects in ambiguous exact-name and alias choices', async () => {
+  const h = await harness();
+  try {
+    for (let index = 0; index < 2; index++) await h.click(await h.dm('documentation create project {"name":"Same","aliases":["Shared alias"]}'), 'Confirm creation');
+    const first = await h.click(await h.dm('documentation project Same'), 'Same');
+    await h.click(await h.click(first, 'Archive'), 'Confirm archive');
+    for (const selector of ['Same', 'Shared alias']) {
+      const choices = await h.dm(`documentation project ${selector}`);
+      expect(bodyText(choices)).toContain('Same [Archived]');
+      expect(buttons(choices).map(item => item.text.text)).toContain('Same [Archived]');
+      expect(bodyText(await h.click(choices, 'Same [Archived]'))).toContain('Status: Archived');
+    }
+  } finally { await h.app.close(); }
+});
+
+it.each(['technology', 'component', 'host', 'hosting', 'tool'] as const)('preserves %s relationships and prevents both lifecycle replays through structured/action dispatch', async recordKind => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const parentId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm('documentation create technology {"name":"Runtime"}'), 'Confirm creation');
+    const technologyId = bodyText(await h.dm('documentation technology Runtime')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'API', projectId: parentId, technologies: [technologyId] })}`), 'Confirm creation');
+    const componentId = bodyText(await h.dm('documentation component API')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm('documentation create host {"name":"Compute"}'), 'Confirm creation');
+    const serviceId = bodyText(await h.dm('documentation host Compute')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm(`documentation create hosting ${JSON.stringify({ componentId, serviceId, environment: 'production' })}`), 'Confirm creation');
+    const hostingId = bodyText(await h.click(await h.dm(`documentation hosting ${componentId}`), 'production')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm(`documentation create tool ${JSON.stringify({ name: 'Shared tool', projects: [parentId] })}`), 'Confirm creation');
+    const toolId = bodyText(await h.dm('documentation tool Shared tool')).match(/Identifier: ([\w-]+)/)![1]!;
+    const id = { technology: technologyId, component: componentId, host: serviceId, hosting: hostingId, tool: toolId }[recordKind];
+    const command = recordKind === 'hosting' ? 'hosting-entry' : recordKind;
+    const active = await h.dm(`documentation ${command} ${id}`);
+    const proposal = await h.click(active, 'Archive');
+    expect(kind(proposal)).toContain('confirmation');
+    expect(kind(await h.click(proposal, 'Confirm archive', bob))).toBe('Confirmation unavailable');
+    await h.click(proposal, 'Confirm archive');
+    const detail = await h.dm(`documentation ${command} ${id}`, bob);
+    expect(bodyText(detail)).toContain('Status: Archived');
+    const currentProject = await h.dm(`documentation project ${parentId}`);
+    expect(bodyText(currentProject)).toContain('Status: Active');
+    if (recordKind === 'host') expect(bodyText(currentProject)).toContain(`(${id}) [Archived]`);
+    if (recordKind === 'technology') expect(buttons(await h.dm(`documentation component ${componentId}`)).map(b => b.text.text)).toContain('Runtime [Archived]');
+    const ordinary = { technology: 'technologies', component: `components ${parentId}`, host: 'hosts', hosting: `hosting ${componentId}`, tool: 'tools' }[recordKind];
+    expect(bodyText(await h.dm(`documentation ${ordinary}`))).not.toContain(id);
+    const restore = await h.click(detail, 'Restore', bob);
+    await h.click(restore, 'Confirm restore', bob);
+    await h.click(proposal, 'Confirm archive');
+    expect(bodyText(await h.dm(`documentation ${command} ${id}`))).toContain('Status: Active');
+    await h.click(await h.dm(`documentation archive ${recordKind} ${id}`, bob), 'Confirm archive', bob);
+    await h.click(restore, 'Confirm restore', bob);
+    expect(bodyText(await h.dm(`documentation ${command} ${id}`))).toContain('Status: Archived');
+    await h.click(await h.dm(`documentation restore ${recordKind} ${id}`), 'Confirm restore');
+    const restored = await h.dm(`documentation ${command} ${id}`);
+    for (const value of [parentId, technologyId, componentId, serviceId].filter(value => bodyText(active).includes(value))) expect(bodyText(restored)).toContain(value);
+    expect(bodyText(await h.dm(`documentation history ${command} ${id}`))).toContain('History page 1/5');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it.each(['project', 'technology', 'component', 'host', 'hosting', 'tool'] as const)('requires restoration before a pending %s edit can apply and keeps its original expiry', async recordKind => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const parentId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'Component', projectId: parentId })}`), 'Confirm creation');
+    const componentId = bodyText(await h.dm('documentation component Component')).match(/Identifier: ([\w-]+)/)![1]!;
+    await h.click(await h.dm('documentation create host {"name":"Host"}'), 'Confirm creation');
+    const serviceId = bodyText(await h.dm('documentation host Host')).match(/Identifier: ([\w-]+)/)![1]!;
+    const fields = recordKind === 'component' ? { name: 'Target', projectId: parentId, type: 'Initial' }
+      : recordKind === 'hosting' ? { componentId, serviceId, environment: 'Initial' } : { name: 'Target', notes: 'Initial' };
+    await h.click(await h.dm(`documentation create ${recordKind} ${JSON.stringify(fields)}`), 'Confirm creation');
+    const command = recordKind === 'hosting' ? 'hosting-entry' : recordKind;
+    const detail = recordKind === 'hosting' ? await h.click(await h.dm(`documentation hosting ${componentId}`), 'Initial') : await h.dm(`documentation ${command} Target`);
+    const id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
+    const field = recordKind === 'component' ? 'type' : recordKind === 'hosting' ? 'environment' : 'notes';
+    const edit = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify({ [field]: 'Approved' })}`);
+    const expiredArchive = await h.dm(`documentation archive ${recordKind} ${id}`);
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '25 hours' WHERE id=$1", [button(expiredArchive, 'Confirm archive').value]);
+    expect(kind(await h.click(expiredArchive, 'Confirm archive'))).toBe('Confirmation expired');
+    await h.click(await h.dm(`documentation archive ${recordKind} ${id}`, bob), 'Confirm archive', bob);
+    expect(kind(await h.click(edit, 'Confirm edit'))).toBe('Edit requires restoration');
+    expect(bodyText(await h.dm(`documentation ${command} ${id}`))).toContain(`${field}: Initial`);
+    expect(kind(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify({ [field]: 'Rejected' })}`))).toBe('Edit requires restoration');
+    const expiredRestore = await h.dm(`documentation restore ${recordKind} ${id}`);
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '25 hours' WHERE id=$1", [button(expiredRestore, 'Confirm restore').value]);
+    expect(kind(await h.click(expiredRestore, 'Confirm restore'))).toBe('Confirmation expired');
+    await h.click(await h.dm(`documentation restore ${recordKind} ${id}`, bob), 'Confirm restore', bob);
+    await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify({ [field]: 'Bob' })}`, bob), 'Confirm edit', bob);
+    await h.click(edit, 'Confirm edit');
+    expect(bodyText(await h.dm(`documentation ${command} ${id}`))).toContain(`${field}: Approved`);
+    const historyCommand = recordKind === 'project' ? `history ${id}` : `history ${command} ${id}`;
+    let history = await h.dm(`documentation ${historyCommand}`);
+    for (let page = 0; page < 4; page++) history = await h.click(history, 'Next');
+    expect(bodyText(history)).toContain(`Before:\n${field}: Bob\nAfter:\n${field}: Approved`);
+    const expiring = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify({ [field]: 'Expired' })}`);
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '25 hours' WHERE id=$1", [button(expiring, 'Confirm edit').value]);
+    await h.click(await h.dm(`documentation archive ${recordKind} ${id}`), 'Confirm archive');
+    await h.restart('');
+    await h.restart('documentation');
+    await h.click(await h.dm(`documentation restore ${recordKind} ${id}`, bob), 'Confirm restore', bob);
+    expect(kind(await h.click(expiring, 'Confirm edit'))).toBe('Confirmation expired');
+    expect(bodyText(await h.dm(`documentation ${command} ${id}`))).toContain(`${field}: Approved`);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('paginates Archived inventory with private controls and saves already-satisfied lifecycle outcomes', async () => {
+  const h = await harness();
+  try {
+    await new Budget(sql, 10_000_000, 10_000_000, 'mail').reserve(alice, 10_000_000);
+    await h.dm('budget');
+    for (let index = 0; index < 9; index++) {
+      const creation = await h.dm(`documentation create project ${JSON.stringify({ name: `Archived ${index}` })}`);
+      expect(kind(creation), bodyText(creation)).toBe('Create Project confirmation');
+      await h.click(creation, 'Confirm creation');
+      await h.click(await h.dm(`documentation archive project Archived ${index}`), 'Confirm archive');
+    }
+    const first = await h.click(await h.click(await h.dm('menu', bob), 'Documentation', bob), 'Archived', bob);
+    expect(bodyText(first)).toContain('page 1/2 · 9 archived records');
+    expect(kind(await h.click(first, 'Next'))).toBe('Menu unavailable');
+    expect(bodyText(await h.click(first, 'Next', bob))).toContain('page 2/2');
+    expect(bodyText(await h.dm('documentation archived 999'))).toContain('page 2/2');
+    const satisfied = await h.dm('documentation archive project Archived 0');
+    expect(kind(await h.click(satisfied, 'Confirm archive'))).toBe('Lifecycle already satisfied');
+    await h.click(await h.dm('documentation restore project Archived 0', bob), 'Confirm restore', bob);
+    await h.click(satisfied, 'Confirm archive');
+    expect(bodyText(await h.dm('documentation project Archived 0'))).toContain('Status: Active');
+    const restored = await h.dm('documentation restore project Archived 0');
+    expect(kind(await h.click(restored, 'Confirm restore'))).toBe('Lifecycle already satisfied');
+    await h.click(await h.dm('documentation archive project Archived 0', bob), 'Confirm archive', bob);
+    await h.click(restored, 'Confirm restore');
+    expect(bodyText(await h.dm('documentation history Archived 0'))).toContain('History page 1/4');
+    const expired = await h.dm('documentation restore project Archived 0');
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '25 hours' WHERE id=$1", [button(expired, 'Confirm restore').value]);
+    await h.restart(''); await h.restart('documentation');
+    expect(kind(await h.click(expired, 'Confirm restore'))).toBe('Confirmation expired');
+    expect(bodyText(await h.dm('documentation project Archived 0'))).toContain('Status: Archived');
+    expect(kind(await h.click(await h.dm('documentation project Archived 0'), 'Restore', bob))).toBe('Menu unavailable');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it.each(['project', 'host'] as const)('rolls back %s lifecycle/history/outcome together and recovers uncertain delivery without repeating the effect', async recordKind => {
+  const h = await harness();
+  const table = recordKind === 'project' ? 'documentation_history' : 'documentation_record_history';
+  try {
+    await h.click(await h.dm(`documentation create ${recordKind} {"name":"Atomic lifecycle"}`), 'Confirm creation');
+    const proposal = await h.dm(`documentation archive ${recordKind} Atomic lifecycle`);
+    await db.exec(`CREATE FUNCTION fail_lifecycle_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'lifecycle history unavailable'; END; $$;
+      CREATE TRIGGER fail_lifecycle_history BEFORE INSERT ON ${table} FOR EACH ROW EXECUTE FUNCTION fail_lifecycle_history();`);
+    await h.enqueueClick(proposal, button(proposal, 'Confirm archive'));
+    await expect(h.drain()).rejects.toThrow('lifecycle history unavailable');
+    await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
+    expect(bodyText(await h.dm(`documentation ${recordKind} Atomic lifecycle`))).toContain('Status: Active');
+    await db.exec(`DROP TRIGGER fail_lifecycle_history ON ${table}; DROP FUNCTION fail_lifecycle_history();`);
+    await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
+    h.fail('uncertain'); await expect(h.drain()).rejects.toThrow('Lost response');
+    const count = h.messages.length;
+    await h.restart(); await h.drain();
+    expect(h.messages).toHaveLength(count);
+    await h.click(await h.dm(`documentation restore ${recordKind} Atomic lifecycle`, bob), 'Confirm restore', bob);
+    await h.click(proposal, 'Confirm archive');
+    expect(bodyText(await h.dm(`documentation ${recordKind} Atomic lifecycle`))).toContain('Status: Active');
+    const history = recordKind === 'project' ? 'history Atomic lifecycle' : 'history host Atomic lifecycle';
+    expect(bodyText(await h.dm(`documentation ${history}`))).toContain('History page 1/3');
+    const reject = await h.dm(`documentation archive ${recordKind} Atomic lifecycle`);
+    await h.enqueueClick(reject, button(reject, 'Confirm archive'));
+    h.fail('reject'); await expect(h.drain()).rejects.toThrow('Slack delivery was rejected');
+    await h.restart(); await h.drain();
+    expect(kind(h.messages.at(-1)!)).toContain('archived');
+    expect(bodyText(await h.dm(`documentation ${history}`))).toContain('History page 1/4');
+  } finally { await h.app.close(); }
+});
+
 it('creates a shared Project only after its owner confirms and lets another User read initial history without AI or Gmail', async () => {
   const h = await harness();
   try {
     const main = await h.dm('menu');
     const menu = await h.click(main, 'Documentation');
-    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'Hosts/services', 'Tools', 'History', 'Help', 'Back to menu']);
+    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'Hosts/services', 'Tools', 'Archived', 'History', 'Help', 'Back to menu']);
     const proposal = await h.dm('documentation create project {"name":"Alpha"}');
     expect(kind(proposal)).toBe('Create Project confirmation');
     expect(bodyText(proposal)).toContain('description: Unknown');

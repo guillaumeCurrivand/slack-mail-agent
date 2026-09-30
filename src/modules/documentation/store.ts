@@ -48,6 +48,8 @@ ALTER TABLE documentation_records ADD CONSTRAINT documentation_records_check CHE
  (kind='component' AND parent_id IS NOT NULL AND fields->>'projectId'=parent_id AND component_id IS NULL) OR
  (kind='hosting' AND parent_id IS NULL AND component_id IS NOT NULL AND fields->>'componentId'=component_id));
 CREATE INDEX IF NOT EXISTS documentation_record_history_lookup ON documentation_record_history(team,record_id,changed_at,id);
+ALTER TABLE documentation_projects ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
+ALTER TABLE documentation_records ADD COLUMN IF NOT EXISTS archived boolean NOT NULL DEFAULT false;
 CREATE TABLE IF NOT EXISTS documentation_deliveries (
  owner text NOT NULL, event_id text NOT NULL, created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(owner,event_id)
 );
@@ -57,10 +59,55 @@ CREATE TABLE IF NOT EXISTS documentation_lookups (
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(owner,event_id)
 );`;
 
-type Confirmation = { id: string; target_id: string; fields: InventoryValues; record_kind: 'project' | RecordKind; operation: 'create' | 'edit'; outcome: 'applied' | 'satisfied' | 'missing' | 'invalid' | null; created_at: Date | string; applied_at: Date | string | null };
+type Confirmation = { id: string; target_id: string; fields: InventoryValues; record_kind: 'project' | RecordKind; operation: 'create' | 'edit' | 'archive' | 'restore'; outcome: 'applied' | 'satisfied' | 'missing' | 'invalid' | 'archived' | null; created_at: Date | string; applied_at: Date | string | null };
 const confirmationColumns = 'id,target_id,fields,record_kind,operation,outcome,created_at,applied_at';
 export class DocumentationStore {
   constructor(private sql: Sql) {}
+  async proposeLifecycle(actor: Actor, eventId: string, kind: 'project' | RecordKind, targetId: string, operation: 'archive' | 'restore'): Promise<Confirmation> {
+    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind)
+      VALUES($1,$2,$3,$4,$5,$6,'{}'::jsonb,now(),$7,$8)
+      ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${confirmationColumns}`,
+    [uid(), actor.team, ownerKey(actor), actor.channel, eventId, targetId, operation, kind])).rows[0];
+  }
+  async confirmLifecycle(actor: Actor, id: string, kind: 'project' | RecordKind, operation: 'archive' | 'restore') {
+    const project = kind === 'project';
+    const table = project ? 'documentation_projects' : 'documentation_records';
+    const history = project ? 'documentation_history' : 'documentation_record_history';
+    const recordColumns = project ? 'project_id' : 'record_id,record_kind';
+    // The confirmation lock prevents old clicks from repeating an effect after
+    // a later opposite lifecycle change. Target locks coordinate with field edits.
+    await this.sql.query(`WITH eligible AS MATERIALIZED (
+      SELECT * FROM documentation_confirmations WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4
+        AND record_kind=$6 AND operation=$7 AND applied_at IS NULL
+        AND created_at>now()-interval '24 hours' AND created_at<=now() FOR UPDATE
+    ), locked AS MATERIALIZED (
+      SELECT r.* FROM ${table} r JOIN eligible c ON r.team=c.team AND r.id=c.target_id
+      ${project ? '' : 'AND r.kind=c.record_kind'} FOR UPDATE OF r
+    ), changed AS (
+      UPDATE ${table} r SET archived=$8 FROM locked l
+      WHERE r.team=l.team AND r.id=l.id AND l.archived IS DISTINCT FROM $8 RETURNING r.id
+    ), finished AS (
+      UPDATE documentation_confirmations c SET applied_at=clock_timestamp(),outcome=CASE
+        WHEN NOT EXISTS(SELECT 1 FROM locked) THEN 'missing'
+        WHEN EXISTS(SELECT 1 FROM changed) THEN 'applied' ELSE 'satisfied' END
+      FROM eligible e WHERE c.id=e.id RETURNING c.*
+    ) INSERT INTO ${history}(team,id,${recordColumns},actor,source,before_values,after_values,changed_at)
+      SELECT c.team,c.id,c.target_id,${project ? '' : 'c.record_kind,'}$5,
+        CASE WHEN c.operation='archive' THEN 'Slack structured archive' ELSE 'Slack structured restore' END,
+        jsonb_build_object('archived',l.archived),jsonb_build_object('archived',$8::boolean),c.applied_at
+      FROM finished c JOIN locked l ON l.team=c.team AND l.id=c.target_id WHERE c.outcome='applied'`,
+    [id, actor.team, ownerKey(actor), actor.channel, actor.user, kind, operation, operation === 'archive']);
+    return this.confirmation(actor, id);
+  }
+  async archived(actor: Actor, requestedPage = 0) {
+    const source = `(SELECT team,id,'project'::text kind,fields,archived FROM documentation_projects
+      UNION ALL SELECT team,id,kind,fields,archived FROM documentation_records) inventory`;
+    const total = Number((await this.sql.query(`SELECT count(*) total FROM ${source} WHERE team=$1 AND archived`, [actor.team])).rows[0].total);
+    const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
+    const records: { id: string; kind: 'project' | RecordKind; fields: InventoryValues }[] = (await this.sql.query(`SELECT id,kind,fields FROM ${source}
+      WHERE team=$1 AND archived ORDER BY kind,lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 8 OFFSET $2`, [actor.team, page * 8])).rows;
+    return { records, total, pages, page };
+  }
   async propose(actor: Actor, eventId: string, fields: ProjectFields): Promise<Confirmation> {
     const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at)
       VALUES($1,$2,$3,$4,$5,$6,$7,now()) ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
@@ -118,7 +165,7 @@ export class DocumentationStore {
       SELECT r.team,r.id,
         COALESCE((SELECT jsonb_object_agg(e.key,r.fields->e.key) FROM jsonb_each(c.fields) e WHERE r.fields->e.key IS DISTINCT FROM e.value),'{}'::jsonb) before_values,
         COALESCE((SELECT jsonb_object_agg(e.key,e.value) FROM jsonb_each(c.fields) e WHERE r.fields->e.key IS DISTINCT FROM e.value),'{}'::jsonb) after_values,
-        r.fields || c.fields replacement FROM locked r JOIN eligible c ON r.id=c.target_id
+        r.fields || c.fields replacement FROM locked r JOIN eligible c ON r.id=c.target_id WHERE NOT r.archived
     ), planned AS MATERIALIZED (
       SELECT c.*,CASE WHEN c.operation='create' THEN c.fields ELSE (SELECT replacement FROM changes) END AS replacement FROM eligible c
     ), parents AS MATERIALIZED (
@@ -161,7 +208,7 @@ export class DocumentationStore {
         outcome=CASE WHEN c.operation='edit' AND NOT EXISTS(SELECT 1 FROM locked) THEN 'missing'
           WHEN NOT e.valid THEN 'invalid'
           WHEN EXISTS(SELECT 1 FROM created) OR EXISTS(SELECT 1 FROM edited) THEN 'applied' ELSE 'satisfied' END
-      FROM validated e WHERE c.id=e.id RETURNING c.*
+      FROM validated e WHERE c.id=e.id AND NOT EXISTS(SELECT 1 FROM locked WHERE archived) RETURNING c.*
     ) INSERT INTO documentation_record_history(team,id,record_id,record_kind,actor,source,before_values,after_values,changed_at)
       SELECT c.team,c.id,c.target_id,c.record_kind,$5,
         CASE WHEN c.operation='create' THEN 'Slack structured creation' ELSE 'Slack structured edit' END,
@@ -172,8 +219,13 @@ export class DocumentationStore {
     return this.confirmation(actor, id);
   }
   async confirmation(actor: Actor, id: string): Promise<Confirmation | undefined> {
-    return (await this.sql.query(`SELECT ${confirmationColumns} FROM documentation_confirmations
+    const saved: Confirmation | undefined = (await this.sql.query(`SELECT ${confirmationColumns} FROM documentation_confirmations
       WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4`, [id, actor.team, ownerKey(actor), actor.channel])).rows[0];
+    if (saved?.operation === 'edit' && !saved.applied_at && new Date(saved.created_at).getTime() > Date.now() - 24 * 3600_000 && new Date(saved.created_at).getTime() <= Date.now()) {
+      const target = saved.record_kind === 'project' ? await this.project(actor, saved.target_id) : await this.record(actor, saved.record_kind, saved.target_id);
+      if (target?.archived) return { ...saved, outcome: 'archived' };
+    }
+    return saved;
   }
   async confirm(actor: Actor, id: string): Promise<Confirmation | undefined> {
     // One database statement serializes approvals on the saved confirmation row
@@ -200,7 +252,7 @@ export class DocumentationStore {
       WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND record_kind='project' AND operation='edit' AND applied_at IS NULL
         AND created_at>now()-interval '24 hours' AND created_at<=now() FOR UPDATE
     ), locked AS MATERIALIZED (
-      SELECT p.team,p.id,p.fields FROM documentation_projects p JOIN eligible c ON p.team=c.team AND p.id=c.target_id
+      SELECT p.team,p.id,p.fields,p.archived FROM documentation_projects p JOIN eligible c ON p.team=c.team AND p.id=c.target_id
       FOR UPDATE OF p
     ), changes AS MATERIALIZED (
       SELECT p.team,p.id,
@@ -209,7 +261,7 @@ export class DocumentationStore {
         COALESCE((SELECT jsonb_object_agg(e.key,e.value) FROM jsonb_each(c.fields) e
           WHERE p.fields->e.key IS DISTINCT FROM e.value),'{}'::jsonb) AS after_values,
         p.fields || c.fields AS replacement
-      FROM locked p JOIN eligible c ON c.team=p.team AND c.target_id=p.id
+      FROM locked p JOIN eligible c ON c.team=p.team AND c.target_id=p.id WHERE NOT p.archived
     ), edited AS (
       UPDATE documentation_projects p SET fields=d.replacement FROM changes d
       WHERE p.team=d.team AND p.id=d.id AND d.after_values<>'{}'::jsonb RETURNING p.id
@@ -217,7 +269,7 @@ export class DocumentationStore {
       UPDATE documentation_confirmations c SET applied_at=clock_timestamp(),
         outcome=CASE WHEN NOT EXISTS(SELECT 1 FROM locked) THEN 'missing'
           WHEN EXISTS(SELECT 1 FROM edited) THEN 'applied' ELSE 'satisfied' END
-      FROM eligible e WHERE c.id=e.id RETURNING c.id,c.team,c.target_id,c.applied_at,c.outcome
+      FROM eligible e WHERE c.id=e.id AND NOT EXISTS(SELECT 1 FROM locked WHERE archived) RETURNING c.id,c.team,c.target_id,c.applied_at,c.outcome
     ) INSERT INTO documentation_history(team,id,project_id,actor,source,before_values,after_values,changed_at)
       SELECT c.team,c.id,c.target_id,$5,'Slack structured edit',d.before_values,d.after_values,c.applied_at
       FROM finished c JOIN changes d ON d.team=c.team AND d.id=c.target_id WHERE c.outcome='applied'`,
@@ -225,16 +277,16 @@ export class DocumentationStore {
     return this.confirmation(actor, id);
   }
   async projects(actor: Actor, requestedPage = 0, selector: string | null = null): Promise<{ projects: Project[]; total: number; page: number; pages: number }> {
-    const filter = `team=$1 AND ($2::text IS NULL OR id=$2 OR lower(fields->>'name')=lower($2)
+    const filter = `team=$1 AND ($2::text IS NOT NULL OR NOT archived) AND ($2::text IS NULL OR id=$2 OR lower(fields->>'name')=lower($2)
       OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(fields->'aliases','null'::jsonb),'[]'::jsonb)) alias WHERE lower(alias)=lower($2)))`;
     const total = Number((await this.sql.query(`SELECT count(*) AS total FROM documentation_projects WHERE ${filter}`, [actor.team, selector])).rows[0].total);
     const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
-    const projects = (await this.sql.query(`SELECT id,fields,created_at FROM documentation_projects
+    const projects = (await this.sql.query(`SELECT id,fields,archived,created_at FROM documentation_projects
       WHERE ${filter} ORDER BY lower(fields->>'name'),id LIMIT 8 OFFSET $3`, [actor.team, selector, page * 8])).rows;
     return { projects, total, page, pages };
   }
   async project(actor: Actor, id: string): Promise<Project | undefined> {
-    return (await this.sql.query('SELECT id,fields,created_at FROM documentation_projects WHERE team=$1 AND id=$2', [actor.team, id])).rows[0];
+    return (await this.sql.query('SELECT id,fields,archived,created_at FROM documentation_projects WHERE team=$1 AND id=$2', [actor.team, id])).rows[0];
   }
   async lookup(actor: Actor, query: string) {
     const exactId = await this.project(actor, query);
@@ -247,18 +299,18 @@ export class DocumentationStore {
     return result.rows[0].id;
   }
   async records(actor: Actor, kind: RecordKind, requestedPage = 0, selector: string | null = null, parentId: string | null = null, referenceId: string | null = null) {
-    const filter = `team=$1 AND kind=$2 AND ($3::text IS NULL OR id=$3 OR lower(fields->>'name')=lower($3))
+    const filter = `team=$1 AND kind=$2 AND ($3::text IS NOT NULL OR NOT archived) AND ($3::text IS NULL OR id=$3 OR lower(fields->>'name')=lower($3))
       AND ($4::text IS NULL OR parent_id=$4 OR component_id=$4) AND ($5::text IS NULL OR fields->'technologies' @> jsonb_build_array($5::text) OR fields->>'serviceId'=$5 OR fields->'projects' @> jsonb_build_array($5::text))`;
     const values = [actor.team, kind, selector, parentId, referenceId];
     const total = Number((await this.sql.query(`SELECT count(*) total FROM documentation_records WHERE ${filter}`, values)).rows[0].total);
     const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
-    const records: InventoryRecord[] = (await this.sql.query(`SELECT id,kind,fields,created_at FROM documentation_records WHERE ${filter}
+    const records: InventoryRecord[] = (await this.sql.query(`SELECT id,kind,fields,archived,created_at FROM documentation_records WHERE ${filter}
       ORDER BY CASE WHEN lower(fields->>'environment')='production' THEN 0 ELSE 1 END,
         lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 8 OFFSET $6`, [...values, page * 8])).rows;
     return { records, total, page, pages };
   }
   async record(actor: Actor, kind: RecordKind, id: string): Promise<InventoryRecord | undefined> {
-    return (await this.sql.query('SELECT id,kind,fields,created_at FROM documentation_records WHERE team=$1 AND kind=$2 AND id=$3', [actor.team, kind, id])).rows[0];
+    return (await this.sql.query('SELECT id,kind,fields,archived,created_at FROM documentation_records WHERE team=$1 AND kind=$2 AND id=$3', [actor.team, kind, id])).rows[0];
   }
   async projectHosting(actor: Actor, projectId: string, requestedPage = 0) {
     const from = `FROM documentation_records c LEFT JOIN documentation_records h
@@ -267,8 +319,8 @@ export class DocumentationStore {
       WHERE c.team=$1 AND c.kind='component' AND c.parent_id=$2`;
     const total = Number((await this.sql.query(`SELECT count(*) total ${from}`, [actor.team, projectId])).rows[0].total);
     const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
-    const entries: { component_id: string; component_name: string; hosting_id: string | null; fields: InventoryValues | null; service_name: string | null }[] =
-      (await this.sql.query(`SELECT c.id component_id,c.fields->>'name' component_name,h.id hosting_id,h.fields,s.fields->>'name' service_name ${from}
+    const entries: { component_id: string; component_name: string; hosting_id: string | null; fields: InventoryValues | null; service_name: string | null; component_archived: boolean; hosting_archived: boolean | null; service_archived: boolean | null }[] =
+      (await this.sql.query(`SELECT c.id component_id,c.fields->>'name' component_name,h.id hosting_id,h.fields,s.fields->>'name' service_name,c.archived component_archived,h.archived hosting_archived,s.archived service_archived ${from}
         ORDER BY CASE WHEN lower(h.fields->>'environment')='production' THEN 0 ELSE 1 END,
           lower(c.fields->>'name'),c.id,lower(h.fields->>'environment'),h.id LIMIT 8 OFFSET $3`, [actor.team, projectId, page * 8])).rows;
     return { entries, total, page, pages };

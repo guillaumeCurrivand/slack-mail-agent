@@ -25,7 +25,7 @@ export const projectEdit = z.strictObject(fieldDefinitions).partial()
   .refine(value => Object.keys(value).length > 0 && JSON.stringify(value).length <= 5000);
 export type ProjectFields = z.infer<typeof projectFields>;
 export type ProjectEdit = z.infer<typeof projectEdit>;
-export type Project = { id: string; fields: ProjectFields; created_at: Date | string };
+export type Project = { id: string; fields: ProjectFields; archived: boolean; created_at: Date | string };
 
 const technologyDefinitions = { name, category: z.string().max(120).nullable(), notes: fieldDefinitions.notes };
 export const technologyFields = z.strictObject({ ...technologyDefinitions, category: technologyDefinitions.category.default(null), notes: technologyDefinitions.notes.default(null) });
@@ -55,7 +55,7 @@ export const recordSchemas = {
 export const recordTitle = (kind: RecordKind | 'project') => ({ project: 'Project', technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry', tool: 'Tool' })[kind];
 export const recordName = (record: InventoryRecord) => String(record.fields.name ?? (record.fields.environment === '' ? 'Empty environment' : record.fields.environment) ?? 'Unknown environment');
 export type InventoryValues = Record<string, string | string[] | number | boolean | null>;
-export type InventoryRecord = { id: string; kind: RecordKind; fields: InventoryValues; created_at: Date | string };
+export type InventoryRecord = { id: string; kind: RecordKind; fields: InventoryValues; archived: boolean; created_at: Date | string };
 export function parseEditRequest(body: string): { selector: string; value: unknown } {
   // Selectors and replacement strings can both contain braces. Find a complete
   // trailing JSON value before validating fields rather than guessing a delimiter.

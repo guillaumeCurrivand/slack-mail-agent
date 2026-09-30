@@ -1,6 +1,6 @@
 # Documentation module
 
-Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–05 are implemented locally; later slices below remain future work. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
+Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–06 are implemented locally; later slices below remain future work. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
 
 ## Delivered locally — ticket 01
 
@@ -47,7 +47,7 @@ Creation and editing reuse the 24-hour initiating-User/DM-bound confirmation and
 
 All delivered reads, instructions, proposals and confirmations use no AI or Gmail and remain available when the shared AI allowance is exhausted. Automated checks use fake messaging and an embedded database; real PostgreSQL concurrency requires `TEST_DATABASE_URL`, and live Slack/deployment remains unverified.
 
-Archival/restoration, natural-language interpretation, remembered Project context and import are **later slices**, with no exposed controls yet. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
+Natural-language interpretation, remembered Project context and import are **later slices**, with no exposed controls yet. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
 
 ## Delivered locally — ticket 04
 
@@ -62,7 +62,7 @@ Documentation adds **Hosts/services** and **Add Host/service** to its private me
 
 Project details show paginated Components and environments, production first, saved hosting URLs, stable detail controls and explicit missing values. Projects without recorded Components/entries show Unknown. Each page contains up to eight entries or Components without hosting; Previous/Next retains the Project. Long literal values use the existing value pagination. A saved link is available to open; the Agent does not read it. Several entries across Components/environments/Projects may reference the same service, without copying its cost.
 
-Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. Archival, natural language and import remain later slices.
+Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. Natural language and import remain later slices.
 
 ## Delivered locally — ticket 05
 
@@ -74,7 +74,17 @@ Documentation adds **Tools** and **Add Tool** to its private menu. Project detai
 
 Company-wide and Project usage may coexist. Omitted usage, referent, company-wide status and Project links remain Unknown. Usage is descriptive text: unmatched words never create Projects or relationships. Missing Projects require a separate confirmed Project creation; ambiguous names/aliases require explicit resolution. Referents describe inventory contacts, confer no exclusive edit authority, trigger no notifications and add no membership check. Another User with existing bot/workspace access can read/edit the Tool using their own confirmation.
 
-Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. All delivered Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible. Archival, natural language, remembered context and import remain later slices.
+Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. All delivered Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible. Natural language, remembered context and import remain later slices.
+
+## Delivered locally — ticket 06
+
+All six record kinds offer **Archive** while active and **Restore** while archived. These private, message-bound controls propose a separate confirmation Card; navigation never applies the change. Typed equivalents are `documentation archive <project|technology|component|host|hosting|tool> <identifier or exact name>` and `documentation restore <kind> <identifier or exact name>`. Project aliases also work; Hosting entries use stable identifiers (`hosting-entry` is accepted as an alternative kind). Ambiguous targets require inspection and resubmission with one identifier. Every Documentation User may propose and confirm changes through their own controls without extra roles.
+
+`documentation archived [page]` and the Module's **Archived** control browse all archived kinds together, eight records per page with private Previous/Next navigation. Ordinary lists omit archived records; exact lookup, explicit relationships and history retain access. Details and history show current status. Current Project hosting details label archived Components, Hosting entries and Hosts/services; Component and Tool references label archived Technologies and Projects. Archival changes only the selected record: it never deletes fields, identifiers, relationships or history, nor cascades to referencing records. Restore retains all of those values.
+
+Archive/Restore confirmations retain the initiating User/DM and original 24-hour expiry. Confirmation locks the saved operation and shared record and atomically saves the actual `archived: false → true` or `true → false` history plus terminal outcome. Already-satisfied operations save an outcome without adding history. Replaying either operation after a later opposite change reports its saved outcome and cannot repeat the effect. Sources are `Slack structured archive` and `Slack structured restore`. Failed history writes roll back the state and checkpoint together; definite delivery rejection permits retry, while uncertain delivery is not blindly resent.
+
+New edits of archived targets require restoration. An edit proposed before archival remains pending when clicked while archived; after a separately confirmed Restore, it may be retried within its original 24-hour window. Restoration never refreshes that window. Intervening ordinary edits still follow the approved selected-field overwrite policy. Disable/re-enable preserves inventory/history and pending operations while expiry keeps running. These paths need no AI, Gmail or provider calls. Permanent deletion and dedicated restoration of earlier field values remain unavailable.
 
 ## Requested outcomes
 

@@ -2,6 +2,7 @@ import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
 import { recordSchemas, recordTitle, recordName, validSavedFields, parseEditRequest, type InventoryRecord, type InventoryValues, type RecordKind } from './domain.js';
+import { lifecycleButton, statusText, referenceLabel } from './lifecycle.js';
 import type { DocumentationStore } from './store.js';
 
 const literal = escapeCardValue;
@@ -44,7 +45,7 @@ export class Catalog {
     const addComponent = /^addcomponent_([^_]+)$/.exec(destination);
     if (addComponent) {
       const project = await this.store.project(actor, addComponent[1]!);
-      return project ? { kind: 'Add Component', text: `Project: ${literal(project.fields.name)} (${project.id})\nUse documentation create component {"name":"Frontend","projectId":"${project.id}","type":"frontend","technologies":[]}\n${componentHelp}\n${catalogHelp}`, links: [{ label: 'Back', page: `components_${project.id}_0` }] }
+      return project ? { kind: 'Add Component', text: `Project: ${literal(referenceLabel(project.fields.name, project))} (${project.id})\nUse documentation create component {"name":"Frontend","projectId":"${project.id}","type":"frontend","technologies":[]}\n${componentHelp}\n${catalogHelp}`, links: [{ label: 'Back', page: `components_${project.id}_0` }] }
         : { kind: 'Project unavailable', text: 'That Project was not found.' };
     }
     const list = /^(technologies|hosts|tools)_(\d{1,6})$/.exec(destination);
@@ -69,11 +70,11 @@ export class Catalog {
       const lines = await Promise.all(result.records.map(async record => {
         const project = record.kind === 'component' ? await this.store.project(actor, String(record.fields.projectId)) : undefined;
         const hostingParent = kind === 'hosting' ? await this.store.record(actor, 'component', String(record.fields.componentId)) : undefined;
-        return `${literal(recordName(record))} — ${record.id}${project ? ` · Project: ${literal(project.fields.name)} (${project.id})` : ''}${hostingParent ? ` · Component: ${literal(recordName(hostingParent))} (${hostingParent.id})` : ''}`;
+        return `${literal(referenceLabel(recordName(record), record))} — ${record.id}${project ? ` · Project: ${literal(referenceLabel(project.fields.name, project))} (${project.id})` : ''}${hostingParent ? ` · Component: ${literal(referenceLabel(recordName(hostingParent), hostingParent))} (${hostingParent.id})` : ''}`;
       }));
       const prefix = saved ? `cataloglookup_${lookup![1]}` : components ? `${components[1]}_${components[2]}` : list![1]!;
-      return { kind: saved ? `Choose a ${label}` : plural, text: `${saved ? 'This name is ambiguous. Choose one stable identifier.\n' : ''}${parent ? `Project: ${literal(parent.fields.name)} (${parent.id})\n` : technology ? `Technology: ${literal(String(technology.fields.name))} (${technology.id})\n` : ''}page ${result.page + 1}/${result.pages} · ${result.total} ${plural}\n${lines.join('\n') || `No ${plural} have been saved.`}`,
-        links: [...result.records.map(record => ({ label: recordName(record), page: saved?.destination.startsWith('history') ? `history${kind}_${record.id}_0` : `${kind}_${record.id}` })),
+      return { kind: saved ? `Choose a ${label}` : plural, text: `${saved ? 'This name is ambiguous. Choose one stable identifier.\n' : ''}${parent ? `Project: ${literal(referenceLabel(parent.fields.name, parent))} (${parent.id})\n` : technology ? `Technology: ${literal(referenceLabel(String(technology.fields.name), technology))} (${technology.id})\n` : ''}page ${result.page + 1}/${result.pages} · ${result.total} ${plural}\n${lines.join('\n') || `No ${plural} have been saved.`}`,
+        links: [...result.records.map(record => ({ label: referenceLabel(recordName(record), record), page: saved?.destination.startsWith('history') ? `history${kind}_${record.id}_0` : `${kind}_${record.id}` })),
           ...pages(prefix, result.page, result.pages), ...(kind === 'technology' ? [{ label: 'Add Technology', page: 'addtechnology' }] : kind === 'tool' ? [{ label: 'Add Tool', page: 'addtool' }] : kind === 'host' ? [{ label: 'Add Host/service', page: 'addhost' }] : parent ? [{ label: 'Add Component', page: `addcomponent_${parent.id}` }] : component ? [{ label: 'Add Hosting entry', page: `addhosting_${component.id}` }] : []),
           { label: 'Back', page: parent ? `project_${parent.id}` : technology ? `technology_${technology.id}` : component ? `component_${component.id}` : service ? `host_${service.id}` : 'main' }] };
     }
@@ -84,25 +85,29 @@ export class Catalog {
       const id = detail?.[2] ?? history![2]!;
       const record = await this.store.record(actor, kind, id);
       if (!record) return { kind: `${label} unavailable`, text: `That ${label} was not found.`, links: [{ label: 'Back', page: 'main' }] };
+      if (detail?.[1]?.startsWith('edit') && record.archived) return { kind: 'Edit requires restoration', text: `${label}: ${id}\nStatus: Archived\nExplicitly restore this record before editing.`, buttons: lifecycleButton(kind, record), links: [{ label: `Back to ${label}`, page: `${kind}_${id}` }] };
       if (detail?.[1]?.startsWith('edit')) return { kind: `Edit ${label}`, text: `${label}: ${literal(recordName(record))} (${id})\nUse documentation edit ${kind} ${id} ${exampleFor(kind)}\n${helpFor(kind)}`, links: [{ label: `Back to ${label}`, page: `${kind}_${id}` }] };
       if (history) {
         const result = await this.store.recordHistory(actor, kind, id, Number(history[3]));
-        return { kind: `${label} history`, text: `${label}: ${literal(recordName(record))} (${id})\nHistory page ${result.page + 1}/${result.pages}\n${result.changes.map(change => `${label} identifier: ${change.record_id}\nActor: ${literal(change.actor)}\nTime: ${new Date(change.changed_at).toISOString()}\nSource: ${literal(change.source)}\n${change.before_values === null ? 'Before: No record' : `Before:\n${inventoryText(change.before_values)}`}\nAfter:\n${inventoryText(change.after_values)}`).join('\n') || 'No changes have been saved.'}`,
+        return { kind: `${label} history`, text: `${label}: ${literal(recordName(record))} (${id})\n${statusText(record)}\nHistory page ${result.page + 1}/${result.pages}\n${result.changes.map(change => `${label} identifier: ${change.record_id}\nActor: ${literal(change.actor)}\nTime: ${new Date(change.changed_at).toISOString()}\nSource: ${literal(change.source)}\n${change.before_values === null ? 'Before: No record' : `Before:\n${inventoryText(change.before_values)}`}\nAfter:\n${inventoryText(change.after_values)}`).join('\n') || 'No changes have been saved.'}`,
           links: [...pages(`history${kind}_${id}`, result.page, result.pages), { label: `Back to ${label}`, page: `${kind}_${id}` }] };
       }
       const technologies = kind === 'component' && Array.isArray(record.fields.technologies)
         ? await Promise.all(record.fields.technologies.map(ref => this.store.record(actor, 'technology', ref))) : [];
       const service = kind === 'hosting' ? await this.store.record(actor, 'host', String(record.fields.serviceId)) : undefined;
+      const parentProject = kind === 'component' ? await this.store.project(actor, String(record.fields.projectId)) : undefined;
+      const parentComponent = kind === 'hosting' ? await this.store.record(actor, 'component', String(record.fields.componentId)) : undefined;
       const projects = kind === 'tool' && Array.isArray(record.fields.projects)
         ? await Promise.all(record.fields.projects.map(ref => this.store.project(actor, ref))) : [];
-      return { kind: label, text: `Identifier: ${id}\n${inventoryText(record.fields)}${service ? `\nHost/service: ${literal(recordName(service))} (${service.id})` : ''}`,
+      return { kind: label, text: `Identifier: ${id}\n${statusText(record)}\n${inventoryText(record.fields)}${service ? `\nHost/service: ${literal(recordName(service))} (${service.id})${service.archived ? ' [Archived]' : ''}` : ''}${parentProject ? `\nProject: ${literal(referenceLabel(parentProject.fields.name, parentProject))} (${parentProject.id})` : ''}${parentComponent ? `\nComponent: ${literal(referenceLabel(recordName(parentComponent), parentComponent))} (${parentComponent.id})` : ''}`,
+        buttons: lifecycleButton(kind, record),
         resourceLinks: Array.isArray(record.fields.urls) ? record.fields.urls.map(url => ({ label: `Saved URL: ${url}`, url })) : [],
-        links: [{ label: 'Edit', page: `edit${kind}_${id}` }, { label: 'History', page: `history${kind}_${id}_0` },
-        ...(kind === 'tool' ? [...projects.filter(ref => !!ref).map(ref => ({ label: ref.fields.name, page: `project_${ref.id}` })), { label: 'Back to Tools', page: 'tools_0' }] : kind === 'host' ? [{ label: 'Hosting entries', page: `hostentries_${id}_0` }, { label: 'Back to Hosts/services', page: 'hosts_0' }] :
-          kind === 'hosting' ? [{ label: 'Component', page: `component_${record.fields.componentId}` }, ...(service ? [{ label: recordName(service), page: `host_${service.id}` }] : []), { label: 'Back to Hosting entries', page: `hostingentries_${record.fields.componentId}_0` }] :
+        links: [...(!record.archived ? [{ label: 'Edit', page: `edit${kind}_${id}` }] : []), { label: 'History', page: `history${kind}_${id}_0` },
+        ...(kind === 'tool' ? [...projects.filter(ref => !!ref).map(ref => ({ label: referenceLabel(ref.fields.name, ref), page: `project_${ref.id}` })), { label: 'Back to Tools', page: 'tools_0' }] : kind === 'host' ? [{ label: 'Hosting entries', page: `hostentries_${id}_0` }, { label: 'Back to Hosts/services', page: 'hosts_0' }] :
+          kind === 'hosting' ? [{ label: 'Component', page: `component_${record.fields.componentId}` }, ...(service ? [{ label: referenceLabel(recordName(service), service), page: `host_${service.id}` }] : []), { label: 'Back to Hosting entries', page: `hostingentries_${record.fields.componentId}_0` }] :
           kind === 'technology' ? [{ label: 'Components', page: `techcomponents_${id}_0` }, { label: 'Back to Technologies', page: 'technologies_0' }] : [
           { label: 'Hosting entries', page: `hostingentries_${id}_0` },
-          { label: 'Project', page: `project_${record.fields.projectId}` }, ...technologies.filter(ref => !!ref).map(ref => ({ label: String(ref.fields.name), page: `technology_${ref.id}` })),
+          { label: 'Project', page: `project_${record.fields.projectId}` }, ...technologies.filter(ref => !!ref).map(ref => ({ label: referenceLabel(String(ref.fields.name), ref), page: `technology_${ref.id}` })),
           { label: 'Back to Components', page: `components_${record.fields.projectId}_0` },
         ])] };
     }
@@ -115,6 +120,7 @@ export class Catalog {
       const operation = action[1] as 'create' | 'edit', kind = action[2] as RecordKind, label = title(kind);
       const saved = typeof payload.value === 'string' ? await this.store.confirmRecord(actor, payload.value, kind, operation) : undefined;
       if (!saved || saved.record_kind !== kind || saved.operation !== operation) await deliver({ kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' });
+      else if (saved.outcome === 'archived') await deliver({ kind: 'Edit requires restoration', text: `${label} ${saved.target_id} is archived. Explicitly restore it, then retry this confirmation within its original 24-hour window.` });
       else if (!saved.applied_at) await deliver({ kind: 'Confirmation expired', text: `Submit a fresh documentation ${operation} ${kind} request.` });
       else await deliver({ kind: saved.outcome === 'missing' || saved.outcome === 'invalid' ? `${label} ${operation} failed` : saved.outcome === 'satisfied' ? 'Edit already satisfied' : `${label} ${operation === 'create' ? 'created' : 'edited'}`,
         text: `Saved outcome for ${label}: ${saved.target_id}\n${saved.outcome === 'missing' || saved.outcome === 'invalid' ? 'The target, fields or references were invalid or unavailable at confirmation. Nothing was changed.' : saved.outcome === 'satisfied' ? 'The selected fields already matched; no change or history entry was added.' : `Approved values saved once:\n${inventoryText(saved.fields)}\nLater edits may have changed current values.`}\nUse documentation ${lookupCommand(kind)} ${saved.target_id} to inspect current values.` });
@@ -141,6 +147,7 @@ export class Catalog {
             await deliver({ kind: result.total ? `Ambiguous ${label} edit` : `${label} not found`, text: result.total ? `Inspect documentation ${kind} <exact name> and repeat with one stable identifier. Nothing was proposed.` : `No ${label} matches that exact identifier or name.` }); return true;
           }
           target = result.records[0]!;
+          if (target.archived) { await deliver({ kind: 'Edit requires restoration', text: `This ${label} is archived. Explicitly restore it before editing.` }); return true; }
         }
         if (kind === 'tool' && Array.isArray(fields.projects)) {
           const ids: string[] = [];

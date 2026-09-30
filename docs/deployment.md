@@ -84,6 +84,22 @@ After `/ready` returns `{"ok":true}`, open Documentation → Tools → Add Tool 
 
 These are manual post-deployment checks, not observed live results. This remains a locally verified release candidate until production readiness and live Slack verification are observed. Real PostgreSQL Tool cross-User locking tests require a disposable `TEST_DATABASE_URL`; without it they are skipped. Import, authority transition and production deployment remain separate work.
 
+## Documentation Archive/Restore release candidate
+
+Ticket 06 adds confirmed lifecycle changes across all six inventory kinds and the paginated Archived view. Keep the existing `ENABLED_MODULES` value with `documentation` enabled. There are no new required environment variables, secrets, Slack/Google scopes or AI credentials. Startup idempotently adds `archived boolean NOT NULL DEFAULT false` to `documentation_projects` and `documentation_records`; no manual migration command is required. Existing inventory, history, relationships and pending confirmations are retained. Stop old workers before starting the new image; they do not enforce the archived-target edit guard or understand lifecycle confirmations. Preserve `.env`, the Compose project and database volume.
+
+Deploy the reviewed `main` commit with the [update-and-restart procedure](#update-and-restart):
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh
+```
+
+After `/ready` returns `{"ok":true}`, open Documentation → Archived and verify pagination/private ownership with consented synthetic records. Create a test Project, Component and Host/service with a Hosting entry, plus a Technology and Tool. For each kind, open Archive, inspect the separate confirmation, confirm as its initiating User, and verify ordinary lists omit it while exact details/history show Archived and offer Restore. An archived Host/service must leave its Project active and remain visibly labeled in current Project hosting details. Restore as another User through that User's own controls and verify the stable identifier, fields and relationships remain. Replay the old Archive and verify it cannot rearchive; then test the equivalent old Restore replay after a fresh Archive.
+
+Propose an edit, archive its target from another User, and click the edit: it must require restoration without changing fields. Separately restore and retry within the original window, verifying overwrite history and unrelated-field preservation. Confirm expired edits remain expired after restoration or disable/re-enable. Inspect lifecycle actor/time/source and actual before/after history. These are manual post-deployment checks, not observed results. This is a locally verified release candidate until production readiness and live Slack are observed; real PostgreSQL lifecycle races are skipped without a disposable `TEST_DATABASE_URL`. These flows require no AI or Gmail. Import and inventory authority transition remain separate work.
+
 ## Safe work-launch release candidate
 
 Ticket 04 adds Sort inbox and Find unanswered to the Module menus. It also creates `core_operation_slots` and the module-owned `slack_unanswered_results` display cache automatically, and changes the worker advisory-lock scope. No manual database migration, new secret, Slack scope, or Google permission is required. Keep `WORKER_CONCURRENCY` at 2–4; the default and existing `.env.example` use 2. Stop the old app before starting this version, as the deployment script does, so old workers cannot process new operation jobs. Result pagination buttons from the old version ask for a fresh search; new result pages reuse the original calculation without another paid AI call and recheck current channel access.

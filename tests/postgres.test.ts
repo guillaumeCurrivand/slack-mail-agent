@@ -33,6 +33,58 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${namespace}`, application_name: namespace }); await pool.query(schema);
   });
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); await admin.end(); } });
+  it.each(['project', 'technology', 'component', 'host', 'hosting', 'tool'] as const)('serializes %s lifecycle changes against edits and opposite transitions', async kind => {
+    const alice = { team: `TLIFECYCLE${kind}`, user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+    const { module, options, messenger, text, confirm } = documentationDispatch(pool, alice);
+    await module.initialize!(pool);
+    await confirm(await text('documentation create project {"name":"Parent"}'));
+    const projectId = (await text('documentation project Parent')).text.match(/Identifier: ([\w-]+)/)![1]!;
+    await confirm(await text(`documentation create component ${JSON.stringify({ name: 'Parent component', projectId })}`));
+    const componentId = (await text('documentation component Parent component')).text.match(/Identifier: ([\w-]+)/)![1]!;
+    await confirm(await text('documentation create host {"name":"Parent host"}'));
+    const serviceId = (await text('documentation host Parent host')).text.match(/Identifier: ([\w-]+)/)![1]!;
+    const fields = kind === 'component' ? { name: 'Target', projectId, type: 'Initial' } : kind === 'hosting' ? { componentId, serviceId, environment: 'Initial' } : { name: 'Target', notes: 'Initial' };
+    const creation = await text(`documentation create ${kind} ${JSON.stringify(fields)}`); await confirm(creation);
+    const id = creation.text.match(/(?:Project|Technology|Component|Host\/service|Hosting entry|Tool): ([\w-]+)/)![1]!;
+    const lookup = kind === 'hosting' ? 'hosting-entry' : kind;
+    const field = kind === 'component' ? 'type' : kind === 'hosting' ? 'environment' : 'notes';
+    const edit = await text(`documentation edit ${kind} ${id} ${JSON.stringify({ [field]: 'Approved' })}`);
+    const archive = await text(`documentation archive ${kind} ${id}`, bob);
+    const client = await pool.connect(); let pending: Promise<void> | undefined;
+    const lockedDispatch = async (proposal: AgentMessage) => {
+      const registry = new ModuleRegistry([createDocumentationModule(client)]);
+      const control = proposal.buttons!.find(button => button.action.startsWith('documentation:confirm'))!;
+      await dispatchJob(client, options, registry, messenger, { ...registry.action(control.action, control.value), actor: bob, id: uid() });
+    };
+    const waitForLock = async () => {
+      const deadline = Date.now() + 5000;
+      while (Date.now() < deadline) {
+        if ((await pool.query(`SELECT 1 FROM pg_stat_activity WHERE application_name=$1 AND wait_event_type='Lock'
+          AND query LIKE 'WITH eligible AS MATERIALIZED%'`, [namespace])).rows.length) return;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      throw new Error('Expected a shared-record lock wait');
+    };
+    try {
+      await client.query('BEGIN'); await lockedDispatch(archive);
+      pending = confirm(edit); await waitForLock(); await client.query('COMMIT'); await pending;
+      expect((await text(`documentation ${lookup} ${id}`)).text).toContain(`${field}: Initial`);
+      expect((await text(`documentation ${lookup} ${id}`)).text).toContain('Status: Archived');
+      const restore = await text(`documentation restore ${kind} ${id}`, bob);
+      const nextArchive = await text(`documentation archive ${kind} ${id}`);
+      await client.query('BEGIN'); await lockedDispatch(restore);
+      pending = confirm(nextArchive); await waitForLock(); await client.query('COMMIT'); await pending;
+      await Promise.all(Array.from({ length: 4 }, () => confirm(nextArchive)));
+      await confirm(restore, bob); // An old Restore cannot undo the new Archive.
+      expect((await text(`documentation ${lookup} ${id}`)).text).toContain('Status: Archived');
+      const historyPage = kind === 'project' ? `history_${id}_3` : `history${kind}_${id}_3`;
+      const history = await module.menu!(alice, historyPage, { sql: pool });
+      expect(history.text).toContain('History page 4/4');
+      expect(history.text).toContain('Before:\narchived: false\nAfter:\narchived: true');
+      await confirm(await text(`documentation restore ${kind} ${id}`)); await confirm(edit);
+      expect((await text(`documentation ${lookup} ${id}`)).text).toContain(`${field}: Approved`);
+    } finally { try { await client.query('ROLLBACK'); await pending; } finally { client.release(); } }
+  });
   it('admits only one of two simultaneous requests that together exceed the team allowance', async () => {
     const a = await pool.connect(), b = await pool.connect();
     try {
