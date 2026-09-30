@@ -26,3 +26,24 @@ export const projectEdit = z.strictObject(fieldDefinitions).partial()
 export type ProjectFields = z.infer<typeof projectFields>;
 export type ProjectEdit = z.infer<typeof projectEdit>;
 export type Project = { id: string; fields: ProjectFields; created_at: Date | string };
+
+const technologyDefinitions = { name, category: z.string().max(120).nullable(), notes: fieldDefinitions.notes };
+export const technologyFields = z.strictObject({ ...technologyDefinitions, category: technologyDefinitions.category.default(null), notes: technologyDefinitions.notes.default(null) });
+export const technologyEdit = z.strictObject(technologyDefinitions).partial().refine(value => Object.keys(value).length > 0);
+export type RecordKind = 'technology' | 'component';
+const componentDefinitions = { name, type: z.string().max(120).nullable(), technologies: z.array(name).max(20).nullable() };
+export const componentFields = z.strictObject({ ...componentDefinitions, projectId: z.uuid(), type: componentDefinitions.type.default(null), technologies: componentDefinitions.technologies.default(null) });
+export const componentEdit = z.strictObject(componentDefinitions).partial().refine(value => Object.keys(value).length > 0);
+export type InventoryValues = Record<string, string | string[] | null>;
+export type InventoryRecord = { id: string; kind: RecordKind; fields: InventoryValues; created_at: Date | string };
+export function validSavedFields(kind: RecordKind, operation: 'create' | 'edit', fields: unknown): boolean {
+  const schema = kind === 'technology' ? (operation === 'create' ? technologyFields : technologyEdit)
+    : operation === 'create' ? componentFields : componentEdit;
+  const parsed = schema.safeParse(fields);
+  if (!parsed.success) return false;
+  if ('technologies' in parsed.data && Array.isArray(parsed.data.technologies)) {
+    return parsed.data.technologies.every(id => z.uuid().safeParse(id).success)
+      && new Set(parsed.data.technologies).size === parsed.data.technologies.length;
+  }
+  return true;
+}

@@ -164,4 +164,45 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     expect((await text('documentation project Atomic edit')).text).toContain('notes: Replacement');
     expect((await text('documentation history Atomic edit')).text).toContain('History page 1/2');
   });
+
+  it.each(['technology', 'component'] as const)('serializes cross-User %s overwrites and concurrent confirmations with actual history', async kind => {
+    const alice = { team: `TCATALOG${kind}`, user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+    const { module, options, messenger, text, confirm } = documentationDispatch(pool, alice);
+    await module.initialize!(pool); await module.initialize!(pool);
+    await confirm(await text('documentation create project {"name":"Parent"}'));
+    const parent = (await text('documentation project Parent')).text.match(/Identifier: ([\w-]+)/)![1]!;
+    const initial = kind === 'technology' ? { name: 'Shared', category: 'Initial', notes: 'Initial' } : { name: 'Shared', projectId: parent, type: 'Initial', technologies: [] };
+    const creation = await text(`documentation create ${kind} ${JSON.stringify(initial)}`);
+    await Promise.all(Array.from({ length: 4 }, () => confirm(creation)));
+    const id = (await text(`documentation ${kind} Shared`)).text.match(/Identifier: ([\w-]+)/)![1]!;
+    const a = await text(`documentation edit ${kind} ${id} ${JSON.stringify(kind === 'technology' ? { category: 'A' } : { type: 'A' })}`);
+    const b = await text(`documentation edit ${kind} ${id} ${JSON.stringify(kind === 'technology' ? { category: 'B', notes: 'Bob notes' } : { type: 'B', name: 'Bob name' })}`, bob);
+    const client = await pool.connect(); let pending: Promise<void> | undefined;
+    try {
+      await client.query('BEGIN');
+      const bobModules = new ModuleRegistry([createDocumentationModule(client)]);
+      const control = b.buttons!.find(button => button.action === `documentation:confirm_edit_${kind}`)!;
+      await dispatchJob(client, options, bobModules, messenger, { ...bobModules.action(control.action, control.value), actor: bob, id: uid() });
+      pending = confirm(a);
+      const deadline = Date.now() + 5000; let waiting = false;
+      while (Date.now() < deadline) {
+        waiting = (await pool.query(`SELECT 1 FROM pg_stat_activity WHERE application_name=$1
+          AND wait_event_type='Lock' AND query LIKE 'WITH eligible AS MATERIALIZED%'`, [namespace])).rows.length > 0;
+        if (waiting) break;
+        await new Promise(resolve => setTimeout(resolve, 20));
+      }
+      expect(waiting, 'Alice must wait for the shared record held by Bob').toBe(true);
+      await client.query('COMMIT'); await pending;
+      await Promise.all(Array.from({ length: 4 }, () => confirm(a)));
+      const current = await text(`documentation ${kind} ${id}`);
+      expect(current.text).toContain(kind === 'technology' ? 'category: A' : 'type: A');
+      expect(current.text).toContain(kind === 'technology' ? 'notes: Bob notes' : 'name: Bob name');
+      const history = await module.menu!(alice, `history${kind}_${id}_2`, { sql: pool });
+      expect(history.text).toContain('History page 3/3');
+      expect(history.text).toContain(kind === 'technology' ? 'Before:\ncategory: B\nAfter:\ncategory: A' : 'Before:\ntype: B\nAfter:\ntype: A');
+      await confirm(await text(`documentation edit ${kind} ${id} ${JSON.stringify(kind === 'technology' ? { category: 'Later' } : { type: 'Later' })}`, bob), bob);
+      await confirm(a); await confirm(creation);
+      expect((await text(`documentation ${kind} ${id}`)).text).toContain(kind === 'technology' ? 'category: Later' : 'type: Later');
+    } finally { try { await client.query('ROLLBACK'); await pending; } finally { client.release(); } }
+  });
 });

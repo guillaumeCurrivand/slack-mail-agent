@@ -16,7 +16,7 @@ let db: PGlite, sql: Sql;
 beforeAll(async () => { db = new PGlite(); sql = { query: (text, values) => db.query(text, values) }; await db.exec(coreSchema); });
 beforeEach(async () => {
   await db.exec(`TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE;
-    DROP TABLE IF EXISTS documentation_history,documentation_projects,documentation_confirmations,documentation_deliveries,documentation_lookups CASCADE;`);
+    DROP TABLE IF EXISTS documentation_record_history,documentation_records,documentation_history,documentation_projects,documentation_confirmations,documentation_deliveries,documentation_lookups CASCADE;`);
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected external provider call'); }));
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -76,7 +76,7 @@ it('creates a shared Project only after its owner confirms and lets another User
   try {
     const main = await h.dm('menu');
     const menu = await h.click(main, 'Documentation');
-    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'History', 'Help', 'Back to menu']);
+    expect(buttons(menu).map(item => item.text.text)).toEqual(['Projects', 'Add Project', 'Technologies', 'History', 'Help', 'Back to menu']);
     const proposal = await h.dm('documentation create project {"name":"Alpha"}');
     expect(kind(proposal)).toBe('Create Project confirmation');
     expect(bodyText(proposal)).toContain('description: Unknown');
@@ -92,6 +92,218 @@ it('creates a shared Project only after its owner confirms and lets another User
     expect(bodyText(history)).toContain('name: Alpha');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); }
+});
+
+it('maintains the shared Technology catalog with separate confirmations, exact lookup and actual overwrite history', async () => {
+  const h = await harness();
+  try {
+    const proposal = await h.dm('documentation create technology {"name":"React","category":"Frontend","notes":"Initial"}');
+    expect(kind(proposal)).toBe('Create Technology confirmation');
+    expect(bodyText(await h.dm('documentation technologies', bob))).toContain('No Technologies');
+    expect(kind(await h.click(proposal, 'Confirm creation', bob))).toBe('Confirmation unavailable');
+    await h.click(proposal, 'Confirm creation');
+    const detail = await h.dm('documentation technology react', bob);
+    const id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(bodyText(await h.click(detail, 'Edit', bob))).toContain(`documentation edit technology ${id}`);
+    const pending = await h.dm(`documentation edit technology ${id} {"name":"React UI","category":null}`);
+    await h.click(await h.dm(`documentation edit technology ${id} {"category":"Bob category","notes":"Bob notes"}`, bob), 'Confirm edit', bob);
+    await h.click(pending, 'Confirm edit');
+    const current = bodyText(await h.dm(`documentation technology ${id}`));
+    expect(current).toContain('category: Unknown');
+    expect(current).toContain('notes: Bob notes');
+    expect(kind(await h.dm('documentation technology React'))).toBe('Technology not found');
+    const history = await h.click(await h.click(await h.dm(`documentation history technology ${id}`), 'Next'), 'Next');
+    expect(bodyText(history)).toContain('Before:\nname: React\ncategory: Bob category');
+    expect(bodyText(history)).toContain('After:\nname: React UI\ncategory: Unknown');
+    await h.click(await h.dm(`documentation edit technology ${id} {"category":"Later"}`, bob), 'Confirm edit', bob);
+    await h.restart(); await h.click(pending, 'Confirm edit');
+    expect(bodyText(await h.dm(`documentation technology ${id}`))).toContain('category: Later');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('maintains Project Components with many shared Technologies and stable navigation through renames', async () => {
+  const h = await harness();
+  try {
+    const technologyIds: string[] = [];
+    for (const name of ['React', 'TypeScript']) {
+      await h.click(await h.dm(`documentation create technology ${JSON.stringify({ name })}`), 'Confirm creation');
+      technologyIds.push(bodyText(await h.dm(`documentation technology ${name}`)).match(/Identifier: ([\w-]+)/)![1]!);
+    }
+    const projectIds: string[] = [], componentIds: string[] = [];
+    for (const name of ['Alpha', 'Beta']) {
+      await h.click(await h.dm(`documentation create project ${JSON.stringify({ name })}`), 'Confirm creation');
+      const detail = await h.dm(`documentation project ${name}`);
+      const projectId = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!; projectIds.push(projectId);
+      const components = await h.click(detail, 'Components');
+      expect(bodyText(await h.click(components, 'Add Component'))).toContain(`"projectId":"${projectId}"`);
+      const proposal = await h.dm(`documentation create component ${JSON.stringify({ name: `${name} UI`, projectId, type: 'frontend', technologies: ['React', technologyIds[1]] })}`);
+      expect(kind(proposal)).toBe('Create Component confirmation');
+      expect(bodyText(proposal)).toContain(JSON.stringify(technologyIds));
+      await h.click(proposal, 'Confirm creation');
+      const component = await h.click(await h.dm(`documentation components ${projectId}`), `${name} UI`);
+      componentIds.push(bodyText(component).match(/Identifier: ([\w-]+)/)![1]!);
+      expect(bodyText(await h.click(component, 'React'))).toContain(`Identifier: ${technologyIds[0]}`);
+      expect(bodyText(await h.click(component, 'Project'))).toContain(`Identifier: ${projectId}`);
+    }
+    const relationships = await h.click(await h.dm(`documentation technology ${technologyIds[0]}`, bob), 'Components', bob);
+    expect(bodyText(relationships)).toContain('Alpha UI'); expect(bodyText(relationships)).toContain('Beta UI');
+    await h.click(await h.dm(`documentation edit technology ${technologyIds[0]} {"name":"React renamed"}`), 'Confirm edit');
+    await h.click(await h.dm(`documentation edit project ${projectIds[0]} {"name":"Alpha renamed"}`), 'Confirm edit');
+    const pending = await h.dm(`documentation edit component ${componentIds[0]} {"name":"Web client","technologies":["React renamed"]}`);
+    await h.click(await h.dm(`documentation edit component ${componentIds[0]} {"type":"Bob type","technologies":[],"name":"Bob name"}`, bob), 'Confirm edit', bob);
+    await h.click(pending, 'Confirm edit');
+    const component = await h.dm(`documentation component ${componentIds[0]}`);
+    expect(bodyText(component)).toContain('name: Web client'); expect(bodyText(component)).toContain('type: Bob type');
+    expect(bodyText(component)).toContain(`projectId: ${projectIds[0]}`);
+    expect(buttons(component).map(control => control.text.text)).toContain('React renamed');
+    const history = await h.click(await h.click(await h.click(component, 'History'), 'Next'), 'Next');
+    expect(bodyText(history)).toContain('name: Bob name');
+    expect(bodyText(history)).toContain('technologies: []');
+    expect(bodyText(history)).toContain(`technologies: ["${technologyIds[0]}"]`);
+    expect(bodyText(await h.dm('documentation technologies'))).toContain('2 Technologies');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('rejects ambiguous, missing, foreign and malformed relationships before proposal and again at apply', async () => {
+  const h = await harness(), foreign = await harness('documentation', 'TOTHER');
+  const other = { ...alice, team: 'TOTHER' };
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+    await foreign.click(await foreign.dm('documentation create technology {"name":"Foreign"}', other), 'Confirm creation', other);
+    const foreignId = bodyText(await foreign.dm('documentation technology Foreign', other)).match(/Identifier: ([\w-]+)/)![1]!;
+    for (let index = 0; index < 2; index++) await h.click(await h.dm('documentation create technology {"name":"Duplicate"}'), 'Confirm creation');
+    const request = (technologies: string[]) => `documentation create component ${JSON.stringify({ name: 'API', projectId, technologies })}`;
+    expect(kind(await h.dm(request(['Duplicate'])))).toBe('Ambiguous Technology reference');
+    const missing = await h.dm(request(['Missing']));
+    expect(kind(missing)).toBe('Technology not found');
+    expect(bodyText(missing)).toContain('separate confirmed operation');
+    expect(kind(await h.dm(request([foreignId])))).toBe('Technology not found');
+    expect(kind(await foreign.dm(`documentation create component ${JSON.stringify({ name: 'Foreign parent', projectId })}`, other))).toBe('Project not found');
+    const choices = await h.dm('documentation technology Duplicate');
+    expect(kind(choices)).toBe('Choose a Technology');
+    const technologyId = bodyText(await h.click(choices, 'Duplicate')).match(/Identifier: ([\w-]+)/)![1]!;
+    const proposal = await h.dm(request([technologyId]));
+    // Simulate a stale/corrupt saved reference at the database boundary.
+    await sql.query("UPDATE documentation_confirmations SET fields=jsonb_set(fields,'{technologies}',$2::jsonb) WHERE id=$1", [button(proposal, 'Confirm creation').value, JSON.stringify([foreignId])]);
+    expect(kind(await h.click(proposal, 'Confirm creation'))).toBe('Component create failed');
+    expect(bodyText(await h.dm(`documentation components ${projectId}`))).toContain('No Components');
+    await h.click(await h.dm(request([technologyId])), 'Confirm creation');
+    const componentId = bodyText(await h.dm('documentation component API')).match(/Identifier: ([\w-]+)/)![1]!;
+    for (const fields of [{}, { projectId }, { id: componentId }, { name: null }, { type: 'x'.repeat(121) }, { technologies: [''] }, { hostingEntries: [] }, [{ name: 'A' }]]) {
+      expect(kind(await h.dm(`documentation edit component ${componentId} ${JSON.stringify(fields)}`))).toBe('Invalid Component edit');
+    }
+    const edit = await h.dm(`documentation edit component ${componentId} {"type":"Backend"}`);
+    await sql.query("UPDATE documentation_confirmations SET fields=fields || jsonb_build_object('projectId',$2::text) WHERE id=$1", [button(edit, 'Confirm edit').value, projectId]);
+    expect(kind(await h.click(edit, 'Confirm edit'))).toBe('Component edit failed');
+    expect(bodyText(await h.dm(`documentation component ${componentId}`))).toContain('type: Unknown');
+    expect(bodyText(await h.dm(`documentation history component ${componentId}`))).toContain('History page 1/1');
+    expect(bodyText(await h.dm('documentation technologies'))).toContain('2 Technologies');
+  } finally { await h.app.close(); await foreign.app.close(); }
+});
+
+it('paginates catalog, Component and ambiguity navigation privately and includes all record kinds in shared history', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Project 8"}'), 'Confirm creation');
+    const id = bodyText(await h.dm('documentation project Project 8')).match(/Identifier: ([\w-]+)/)![1]!;
+    let technologyId = '';
+    for (let index = 0; index < 9; index++) {
+      const proposal = await h.dm('documentation create technology {"name":"Same"}');
+      if (!index) technologyId = bodyText(proposal).match(/Technology: ([\w-]+)/)![1]!;
+      await h.click(proposal, 'Confirm creation');
+      await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'API', projectId: id, technologies: [technologyId] })}`), 'Confirm creation');
+    }
+    const catalog = await h.dm('documentation technologies', bob);
+    expect(bodyText(catalog)).toContain('page 1/2 · 9 Technologies');
+    expect(kind(await h.click(catalog, 'Next'))).toBe('Menu unavailable');
+    expect(bodyText(await h.click(catalog, 'Next', bob))).toContain('page 2/2');
+    expect(bodyText(await h.dm('documentation technologies 999'))).toContain('page 2/2');
+    const technologyChoice = await h.dm('documentation history technology Same');
+    expect(kind(technologyChoice)).toBe('Choose a Technology');
+    expect(kind(await h.click(await h.click(technologyChoice, 'Next'), 'Same'))).toBe('Technology history');
+    const list = await h.dm('documentation components Project 8');
+    expect(kind(list)).toBe('Components');
+    expect(bodyText(await h.click(list, 'Next'))).toContain('page 2/2 · 9 Components');
+    expect(bodyText(await h.dm(`documentation components ${id} 999`))).toContain('page 2/2');
+    const componentChoice = await h.dm('documentation component API');
+    expect(kind(componentChoice)).toBe('Choose a Component');
+    expect(kind(await h.click(await h.click(componentChoice, 'Next'), 'API'))).toBe('Component');
+    expect(kind(await h.dm('documentation edit component API {"type":"No guess"}'))).toBe('Ambiguous Component edit');
+    const usage = await h.click(await h.dm(`documentation technology ${technologyId}`), 'Components');
+    expect(bodyText(await h.click(usage, 'Next'))).toContain('page 2/2 · 9 Components');
+    const shared = await h.dm('documentation history', bob);
+    expect(bodyText(shared)).toContain('History page 1/19');
+    expect(bodyText(await h.click(shared, 'Next', bob))).toContain('Technology identifier:');
+    expect(bodyText(await h.click(await h.click(shared, 'Next', bob), 'Next', bob))).toContain('Component identifier:');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it.each(['technology', 'component'] as const)('keeps %s approvals actor/DM/workspace-bound, expiring, atomic and recoverable without repeating effects', async recordKind => {
+  const h = await harness(), foreign = await harness('documentation', 'TOTHER');
+  try {
+    await new Budget(sql, 10_000_000, 10_000_000, 'mail').reserve(alice, 10_000_000);
+    await h.dm('budget');
+    await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Parent')).match(/Identifier: ([\w-]+)/)![1]!;
+    const label = recordKind === 'technology' ? 'Technology' : 'Component';
+    const create = (name: string) => `documentation create ${recordKind} ${JSON.stringify(recordKind === 'technology' ? { name, notes: 'Initial' } : { name, projectId, type: 'Initial' })}`;
+    const replacement = recordKind === 'technology' ? { notes: 'A' } : { type: 'A' };
+    const proposal = await h.dm(create('Protected'));
+    expect(kind(await h.click(proposal, 'Confirm creation', bob))).toBe('Confirmation unavailable');
+    expect(kind(await h.click(proposal, 'Confirm creation', { ...alice, channel: 'DOTHER' }))).toBe('Confirmation unavailable');
+    expect(kind(await foreign.click(proposal, 'Confirm creation', { ...alice, team: 'TOTHER' }))).toBe('Confirmation unavailable');
+    await db.exec(`CREATE FUNCTION fail_catalog_creation() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'catalog creation history unavailable'; END; $$;
+      CREATE TRIGGER fail_catalog_creation BEFORE INSERT ON documentation_record_history FOR EACH ROW EXECUTE FUNCTION fail_catalog_creation();`);
+    await h.enqueueClick(proposal, button(proposal, 'Confirm creation'));
+    await expect(h.drain()).rejects.toThrow('catalog creation history unavailable');
+    await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
+    expect(kind(await h.dm(`documentation ${recordKind} Protected`))).toBe(`${label} not found`);
+    expect(bodyText(await h.dm('documentation history'))).toContain('History page 1/1');
+    await db.exec('DROP TRIGGER fail_catalog_creation ON documentation_record_history; DROP FUNCTION fail_catalog_creation();');
+    await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
+    h.fail('uncertain');
+    await expect(h.drain()).rejects.toThrow('Lost response');
+    const messages = h.messages.length; await h.restart(); await h.drain(); expect(h.messages).toHaveLength(messages);
+    await h.click(proposal, 'Confirm creation');
+    const detail = await h.dm(`documentation ${recordKind} Protected`, bob), id = bodyText(detail).match(/Identifier: ([\w-]+)/)![1]!;
+    expect(kind(await foreign.dm(`documentation ${recordKind} ${id}`, { ...alice, team: 'TOTHER' }))).toBe(`${label} not found`);
+    expect(kind(await foreign.click(detail, 'History', { ...alice, team: 'TOTHER' }))).toBe('Menu unavailable');
+    const edit = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(replacement)}`);
+    expect(kind(await h.click(edit, 'Confirm edit', bob))).toBe('Confirmation unavailable');
+    expect(kind(await h.click(edit, 'Confirm edit', { ...alice, channel: 'DOTHER' }))).toBe('Confirmation unavailable');
+    await db.exec(`CREATE FUNCTION fail_catalog_history() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE EXCEPTION 'catalog history unavailable'; END; $$;
+      CREATE TRIGGER fail_catalog_history BEFORE INSERT ON documentation_record_history FOR EACH ROW EXECUTE FUNCTION fail_catalog_history();`);
+    await h.enqueueClick(edit, button(edit, 'Confirm edit')); await expect(h.drain()).rejects.toThrow('catalog history unavailable');
+    await sql.query("UPDATE jobs SET available_at=now()+interval '1 day' WHERE status='queued'");
+    expect(bodyText(await h.dm(`documentation ${recordKind} ${id}`))).toContain(recordKind === 'technology' ? 'notes: Initial' : 'type: Initial');
+    expect(bodyText(await h.dm(`documentation history ${recordKind} ${id}`))).toContain('History page 1/1');
+    await db.exec('DROP TRIGGER fail_catalog_history ON documentation_record_history; DROP FUNCTION fail_catalog_history();');
+    await sql.query("UPDATE jobs SET available_at=now() WHERE status='queued'");
+    h.fail('reject'); await expect(h.drain()).rejects.toThrow('rejected');
+    await h.restart(); await h.drain(); expect(kind(h.messages.at(-1)!)).toBe(`${label} edited`);
+    const satisfied = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(replacement)}`);
+    expect(kind(await h.click(satisfied, 'Confirm edit'))).toBe('Edit already satisfied');
+    expect(bodyText(await h.dm(`documentation history ${recordKind} ${id}`))).toContain('History page 1/2');
+    const later = recordKind === 'technology' ? { notes: 'Later' } : { type: 'Later' };
+    await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(later)}`, bob), 'Confirm edit', bob);
+    await h.click(edit, 'Confirm edit'); await h.click(proposal, 'Confirm creation');
+    expect(bodyText(await h.dm(`documentation ${recordKind} ${id}`))).toContain(recordKind === 'technology' ? 'notes: Later' : 'type: Later');
+    const expired = await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(replacement)}`);
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(expired, 'Confirm edit').value]);
+    expect(kind(await h.click(expired, 'Confirm edit'))).toBe('Confirmation expired');
+    const oldCreation = await h.dm(create('Expired'));
+    await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(oldCreation, 'Confirm creation').value]);
+    expect(kind(await h.click(oldCreation, 'Confirm creation'))).toBe('Confirmation expired');
+    expect(kind(await h.dm(`documentation ${recordKind} Expired`))).toBe(`${label} not found`);
+    const clear = recordKind === 'technology' ? { category: null, notes: '' } : { type: null, technologies: null };
+    await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify(clear)}`), 'Confirm edit');
+    expect(bodyText(await h.dm(`documentation ${recordKind} ${id}`))).toContain(recordKind === 'technology' ? 'category: Unknown' : 'technologies: Unknown');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); await foreign.app.close(); }
 });
 
 it('overwrites only confirmed fields after another User edits them and records actual before/after history', async () => {

@@ -5,12 +5,13 @@ import { escapeCardValue, menuButton, SlackDeliveryRejected, type AgentMessage }
 import type { Sql } from '../../core/store.js';
 import { projectEdit, projectFields, type ProjectFields, type ProjectEdit } from './domain.js';
 import { documentationSchema, DocumentationStore } from './store.js';
+import { Catalog, catalogHelp, componentHelp, inventoryText } from './catalog.js';
 
 const literal = (value: string) => escapeCardValue(value);
-const help = 'Use documentation projects [page] to browse (pages start at 0); documentation project <identifier, exact name or alias> for details; documentation history [identifier, exact name or alias] for shared or Project history.\nCreate one Project with documentation create project {"name":"Alpha","aliases":["A"],"description":"…","repositories":["https://example.com/repo"],"documentationLinks":["https://example.com/docs"],"notes":"…"}. Only name is required. Other fields remain Unknown when omitted. Names/aliases allow 120 characters, up to 20 aliases; description/notes allow 1,500 characters each; each link list allows 10 HTTP(S) URLs of up to 400 characters without credentials. A creation record or edit replacement object allows 5,000 JSON characters.\nEdit one Project with documentation edit project <identifier, exact name or alias> {"description":"Replacement","notes":null}. Supported fields: name, aliases, description, repositories, documentationLinks, notes. Only supplied fields change; null clears optional fields to Unknown. Names cannot be cleared. System identifiers, history and lifecycle metadata cannot be edited. Creation and editing need your separate confirmation within 24 hours. Edits overwrite selected fields even after intervening edits; unrelated fields remain. No AI or Gmail is needed. Other inventory kinds and natural-language interpretation are later slices.';
-const fieldsText = (fields: ProjectEdit) => Object.entries(fields).map(([key, value]) => `${key}: ${value === null ? 'Unknown' : literal(Array.isArray(value) ? JSON.stringify(value) : String(value))}`).join('\n');
+const help = 'Use documentation projects [page] to browse (pages start at 0); documentation project <identifier, exact name or alias> for details; documentation history [identifier, exact name or alias] for shared or Project history.\nCreate one Project with documentation create project {"name":"Alpha","aliases":["A"],"description":"…","repositories":["https://example.com/repo"],"documentationLinks":["https://example.com/docs"],"notes":"…"}. Only name is required. Other fields remain Unknown when omitted. Names/aliases allow 120 characters, up to 20 aliases; description/notes allow 1,500 characters each; each link list allows 10 HTTP(S) URLs of up to 400 characters without credentials. A creation record or edit replacement object allows 5,000 JSON characters.\nEdit one Project with documentation edit project <identifier, exact name or alias> {"description":"Replacement","notes":null}. Supported fields: name, aliases, description, repositories, documentationLinks, notes. Only supplied fields change; null clears optional fields to Unknown. Names cannot be cleared. System identifiers, history and lifecycle metadata cannot be edited. Creation and editing need your separate confirmation within 24 hours. Edits overwrite selected fields even after intervening edits; unrelated fields remain. No AI or Gmail is needed. Hosting, Tools, archival, natural language and import are later slices.';
+const fieldsText = inventoryText;
 const resourceLinks = (fields: ProjectFields) => [...(fields.repositories ?? []).map(url => ({ label: `Repository: ${url}`, url })), ...(fields.documentationLinks ?? []).map(url => ({ label: `Documentation: ${url}`, url }))];
-const recordPage = (destination: string, id: string) => `${destination}_${id}${destination === 'history' ? '_0' : ''}`;
+const recordPage = (destination: string, id: string) => `${destination}_${id}${['history', 'components'].includes(destination) ? '_0' : ''}`;
 const pageLinks = (prefix: string, page: number, pages: number) => [
   ...(page > 0 ? [{ label: 'Previous', page: `${prefix}_${page - 1}` }] : []),
   ...(page + 1 < pages ? [{ label: 'Next', page: `${prefix}_${page + 1}` }] : []),
@@ -30,6 +31,7 @@ function editRequest(text: string): { selector: string; fields: ProjectEdit } {
 
 export function createDocumentationModule(sql: Sql): AssistantModule {
   const store = new DocumentationStore(sql);
+  const catalog = new Catalog(store);
   async function deliver(actor: Actor, eventId: string, message: AgentMessage, context: ModuleContext) {
     if (!await store.claimDelivery(actor, eventId)) return;
     try { await context.messenger.send(actor, { ...message, buttons: [...(message.buttons ?? []), menuButton] }); }
@@ -56,7 +58,9 @@ export function createDocumentationModule(sql: Sql): AssistantModule {
     ] };
   }
   async function recordContent(actor: Actor, destination: string): Promise<MenuPage> {
-    if (destination === 'help' || destination === 'add') return { kind: destination === 'add' ? 'Add Project' : 'Documentation help', text: help, links: [{ label: 'Back', page: 'main' }] };
+    const catalogPage = await catalog.page(actor, destination);
+    if (catalogPage) return catalogPage;
+    if (destination === 'help' || destination === 'add') return { kind: destination === 'add' ? 'Add Project' : 'Documentation help', text: `${help}\n${catalogHelp}\n${componentHelp}`, links: [{ label: 'Back', page: 'main' }] };
     const list = /^projects_(\d{1,6})$/.exec(destination), lookup = /^lookup_([^_]+)_(\d{1,6})$/.exec(destination);
     if (list || lookup) {
       const saved = lookup ? await store.savedLookup(actor, lookup[1]!) : undefined;
@@ -69,7 +73,7 @@ export function createDocumentationModule(sql: Sql): AssistantModule {
     if (destination.startsWith('project_')) {
       const project = await store.project(actor, destination.slice(8));
       if (!project) return { kind: 'Project unavailable', text: 'That Project was not found.', links: [{ label: 'Projects', page: 'projects_0' }] };
-      return { kind: 'Project', text: `Identifier: ${project.id}\n${fieldsText(project.fields)}`, resourceLinks: resourceLinks(project.fields), links: [{ label: 'Edit', page: `edit_${project.id}` }, { label: 'History', page: `history_${project.id}_0` }, { label: 'Back to Projects', page: 'projects_0' }] };
+      return { kind: 'Project', text: `Identifier: ${project.id}\n${fieldsText(project.fields)}`, resourceLinks: resourceLinks(project.fields), links: [{ label: 'Edit', page: `edit_${project.id}` }, { label: 'Components', page: `components_${project.id}_0` }, { label: 'History', page: `history_${project.id}_0` }, { label: 'Back to Projects', page: 'projects_0' }] };
     }
     if (destination.startsWith('edit_')) {
       const project = await store.project(actor, destination.slice(5));
@@ -82,13 +86,13 @@ export function createDocumentationModule(sql: Sql): AssistantModule {
       const id = match?.[1] ?? null, project = id ? await store.project(actor, id) : undefined;
       if (!shared && !project) return { kind: 'History unavailable', text: 'That Project was not found.', links: [{ label: 'Projects', page: 'projects_0' }] };
       const { changes, page, pages } = await store.history(actor, id, Number(match?.[2] ?? shared?.[1] ?? 0));
-      return { kind: shared ? 'Shared history' : 'Project history', text: `${project ? `Project: ${literal(project.fields.name)} (${id})\n` : ''}History page ${page + 1}/${pages}\n${changes.length ? changes.map(change => `Project identifier: ${change.project_id}\nActor: ${literal(change.actor)}\nTime: ${new Date(change.changed_at).toISOString()}\nSource: ${literal(change.source)}\nChanged fields: ${Object.keys(change.after_values).join(', ')}\n${change.before_values === null ? 'Before: No record' : `Before:\n${fieldsText(change.before_values)}`}\nAfter:\n${fieldsText(change.after_values)}`).join('\n') : 'No changes have been saved.'}`, links: [...pageLinks(shared ? 'sharedhistory' : `history_${id}`, page, pages), ...(shared ? [{ label: 'Back', page: 'main' }] : [{ label: 'Back to Project', page: `project_${id}` }])] };
+      return { kind: shared ? 'Shared history' : 'Project history', text: `${project ? `Project: ${literal(project.fields.name)} (${id})\n` : ''}History page ${page + 1}/${pages}\n${changes.length ? changes.map(change => `${change.record_kind === 'technology' ? 'Technology' : change.record_kind === 'component' ? 'Component' : 'Project'} identifier: ${change.project_id}\nActor: ${literal(change.actor)}\nTime: ${new Date(change.changed_at).toISOString()}\nSource: ${literal(change.source)}\nChanged fields: ${Object.keys(change.after_values).join(', ')}\n${change.before_values === null ? 'Before: No record' : `Before:\n${fieldsText(change.before_values)}`}\nAfter:\n${fieldsText(change.after_values)}`).join('\n') : 'No changes have been saved.'}`, links: [...pageLinks(shared ? 'sharedhistory' : `history_${id}`, page, pages), ...(shared ? [...changes.map(change => ({ label: 'Record details', page: `${change.record_kind}_${change.project_id}` })), { label: 'Back', page: 'main' }] : [{ label: 'Back to Project', page: `project_${id}` }])] };
     }
-    return { kind: 'Documentation', text: 'Create, edit and browse shared Projects. Every typed request needs the documentation prefix. Browsing and structured mutations use no AI.',
-      links: [{ label: 'Projects', page: 'projects_0' }, { label: 'Add Project', page: 'add' }, { label: 'History', page: 'sharedhistory_0' }, { label: 'Help', page: 'help' }] };
+    return { kind: 'Documentation', text: 'Create, edit and browse shared Projects, Technologies and Components. Every typed request needs the documentation prefix. Browsing and structured mutations use no AI.',
+      links: [{ label: 'Projects', page: 'projects_0' }, { label: 'Add Project', page: 'add' }, { label: 'Technologies', page: 'technologies_0' }, { label: 'History', page: 'sharedhistory_0' }, { label: 'Help', page: 'help' }] };
   }
   return {
-    id: 'documentation', name: 'Documentation', description: 'Create, edit and browse shared Projects and their history',
+    id: 'documentation', name: 'Documentation', description: 'Create, edit and browse shared Projects, Technologies, Components and their history',
     initialize: async database => { await database.query(documentationSchema); },
     cleanup: async () => { await store.cleanup(); },
     menu: (actor, destination) => page(actor, destination),
@@ -98,10 +102,11 @@ export function createDocumentationModule(sql: Sql): AssistantModule {
         const content = await page(actor, destination);
         await navigation.show(actor, eventId, { ...content, links: [...(content.links ?? []).map(link => ({ ...link, page: `documentation:${link.page}` })), { label: 'Back to menu', page: 'main' }] });
       };
+      if (await catalog.handle(actor, payload, eventId, message => deliver(actor, eventId, message, context), show)) return;
       if (payload.type === 'action' && ['confirm_create', 'confirm_edit'].includes(String(payload.action))) {
         const operation = payload.action === 'confirm_edit' ? 'edit' : 'create';
         const saved = typeof payload.value === 'string' ? await (operation === 'edit' ? store.confirmEdit(actor, payload.value) : store.confirm(actor, payload.value)) : undefined;
-        if (!saved || saved.operation !== operation) return deliver(actor, eventId, { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' }, context);
+        if (!saved || saved.record_kind !== 'project' || saved.operation !== operation) return deliver(actor, eventId, { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' }, context);
         if (!saved.applied_at) return deliver(actor, eventId, { kind: 'Confirmation expired', text: `This confirmation has expired. Submit a fresh documentation ${operation} project request.` }, context);
         if (operation === 'edit') return deliver(actor, eventId, { kind: saved.outcome === 'missing' ? 'Edit failed' : saved.outcome === 'satisfied' ? 'Edit already satisfied' : 'Project edited', text: `Saved outcome for Project: ${saved.target_id}\n${saved.outcome === 'missing' ? 'The target was unavailable at confirmation; no edit was applied.' : `${saved.outcome === 'satisfied' ? 'The selected fields already matched at confirmation; no change or history entry was added.' : 'The approved replacements were saved once. Later edits may have changed the current values.'}\nApproved replacements:\n${fieldsText(saved.fields)}`}\nUse documentation project ${saved.target_id} to read current values.` }, context);
         return deliver(actor, eventId, { kind: 'Project created', text: `Saved Project: ${saved.target_id}\n${fieldsText(saved.fields)}\nUse documentation project ${saved.target_id} to read the record.` }, context);
@@ -139,7 +144,7 @@ export function createDocumentationModule(sql: Sql): AssistantModule {
         if (total > 1) return show(`lookup_${await store.saveLookup(actor, eventId, lookup[2]!.trim(), destination)}_0`);
         return deliver(actor, eventId, { kind: 'Project not found', text: 'No Project matches that exact identifier, name or alias.' }, context);
       }
-      return deliver(actor, eventId, { kind: 'Documentation help', text: help }, context);
+      return deliver(actor, eventId, { kind: 'Documentation help', text: `${help}\n${catalogHelp}\n${componentHelp}` }, context);
     },
   };
 }
