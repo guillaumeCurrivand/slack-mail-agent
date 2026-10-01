@@ -14,6 +14,7 @@ ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS operation text 
 ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS outcome text;
 ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS record_kind text NOT NULL DEFAULT 'project';
 ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS source text NOT NULL DEFAULT 'Slack structured';
+ALTER TABLE documentation_confirmations ADD COLUMN IF NOT EXISTS before_values jsonb;
 CREATE TABLE IF NOT EXISTS documentation_projects (
  team text NOT NULL, id text NOT NULL, fields jsonb NOT NULL,
  created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(team,id)
@@ -60,8 +61,8 @@ CREATE TABLE IF NOT EXISTS documentation_lookups (
  created_at timestamptz NOT NULL DEFAULT now(), UNIQUE(owner,event_id)
 );`;
 
-type Confirmation = { id: string; target_id: string; fields: InventoryValues; record_kind: 'project' | RecordKind; operation: 'create' | 'edit' | 'archive' | 'restore'; outcome: 'applied' | 'satisfied' | 'missing' | 'invalid' | 'archived' | null; created_at: Date | string; applied_at: Date | string | null };
-const confirmationColumns = 'id,target_id,fields,record_kind,operation,outcome,created_at,applied_at';
+export type Confirmation = { id: string; target_id: string; fields: InventoryValues; before_values: InventoryValues | null; record_kind: 'project' | RecordKind; operation: 'create' | 'edit' | 'archive' | 'restore'; outcome: 'applied' | 'satisfied' | 'missing' | 'invalid' | 'archived' | null; created_at: Date | string; applied_at: Date | string | null };
+const confirmationColumns = 'id,target_id,fields,before_values,record_kind,operation,outcome,created_at,applied_at';
 export class DocumentationStore {
   constructor(private sql: Sql) {}
   async proposeLifecycle(actor: Actor, eventId: string, kind: 'project' | RecordKind, targetId: string, operation: 'archive' | 'restore', source = 'Slack structured'): Promise<Confirmation> {
@@ -116,8 +117,11 @@ export class DocumentationStore {
     return result.rows[0];
   }
   async proposeEdit(actor: Actor, eventId: string, project: Project, fields: ProjectEdit, source = 'Slack structured'): Promise<Confirmation> {
-    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,source)
-      VALUES($1,$2,$3,$4,$5,$6,$7,now(),'edit',$8) ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
+    return (await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,source,before_values)
+      SELECT $1,$2,$3,$4,$5,$6,$7,now(),'edit',$8,
+        (SELECT jsonb_object_agg(e.key,p.fields->e.key) FROM jsonb_each($7::jsonb) e)
+      FROM documentation_projects p WHERE p.team=$2 AND p.id=$6
+      ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id
       RETURNING ${confirmationColumns}`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId, project.id, JSON.stringify(fields), source])).rows[0];
   }
   async request(actor: Actor, eventId: string): Promise<Confirmation | undefined> {
@@ -126,8 +130,10 @@ export class DocumentationStore {
   }
   async proposeRecord(actor: Actor, eventId: string, kind: RecordKind, fields: InventoryValues, target?: InventoryRecord, source = 'Slack structured'): Promise<Confirmation> {
     if (!validSavedFields(kind, target ? 'edit' : 'create', fields)) throw new Error('Invalid inventory fields');
-    const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind,source)
-      SELECT $1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$13
+    const result = await this.sql.query(`INSERT INTO documentation_confirmations(id,team,owner,channel,request_id,target_id,fields,created_at,operation,record_kind,source,before_values)
+      SELECT $1,$2,$3,$4,$5,$6,$7,now(),$8,$9,$13,
+        CASE WHEN $8='edit' THEN (SELECT jsonb_object_agg(e.key,r.fields->e.key)
+          FROM documentation_records r CROSS JOIN jsonb_each($7::jsonb) e WHERE r.team=$2 AND r.id=$6 AND r.kind=$9) ELSE NULL END
       WHERE ($8='create' OR EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND id=$6 AND kind=$9))
         AND ($9 IN ('technology','host') OR ($9='tool' AND
           (SELECT count(*) FROM documentation_projects WHERE team=$2

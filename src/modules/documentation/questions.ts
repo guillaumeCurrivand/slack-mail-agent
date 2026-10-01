@@ -69,13 +69,13 @@ export class DocumentationQuestions {
       try {
         if (!this.config.key) throw new Error('No API key');
         const plan = await interpretQuestion(this.config, actor, question, context.budget, async id => {
-          await this.sql.query('UPDATE documentation_questions SET reservation_id=$2 WHERE id=$1', [saved.id, id]);
+          await this.sql.query('UPDATE documentation_questions SET reservation_id=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5', [saved.id, id, actor.team, ownerKey(actor), actor.channel]);
         });
-        await this.sql.query("UPDATE documentation_questions SET plan=$2,status='interpreted' WHERE id=$1", [saved.id, JSON.stringify(plan)]);
+        await this.sql.query("UPDATE documentation_questions SET plan=$2,status='interpreted' WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5", [saved.id, JSON.stringify(plan), actor.team, ownerKey(actor), actor.channel]);
         saved = { ...saved, plan };
       } catch (error) {
         const reason = error instanceof BudgetExceeded ? 'The shared AI allowance is exhausted or reserved.' : 'The API key, provider or validated interpretation is unavailable; uncertain spending stays reserved.';
-        await this.sql.query("UPDATE documentation_questions SET status='unavailable' WHERE id=$1", [saved.id]);
+        await this.sql.query("UPDATE documentation_questions SET status='unavailable' WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4", [saved.id, actor.team, ownerKey(actor), actor.channel]);
         return { kind: 'Question unavailable', text: `${reason}\n${fallback}` };
       }
     }
@@ -84,7 +84,7 @@ export class DocumentationQuestions {
       if (saved.resolved_command) return { command: saved.resolved_command, projectId: saved.project_id };
       const result = await resolveMutation(this.sql, actor, plan.mutation, question);
       if ('command' in result) {
-        await this.sql.query("UPDATE documentation_questions SET resolved_command=$2,project_id=$3,status='validated' WHERE id=$1", [saved.id, result.command, result.projectId]);
+        await this.sql.query("UPDATE documentation_questions SET resolved_command=$2,project_id=$3,status='validated' WHERE id=$1 AND team=$4 AND owner=$5 AND channel=$6", [saved.id, result.command, result.projectId, actor.team, ownerKey(actor), actor.channel]);
         if (result.projectId) await this.remember(actor, result.projectId);
       }
       return result;
@@ -109,7 +109,7 @@ export class DocumentationQuestions {
           // Save every candidate identifier, not a guessed first page.
           const ids = matches.projects.map(p => p.id);
           for (let page = 1; page < matches.pages; page++) ids.push(...(await this.store.projects(actor, page, plan.selector)).projects.map(p => p.id));
-          await this.sql.query('UPDATE documentation_questions SET candidates=$2 WHERE id=$1', [saved.id, JSON.stringify(ids)]);
+          await this.sql.query('UPDATE documentation_questions SET candidates=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5', [saved.id, JSON.stringify(ids), actor.team, ownerKey(actor), actor.channel]);
           await this.sql.query('DELETE FROM documentation_project_context WHERE owner=$1 AND channel=$2', [ownerKey(actor), actor.channel]);
           return `question_${saved.id}_0`;
         }
@@ -119,7 +119,7 @@ export class DocumentationQuestions {
           AND selected_at>now()-interval '30 minutes' AND selected_at<=now()`, [ownerKey(actor), actor.channel, actor.team])).rows[0]?.project_id;
       }
       if (!projectId || !await this.store.project(actor, projectId)) return { kind: 'Choose a Project', text: 'Which Project? Your private Project context is missing or expired. Open documentation project <identifier, exact name or alias>, then repeat the question with the documentation prefix.' };
-      await this.sql.query('UPDATE documentation_questions SET project_id=$2 WHERE id=$1 AND project_id IS NULL', [saved.id, projectId]);
+      await this.sql.query('UPDATE documentation_questions SET project_id=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5 AND project_id IS NULL', [saved.id, projectId, actor.team, ownerKey(actor), actor.channel]);
       await this.remember(actor, projectId);
     }
     return `question_${saved.id}_0`;
@@ -131,7 +131,7 @@ export class DocumentationQuestions {
       return { kind: 'Choice unavailable', text: 'This choice is private to its User and DM or has expired. Repeat the documentation question.' };
     const id = saved.project_id ?? match![2]!;
     if (!await this.store.project(actor, id)) return { kind: 'Project unavailable', text: 'The selected Project no longer exists. Repeat the documentation question.' };
-    await this.sql.query('UPDATE documentation_questions SET project_id=$2 WHERE id=$1 AND project_id IS NULL', [saved.id, id]);
+    await this.sql.query('UPDATE documentation_questions SET project_id=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5 AND project_id IS NULL', [saved.id, id, actor.team, ownerKey(actor), actor.channel]);
     await this.remember(actor, id);
     return `question_${saved.id}_0`;
   }

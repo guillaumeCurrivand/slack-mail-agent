@@ -3,7 +3,7 @@ import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
 import { recordSchemas, recordTitle, recordName, validSavedFields, parseEditRequest, type InventoryRecord, type InventoryValues, type RecordKind } from './domain.js';
 import { lifecycleButton, statusText, referenceLabel, outcomeButtons } from './lifecycle.js';
-import type { DocumentationStore } from './store.js';
+import type { Confirmation, DocumentationStore } from './store.js';
 
 const literal = escapeCardValue;
 export const catalogHelp = 'Browse documentation technologies [page]; inspect documentation technology <identifier or exact name>; read documentation history technology <identifier or exact name>. Create one Technology with documentation create technology {"name":"React","category":"Frontend","notes":"Example"}. Edit with documentation edit technology <identifier or exact name> {"category":null,"notes":"Replacement"}. Supported Technology fields: name (required, one line, 120 characters), category (120 characters), notes (1,500 characters). Optional values may be null (Unknown) or empty. Creation and editing require your separate confirmation within 24 hours. Selected fields overwrite intervening edits and preserve unrelated fields. No AI or Gmail is used.';
@@ -12,6 +12,14 @@ export const hostHelp = 'Browse documentation hosts [page]; inspect documentatio
 export const hostingHelp = 'Browse documentation hosting <Component identifier or exact name> [page]; inspect documentation hosting-entry <identifier>; read documentation history hosting-entry <identifier>. Create with documentation create hosting {"componentId":"<Component identifier>","serviceId":"<Host/service identifier or exact name>","environment":"production","accountReference":"Team account","urls":["https://example.com"],"accessInstructions":"See password manager","notes":"Example"}. Edit with documentation edit hosting <identifier> {"environment":"staging","serviceId":"<existing Host/service>","notes":null}. The Component parent is fixed. Fields: environment (one line, 120 characters), serviceId (required existing Host/service), accountReference/accessInstructions/notes (1,500 characters each), urls (up to 10 HTTP(S) URLs, 400 characters each, without credentials). Creation and selected replacements fit 5,000 JSON characters. Optional fields may be null (Unknown) or empty. Use account references, instructions and password-manager links; never supply passwords or API keys. Missing services need separate confirmed creation; ambiguous names require stable identifiers. Each save affects one entry and requires your confirmation within 24 hours. No AI or infrastructure provider is used.';
 export const toolHelp = 'Browse documentation tools [page]; inspect documentation tool <identifier or exact name>; read documentation history tool <identifier or exact name>. Create with documentation create tool {"name":"Slack","category":"Communication","usage":"Company chat","referent":"Team contact","companyWide":true,"projects":["<Project identifier, exact name or alias>"],"notes":"Example"}. Only name is required (one line, 120 characters); category allows 120 characters, usage/referent/notes 1,500 each, projects at most 20 existing Projects. companyWide is true, false or null. Company-wide and Project usage can coexist. Missing fields and null stay Unknown; empty values stay empty. Edit with documentation edit tool <identifier or exact name> {"usage":"Replacement","referent":null}. Creation/selected replacements fit 5,000 JSON characters. Project references resolve unambiguously to stable identifiers; missing Projects require separate confirmed creation. Usage text never creates relationships. Referents are descriptive, confer no edit authority and trigger no notifications. System metadata/history cannot be edited. Every save affects one record, needs your own separate confirmation within 24 hours, overwrites selected fields and preserves unrelated fields. No AI or Gmail is used.';
 export const inventoryText = (fields: InventoryValues) => Object.entries(fields).map(([key, value]) => `${key}: ${value === null ? 'Unknown' : literal(Array.isArray(value) ? JSON.stringify(value) : String(value))}`).join('\n');
+export const confirmationValues = (proposal: Confirmation) => proposal.operation === 'edit'
+  ? `Before (when proposed):\n${proposal.before_values === null ? 'Unavailable for this older confirmation; original values were not saved.' : inventoryText(proposal.before_values)}\nAfter (approved replacements):\n${inventoryText(proposal.fields)}`
+  : inventoryText(proposal.fields);
+export function confirmationPreview(proposal: Confirmation): Pick<AgentMessage, 'text' | 'buttons'> {
+  const text = confirmationValues(proposal);
+  return { text: proposal.operation !== 'edit' || text.length <= 9500 ? text : 'The full saved values span several pages. Open Review values to inspect them before confirming.',
+    buttons: proposal.operation === 'edit' ? [{ label: 'Review values', action: 'open_confirmation_values', value: proposal.id }] : [] };
+}
 export const hostingEntryText = (entry: Awaited<ReturnType<DocumentationStore['projectHosting']>>['entries'][number]) =>
   `Component: ${literal(entry.component_name)} (${entry.component_id})${entry.component_archived ? ' [Archived]' : ''}\n${entry.fields ? `Hosting entry: ${entry.hosting_id}${entry.hosting_archived ? ' [Archived]' : ''}\nHost/service: ${literal(entry.service_name ?? 'Unknown')} (${entry.fields.serviceId})${entry.service_archived ? ' [Archived]' : ''}\n${inventoryText(entry.fields)}` : 'Hosting entries: Unknown\nEnvironment: Unknown\nHost/service: Unknown'}`;
 const title = recordTitle;
@@ -34,6 +42,17 @@ async function pagedLookup<T extends { total: number }>(input: string, lookup: (
 // recovery. Every selector is re-read within the actor's workspace.
 export class Catalog {
   constructor(private store: DocumentationStore) {}
+  private async resolveReferences(actor: Actor, kind: 'project' | 'technology', selectors: string[]): Promise<string[] | AgentMessage> {
+    const ids: string[] = [], label = title(kind);
+    for (const selector of selectors) {
+      const result = kind === 'project' ? await this.store.lookup(actor, selector) : await this.store.lookupRecord(actor, kind, selector);
+      if (result.total !== 1) return { kind: result.total ? `Ambiguous ${label} reference` : `${label} not found`,
+        text: result.total ? `${label} ${literal(selector)} is ambiguous. Inspect documentation ${kind} ${literal(selector)} and repeat with a stable identifier. Nothing was proposed.`
+          : `${label} ${literal(selector)} was not found in this workspace. Create it with documentation create ${kind} in a separate confirmed operation, then repeat this request. Nothing was proposed.` };
+      ids.push('projects' in result ? result.projects[0]!.id : result.records[0]!.id);
+    }
+    return [...new Set(ids)];
+  }
   async page(actor: Actor, destination: string): Promise<MenuPage | undefined> {
     if (destination === 'addtechnology') return { kind: 'Add Technology', text: catalogHelp, links: [{ label: 'Back', page: 'technologies_0' }] };
     if (destination === 'addtool') return { kind: 'Add Tool', text: toolHelp, links: [{ label: 'Back', page: 'tools_0' }] };
@@ -152,31 +171,15 @@ export class Catalog {
           target = result.records[0]!;
           if (target.archived) { await deliver({ kind: 'Edit requires restoration', text: `This ${label} is archived. Explicitly restore it before editing.` }); return true; }
         }
-        if (kind === 'tool' && Array.isArray(fields.projects)) {
-          const ids: string[] = [];
-          for (const selector of fields.projects) {
-            const result = await this.store.lookup(actor, selector);
-            if (result.total !== 1) {
-              await deliver({ kind: result.total ? 'Ambiguous Project reference' : 'Project not found', text: result.total ? `Project ${literal(selector)} is ambiguous. Inspect documentation project ${literal(selector)} and repeat with a stable identifier. Nothing was proposed.` : `Project ${literal(selector)} was not found in this workspace. Create it with documentation create project in a separate confirmed operation, then repeat this request. Nothing was proposed.` }); return true;
-            }
-            ids.push(result.projects[0]!.id);
-          }
-          fields.projects = [...new Set(ids)];
+        for (const [field, referenceKind] of [['projects', 'project'], ['technologies', 'technology']] as const) {
+          if (!Array.isArray(fields[field])) continue;
+          const resolved = await this.resolveReferences(actor, referenceKind, fields[field]);
+          if (!Array.isArray(resolved)) { await deliver(resolved); return true; }
+          fields[field] = resolved;
         }
         if (kind === 'component') {
           if (operation === 'create' && !await this.store.project(actor, String(fields.projectId))) {
             await deliver({ kind: 'Project not found', text: 'Use an existing Project identifier from this workspace. Create a missing Project in a separate confirmed operation.' }); return true;
-          }
-          if (Array.isArray(fields.technologies)) {
-            const ids: string[] = [];
-            for (const selector of fields.technologies) {
-              const result = await this.store.lookupRecord(actor, 'technology', selector);
-              if (result.total !== 1) {
-                await deliver({ kind: result.total ? 'Ambiguous Technology reference' : 'Technology not found', text: result.total ? `Technology ${literal(selector)} is ambiguous. Inspect documentation technology ${literal(selector)} and repeat with a stable identifier. Nothing was proposed.` : `Technology ${literal(selector)} was not found in this workspace. Create it with documentation create technology in a separate confirmed operation, then repeat this request. Nothing was proposed.` }); return true;
-              }
-              ids.push(result.records[0]!.id);
-            }
-            fields.technologies = [...new Set(ids)];
           }
         }
         if (kind === 'hosting') {
@@ -203,7 +206,8 @@ export class Catalog {
           await deliver({ kind: 'Relationships unavailable', text: error.message }); return true;
         }
       }
-      await deliver({ kind: `${operation === 'create' ? 'Create' : 'Edit'} ${label} confirmation`, text: `${operation === 'create' ? 'Create' : 'Edit'} shared ${label}: ${proposal.target_id}\n${inventoryText(proposal.fields)}\nOnly approved fields change; intervening edits are overwritten and unrelated fields remain. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`, buttons: [{ label: operation === 'create' ? 'Confirm creation' : 'Confirm edit', action: `confirm_${operation}_${kind}`, value: proposal.id, style: 'primary' }] });
+      const preview = confirmationPreview(proposal);
+      await deliver({ kind: `${operation === 'create' ? 'Create' : 'Edit'} ${label} confirmation`, text: `${operation === 'create' ? 'Create' : 'Edit'} shared ${label}: ${proposal.target_id}\n${preview.text}\nOnly approved fields change; intervening edits are overwritten and unrelated fields remain. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`, buttons: [{ label: operation === 'create' ? 'Confirm creation' : 'Confirm edit', action: `confirm_${operation}_${kind}`, value: proposal.id, style: 'primary' }, ...(preview.buttons ?? [])] });
       return true;
     }
     const list = /^(technologies|hosts|tools)(?:\s+(\d{1,6}))?$/i.exec(text);

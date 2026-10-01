@@ -82,6 +82,133 @@ function interpreter(plan: unknown) {
   return provider;
 }
 
+it.each(['project', 'technology', 'component', 'host', 'hosting', 'tool'] as const)('saves %s edit before-values for confirmation and retains them through retry and overwrite', async recordKind => {
+  const h = await harness();
+  try {
+    const project = await h.click(await h.dm('documentation create project {"name":"Parent"}'), 'Confirm creation');
+    const projectId = bodyText(project).match(/Saved Project: ([\w-]+)/)![1]!;
+    await h.click(await h.dm('documentation create host {"name":"Compute"}'), 'Confirm creation');
+    const component = await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: 'Web', projectId })}`), 'Confirm creation');
+    const componentId = bodyText(component).match(/Saved outcome for [^:]+: ([\w-]+)/)![1]!;
+    const field = recordKind === 'component' ? 'type' : recordKind === 'hosting' ? 'environment' : 'notes';
+    const fields = recordKind === 'hosting' ? { componentId, serviceId: 'Compute', [field]: 'Original' }
+      : recordKind === 'component' ? { name: 'Target', projectId, [field]: 'Original' } : { name: 'Target', [field]: 'Original' };
+    const created = await h.click(await h.dm(`documentation create ${recordKind} ${JSON.stringify(fields)}`), 'Confirm creation');
+    const id = bodyText(created).match(/(?:Saved Project|Saved outcome for [^:]+): ([\w-]+)/)![1]!;
+    const event = randomUUID();
+    await h.enqueueText(`documentation edit ${recordKind} ${id} ${JSON.stringify({ [field]: 'Replacement' })}`, alice, true, event);
+    h.fail('reject');
+    await expect(h.drain()).rejects.toThrow('rejected');
+    const pending = (await sql.query("SELECT id FROM jobs WHERE status='queued'")).rows[0];
+    await sql.query("UPDATE jobs SET status='running' WHERE id=$1", [pending.id]);
+    await h.click(await h.dm(`documentation edit ${recordKind} ${id} ${JSON.stringify({ [field]: 'Intervening' })}`, bob), 'Confirm edit', bob);
+    await h.restart();
+    await sql.query("UPDATE jobs SET status='queued' WHERE id=$1", [pending.id]);
+    const proposal = await h.drain();
+    expect(bodyText(proposal)).toContain(`Before (when proposed):\n${field}: Original\nAfter (approved replacements):\n${field}: Replacement`);
+    expect(bodyText(proposal)).not.toContain('Intervening');
+    const saved = (await sql.query('SELECT before_values FROM documentation_confirmations WHERE id=$1', [button(proposal, 'Confirm edit').value])).rows[0];
+    expect(saved.before_values).toEqual({ [field]: 'Original' });
+    await h.click(proposal, 'Confirm edit');
+    const history = (await sql.query(`SELECT before_values,after_values FROM ${recordKind === 'project' ? 'documentation_history' : 'documentation_record_history'} WHERE id=$1`, [button(proposal, 'Confirm edit').value])).rows[0];
+    expect(history.before_values).toEqual({ [field]: 'Intervening' });
+    expect(history.after_values).toEqual({ [field]: 'Replacement' });
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it.each(['technology', 'component'] as const)('guides saved inventory pages when a %s selector becomes archived and resumes after restoration', async referenceKind => {
+  const h = await harness();
+  try {
+    const creation = await h.click(await h.dm('documentation create technology {"name":"React"}'), 'Confirm creation');
+    const technologyId = bodyText(creation).match(/Saved outcome for [^:]+: ([\w-]+)/)![1]!;
+    let componentId = '';
+    for (let index = 0; index < 9; index++) {
+      const project = await h.click(await h.dm(`documentation create project {"name":"Alpha ${index}"}`), 'Confirm creation');
+      const projectId = bodyText(project).match(/Saved Project: ([\w-]+)/)![1]!;
+      const component = await h.click(await h.dm(`documentation create component ${JSON.stringify({ name: `Web ${index}`, projectId, technologies: ['React'] })}`), 'Confirm creation');
+      componentId = bodyText(component).match(/Saved outcome for [^:]+: ([\w-]+)/)![1]!;
+    }
+    const selector = referenceKind === 'technology' ? technologyId : componentId;
+    const query = { target: referenceKind === 'technology' ? 'project' : 'technology',
+      filters: referenceKind === 'technology' ? [{ kind: 'technology', selector }] : [],
+      ...(referenceKind === 'component' ? { component: selector } : {}) };
+    const first = await h.dm(`documentation search ${JSON.stringify(query)}`);
+    // The technology-filter list has Next; the component-qualified query can be
+    // reopened using a fresh owner-bound menu control for its saved destination.
+    const questionId = (await sql.query('SELECT id FROM documentation_questions ORDER BY created_at DESC LIMIT 1')).rows[0].id;
+    const recordControl = button(first, 'React');
+    const next = referenceKind === 'technology' ? button(first, 'Next') : {
+      ...recordControl, value: `${recordControl.value.split('|')[0]}|documentation:question_${questionId}_0`,
+    };
+    await h.click(await h.dm(`documentation archive ${referenceKind} ${selector}`, bob), 'Confirm archive', bob);
+    await h.enqueueClick(first, next);
+    const unavailable = await h.drain();
+    expect(kind(unavailable)).toBe('Filter not found');
+    expect(bodyText(unavailable)).toContain('Unknown or archived references have not been counted as zero matches');
+    expect(bodyText(unavailable)).not.toContain('Total matching');
+    const included = await h.dm(`documentation count ${JSON.stringify({ ...query, includeArchived: true })}`);
+    expect(bodyText(included)).toContain(`Total matching ${referenceKind === 'technology' ? 'Project' : 'Technology'} records: ${referenceKind === 'technology' ? 9 : 1}`);
+    await h.click(await h.dm(`documentation restore ${referenceKind} ${selector}`, bob), 'Confirm restore', bob);
+    await h.enqueueClick(first, next);
+    expect(kind(await h.drain())).toBe('Inventory answer');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it.each(['project', 'tool'] as const)('pages complete %s before/after comparisons privately without refreshing confirmation expiry', async recordKind => {
+  const h = await harness();
+  try {
+    const fields = recordKind === 'project' ? ['description', 'notes'] : ['usage', 'referent', 'notes'];
+    const original = Object.fromEntries(fields.map(field => [field, `Original ${field}:` + '*'.repeat(1400) + ` END ORIGINAL ${field}`]));
+    const replacement = Object.fromEntries(fields.map(field => [field, `Replacement ${field}:` + '_'.repeat(1400) + ` END REPLACEMENT ${field}`]));
+    await h.click(await h.dm(`documentation create ${recordKind} {"name":"Long comparison"}`), 'Confirm creation');
+    for (const field of fields) await h.click(await h.dm(`documentation edit ${recordKind} Long comparison ${JSON.stringify({ [field]: original[field] })}`), 'Confirm edit');
+    const proposal = await h.dm(`documentation edit ${recordKind} Long comparison ${JSON.stringify(replacement)}`);
+    expect(bodyText(proposal)).toContain('Open Review values');
+    const confirmationId = button(proposal, 'Confirm edit').value;
+    const before = (await sql.query('SELECT created_at,applied_at FROM documentation_confirmations WHERE id=$1', [confirmationId])).rows[0];
+    expect(kind(await h.click(proposal, 'Review values', bob))).toBe('Confirmation unavailable');
+    expect(kind(await h.click(proposal, 'Review values', { ...alice, channel: 'DOTHER' }))).toBe('Confirmation unavailable');
+    let values = await h.click(proposal, 'Review values');
+    expect(values.ts).not.toBe(proposal.ts);
+    let combined = bodyText(values), count = 1;
+    while (buttons(values).some(control => control.text.text === 'More values')) {
+      values = await h.click(values, 'More values');
+      expect(bodyText(values).length).toBeLessThan(12_000);
+      combined += '\n' + bodyText(values);
+      expect(++count).toBeLessThan(10);
+    }
+    for (const field of fields) {
+      expect(combined).toContain(`${field}: ${original[field]}`);
+      expect(combined).toContain(`${field}: ${replacement[field]}`);
+    }
+    const after = (await sql.query('SELECT created_at,applied_at FROM documentation_confirmations WHERE id=$1', [confirmationId])).rows[0];
+    expect(after).toEqual(before);
+    await h.click(proposal, 'Confirm edit');
+    expect((await sql.query('SELECT applied_at FROM documentation_confirmations WHERE id=$1', [confirmationId])).rows[0].applied_at).not.toBeNull();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
+it('labels missing before-values on older confirmations without inventing them on replay', async () => {
+  const h = await harness();
+  try {
+    await h.click(await h.dm('documentation create project {"name":"Legacy","notes":"Original"}'), 'Confirm creation');
+    const proposal = await h.dm('documentation edit project Legacy {"notes":"Replacement"}');
+    const id = button(proposal, 'Confirm edit').value;
+    await sql.query('UPDATE documentation_confirmations SET before_values=NULL WHERE id=$1', [id]);
+    await h.click(await h.dm('documentation edit project Legacy {"notes":"Changed"}', bob), 'Confirm edit', bob);
+    await h.restart();
+    const values = await h.click(proposal, 'Review values');
+    expect(bodyText(values)).toContain('Unavailable for this older confirmation');
+    expect(bodyText(values)).toContain('notes: Replacement');
+    expect(bodyText(values)).not.toContain('notes: Changed');
+    await h.click(proposal, 'Confirm edit');
+    expect(bodyText(await h.dm('documentation project Legacy'))).toContain('notes: Replacement');
+  } finally { await h.app.close(); }
+});
+
 it('proposes a conversational Project creation through the saved confirmation path without model authorization', async () => {
   const h = await harness('documentation', 'TTEAM', { OPENAI_API_KEY: 'fake' });
   try {
@@ -142,6 +269,7 @@ it('keeps conversational edits actor-bound and exact across overwrite races, lif
     await h.click(await h.dm('documentation create project {"name":"Alpha","description":"Original"}'), 'Confirm creation');
     const provider = interpreter({ operation: 'mutation', selector: null, mutation: { operation: 'edit', kind: 'project', selector: 'Alpha', fields: '{"description":"Alice"}' } });
     const proposal = await h.dm('documentation please set description of Alpha to Alice');
+    expect(bodyText(proposal)).toContain('Before (when proposed):\ndescription: Original\nAfter (approved replacements):\ndescription: Alice');
     await h.click(await h.dm('documentation edit project Alpha {"description":"Bob","notes":"Preserved"}', bob), 'Confirm edit', bob);
     expect(kind(await h.click(proposal, 'Confirm edit', { ...alice, channel: 'DOTHER' }))).toBe('Confirmation unavailable');
     const result = await h.click(proposal, 'Confirm edit');

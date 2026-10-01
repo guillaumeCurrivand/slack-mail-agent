@@ -131,6 +131,11 @@ export class InventoryQueries {
     const row = result.rows[0], records: Node[] = row.records;
     const changed = previousFingerprint !== null && previousFingerprint !== row.fingerprint;
     const references: Node[] = row.references;
+    const selectors: InventoryQuery['filters'] = [...query.filters, ...(query.component ? [{ kind: 'component' as const, selector: query.component }] : [])];
+    const unavailable = selectors.find(filter => !references.some(record => record.id === filter.selector
+      && record.kind === filter.kind && (query.includeArchived || !record.archived)));
+    if (unavailable) return { fingerprint: row.fingerprint, page: 0, pages: 1,
+      content: { kind: 'Filter not found', text: `${recordTitle(unavailable.kind)} selector ${escapeCardValue(unavailable.selector)} does not match an eligible saved record. Unknown or archived references have not been counted as zero matches; check the identifier or explicitly includeArchived.` } };
     const name = (record: Node) => String(record.fields.name ?? record.fields.environment ?? 'Unknown environment');
     const criteria = [references.map(record => `${recordTitle(record.kind)}: ${referenceLabel(name(record), record)} (${record.id})`).join('; '),
       ...query.fields.map(filter => `${filter.field} = ${String(filter.value ?? 'Unknown')}`),

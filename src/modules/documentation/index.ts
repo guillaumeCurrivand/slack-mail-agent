@@ -7,7 +7,7 @@ import { projectEdit, projectFields, parseEditRequest, recordTitle, type Project
 import { documentationSchema, DocumentationStore } from './store.js';
 import { documentationImportSchema } from './import.js';
 import { Lifecycle, lifecycleHelp, lifecycleButton, statusText, referenceLabel, outcomeButtons } from './lifecycle.js';
-import { Catalog, catalogHelp, componentHelp, hostHelp, hostingHelp, toolHelp, inventoryText, hostingEntryText } from './catalog.js';
+import { Catalog, catalogHelp, componentHelp, hostHelp, hostingHelp, toolHelp, inventoryText, hostingEntryText, confirmationPreview, confirmationValues } from './catalog.js';
 import { readDocumentationAIConfig, type QuestionAIConfig } from './ai.js';
 import { DocumentationQuestions, questionSchema } from './questions.js';
 import { inventoryQueryHelp } from './inventory-query.js';
@@ -58,6 +58,12 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     ] };
   }
   async function recordContent(actor: Actor, destination: string): Promise<MenuPage> {
+    const confirmation = /^confirmation_([^_]+)$/.exec(destination);
+    if (confirmation) {
+      const saved = await store.confirmation(actor, confirmation[1]!);
+      return saved?.operation === 'edit' ? { kind: 'Edit confirmation values', text: `${recordTitle(saved.record_kind)}: ${saved.target_id}\n${confirmationValues(saved)}\nThese are saved proposal values; current values may differ. Confirm using the original confirmation Card. Expires: ${new Date(new Date(saved.created_at).getTime() + 24 * 3600_000).toISOString()}.` }
+        : { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' };
+    }
     const answer = await questions.page(actor, destination);
     if (answer) return answer;
     const lifecyclePage = await lifecycle.page(actor, destination);
@@ -123,6 +129,11 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         if (typeof result !== 'string' && 'command' in result) return this.handle(actor, { type: 'text', text: result.command }, eventId, context);
         return typeof result === 'string' ? show(result) : deliver(actor, eventId, result, context);
       };
+      if (payload.type === 'action' && payload.action === 'open_confirmation_values') {
+        const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;
+        if (!saved || saved.operation !== 'edit') return deliver(actor, eventId, { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' }, context);
+        return show(`confirmation_${saved.id}`);
+      }
       if (payload.type === 'action' && ['open_confirmation_record', 'open_confirmation_history'].includes(String(payload.action))) {
         const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;
         if (!saved?.applied_at) return deliver(actor, eventId, { kind: 'Result unavailable', text: 'This saved result is private to its User and DM or is unavailable.' }, context);
@@ -178,7 +189,8 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
           if (projects[0]!.archived) return deliver(actor, eventId, { kind: 'Edit requires restoration', text: 'This Project is archived. Explicitly restore it before editing.' }, context);
           proposal = await store.proposeEdit(actor, eventId, projects[0]!, request.fields, source);
         }
-        return deliver(actor, eventId, { kind: 'Edit Project confirmation', text: `Edit shared Project: ${proposal.target_id}\nSelected replacement fields:\n${fieldsText(proposal.fields)}\nOnly these fields will change. Confirmation overwrites them even after another User edits them; unrelated fields remain. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`, buttons: [{ label: 'Confirm edit', action: 'confirm_edit', value: proposal.id, style: 'primary' }] }, context);
+        const preview = confirmationPreview(proposal);
+        return deliver(actor, eventId, { kind: 'Edit Project confirmation', text: `Edit shared Project: ${proposal.target_id}\n${preview.text}\nOnly these fields will change. Confirmation overwrites them even after another User edits them; unrelated fields remain. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`, buttons: [{ label: 'Confirm edit', action: 'confirm_edit', value: proposal.id, style: 'primary' }, ...(preview.buttons ?? [])] }, context);
       }
       if (/^create project\s/i.test(text)) {
         let fields: ProjectFields;

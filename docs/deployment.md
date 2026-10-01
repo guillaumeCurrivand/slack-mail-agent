@@ -6,6 +6,12 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Documentation review corrections
+
+The review fixes on `main` add saved edit before-values, private **Review values** pages, eligibility checks for saved inventory query selectors, and explicit actor/workspace/DM predicates on question checkpoints. Follow the existing [runtime update procedure](#update-and-restart) after the reviewed changes are committed and pushed. Preserve the existing environment, Compose project and database volume. There are no new environment variables or permissions; startup idempotently adds nullable `before_values` to `documentation_confirmations`, with no manual migration command. Old pending confirmations remain valid within their original expiry and label unavailable before-values.
+
+After deployment, check `/ready`, then propose an edit and inspect its before/after comparison without confirming unintended changes. Verify **Review values** opens a separate private Card and large comparisons paginate. In an approved test inventory, open a relationship query, archive its referenced record with separate confirmation, and reopen the saved query: expect guidance instead of a zero count; explicit `includeArchived` should remain usable. Use existing confirmation/history checks to verify intervening edits still overwrite selected fields and record actual replaced values. These checks do not authorize real import or paid model evaluation. Local automated verification does not establish successful production deployment or live Slack behavior.
+
 ## Documentation import release candidate
 
 Ticket 10 on `main` adds the [offline operator import workflow](documentation-import.md). Keep the existing `ENABLED_MODULES` with `documentation` enabled for inventory access/import. No new environment variables, credentials, Slack/Google scopes or manual migrations are required. Startup idempotently adds `documentation_import_batches` and `documentation_import_effects`; existing records/history, environment and database volume remain. Deploying the code does not review/apply real source data or change inventory authority. Real source review, User approval, import and rollout remain separately authorized operator actions.
