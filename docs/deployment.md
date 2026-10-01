@@ -12,7 +12,7 @@ The `clickup` Module is implemented locally and opt-in. Before enabling it, pres
 
 Create/configure the OAuth application with its exact registered callback at the existing `PUBLIC_URL` plus `/auth/clickup/callback`. The reverse proxy must preserve HTTPS and omit/redact URL logs for `/auth/clickup*`. No new Slack scopes or installation are required. See [README setup](../README.md#clickup-setup); OAuth app configuration and credentials remain operator setup work, not observed results.
 
-Enabled-module startup idempotently creates `clickup_connections`, `clickup_oauth_states`, `clickup_confirmations`, `clickup_scans` and `clickup_limits`. There is no manual migration command. Existing Gmail, Slack, Documentation and shared budget data remain; preserve the Compose project, environment and database volume. Use the normal deployment script to stop old workers before starting the new image.
+Enabled-module startup idempotently creates `clickup_connections`, `clickup_authorizations`, `clickup_oauth_states`, `clickup_confirmations`, `clickup_scans` and `clickup_limits`. There is no manual migration command. Existing Gmail, Slack, Documentation and shared budget data remain; preserve the Compose project, environment and database volume. Use the normal deployment script to stop old workers before starting the new image.
 
 After the reviewed `main` commit is pushed and the environment is prepared, run these commands on the confirmed server:
 

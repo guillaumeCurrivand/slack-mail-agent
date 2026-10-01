@@ -3,7 +3,7 @@ import { ownerKey } from '../../core/identity.js';
 import type { AssistantModule } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, menuButton } from '../../core/slack.js';
-import { JobStore, withOwner, type Sql } from '../../core/store.js';
+import { withOwner, type Sql } from '../../core/store.js';
 import type { ClickupConfig } from './config.js';
 import { ClickupAPI } from './api.js';
 import type { Connection } from './domain.js';
@@ -15,7 +15,7 @@ import { retrieveTasks, taskPage } from './tasks.js';
 export function createClickupModule(config: ClickupConfig, sql: Sql, dependencies: { fetcher?: typeof fetch } = {}): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
   const fetcher = dependencies.fetcher ?? fetch;
-  const oauth = new ClickupOAuth(config, new ClickupStore(sql), vault, fetcher);
+  const oauth = new ClickupOAuth(config, sql, vault, fetcher);
   const api = (actor: Parameters<ClickupStore['connection']>[0], connection: Connection, store: ClickupStore) => new ClickupAPI(vault.open<{ token: string }>(connection.tokens, `clickup:${ownerKey(actor)}`).token, fetcher, {
     retryAt: () => store.retryAt(actor, connection.id), blockUntil: until => store.blockUntil(actor, connection.id, until),
   });
@@ -30,7 +30,7 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
     menuActions: ['connect', 'disconnect', 'confirm', 'cancel', 'tasks', 'page'],
     workOperations: [{ key: 'tasks', label: 'Consulter mes tâches ClickUp', commands: ['tasks'], action: 'tasks' }],
     async initialize(database) { for (const statement of clickupSchema.split(';').filter(part => part.trim())) await database.query(statement); },
-    registerRoutes(app) { registerClickupRoutes(app, config.PUBLIC_URL, new JobStore(sql), oauth); },
+    registerRoutes(app) { registerClickupRoutes(app, config.PUBLIC_URL, oauth); },
     async menu(actor, _page, context) { return connectionPage(await new ClickupStore(context.sql).connection(actor)); },
     async cleanup(pool) {
       const owners = await pool.query('SELECT DISTINCT owner FROM clickup_connections UNION SELECT DISTINCT owner FROM clickup_confirmations UNION SELECT DISTINCT owner FROM clickup_scans UNION SELECT DISTINCT owner FROM clickup_oauth_states UNION SELECT DISTINCT owner FROM clickup_limits');
@@ -54,7 +54,7 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
         return show({ kind: 'ClickUp indisponible', text: 'Cette demande est indisponible. Envoyez clickup aide.' });
       }
       if (command === 'connect') {
-        const link = await new ClickupOAuth(config, store, vault, fetcher).invitation(actor);
+        const link = await new ClickupOAuth(config, context.sql, vault, fetcher).invitation(actor);
         return show({ kind: 'Connexion ClickUp', text: 'Autorisez Mayasquad dans le navigateur, puis confirmez votre identité dans Slack. Ce lien est à usage unique et expire après 10 minutes.', resourceLinks: [{ label: 'Connecter mon compte ClickUp', url: link }] });
       }
       if (payload.type === 'connection') {

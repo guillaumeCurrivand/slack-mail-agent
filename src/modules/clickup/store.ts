@@ -3,6 +3,9 @@ import type { Sql } from '../../core/store.js';
 import type { Confirmation, Connection, Scan } from './domain.js';
 
 export const clickupSchema = `
+CREATE TABLE IF NOT EXISTS clickup_authorizations (
+ owner text PRIMARY KEY, generation text NOT NULL
+);
 CREATE TABLE IF NOT EXISTS clickup_connections (
  owner text PRIMARY KEY, team text NOT NULL, subject text NOT NULL, connection_id text NOT NULL,
  identity jsonb NOT NULL, tokens text NOT NULL, UNIQUE(team,subject)
@@ -34,6 +37,13 @@ export class ClickupStore {
   async putState(hash: string, actor: Actor, kind: string, encrypted: string) {
     await this.sql.query('INSERT INTO clickup_oauth_states(hash,owner,kind,encrypted) VALUES($1,$2,$3,$4)', [hash, ownerKey(actor), kind, encrypted]);
   }
+  async generation(actor: Actor): Promise<string> {
+    await this.sql.query('INSERT INTO clickup_authorizations(owner,generation) VALUES($1,$2) ON CONFLICT DO NOTHING', [ownerKey(actor), uid()]);
+    return (await this.sql.query('SELECT generation FROM clickup_authorizations WHERE owner=$1', [ownerKey(actor)])).rows[0].generation;
+  }
+  async readState(hash: string, kind: string): Promise<string | undefined> {
+    return (await this.sql.query('SELECT encrypted FROM clickup_oauth_states WHERE hash=$1 AND kind=$2 AND expires_at>now()', [hash, kind])).rows[0]?.encrypted;
+  }
   async takeState(hash: string, kind: string): Promise<string | undefined> {
     return (await this.sql.query('DELETE FROM clickup_oauth_states WHERE hash=$1 AND kind=$2 AND expires_at>now() RETURNING encrypted', [hash, kind])).rows[0]?.encrypted;
   }
@@ -60,7 +70,11 @@ export class ClickupStore {
     ), consumed AS (
       UPDATE clickup_confirmations SET status='applied',result_id=data->>'id',data='{}' FROM changed WHERE id=$1 RETURNING clickup_confirmations.id
     ), removed AS (DELETE FROM clickup_scans WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
-    limits AS (DELETE FROM clickup_limits WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)) SELECT id FROM consumed`, [id, ownerKey(actor), actor.channel, actor.team])).rows[0];
+    limits AS (DELETE FROM clickup_limits WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
+    generation AS (UPDATE clickup_authorizations SET generation=$5 WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
+    states AS (DELETE FROM clickup_oauth_states WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
+    pending AS (UPDATE clickup_confirmations SET status='cancelled',data='{}' WHERE owner=$2 AND id<>$1 AND kind='connect' AND status='pending' AND EXISTS(SELECT 1 FROM consumed))
+    SELECT id FROM consumed`, [id, ownerKey(actor), actor.channel, actor.team, uid()])).rows[0];
     return !!row;
   }
   async disconnect(actor: Actor, id: string): Promise<boolean> {
@@ -72,8 +86,9 @@ export class ClickupStore {
     scans AS (DELETE FROM clickup_scans WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
     limits AS (DELETE FROM clickup_limits WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
     states AS (DELETE FROM clickup_oauth_states WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
+    generation AS (UPDATE clickup_authorizations SET generation=$4 WHERE owner=$2 AND EXISTS(SELECT 1 FROM consumed)),
     pending AS (UPDATE clickup_confirmations SET status='cancelled',data='{}' WHERE owner=$2 AND kind='connect' AND status='pending' AND EXISTS(SELECT 1 FROM consumed))
-    SELECT id FROM consumed`, [id, ownerKey(actor), actor.channel])).rows[0];
+    SELECT id FROM consumed`, [id, ownerKey(actor), actor.channel, uid()])).rows[0];
     return !!row;
   }
   async scan(actor: Actor, id: string, includeExpired = false): Promise<Scan | undefined> {

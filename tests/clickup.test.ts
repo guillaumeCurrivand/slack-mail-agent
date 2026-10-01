@@ -6,18 +6,18 @@ import { readConfig } from '../src/app/config.js';
 import { schema } from '../src/app/schema.js';
 import { dispatchJob } from '../src/core/dispatch.js';
 import type { AgentMessage } from '../src/core/slack.js';
-import type { Sql } from '../src/core/store.js';
 import { JobStore } from '../src/core/store.js';
 import { createServer } from '../src/core/server.js';
 import { ModuleRegistry, type RoutedJob } from '../src/core/modules.js';
 import { createClickupModule } from '../src/modules/clickup/index.js';
 import { Slack, SlackDeliveryRejected } from '../src/core/slack.js';
+import type { ClickupDatabase } from '../src/modules/clickup/transactions.js';
 
 const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'unused', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'clickup', ENCRYPTION_KEY: randomBytes(32).toString('base64'), CLICKUP_CLIENT_ID: 'client', CLICKUP_CLIENT_SECRET: 'secret', CLICKUP_WORKSPACE_ID: '42' };
 const runtime = { AI_MONTHLY_LIMIT_USD: 0, AI_USER_MONTHLY_LIMIT_USD: 0, AI_ALERT_USD: 0, SLACK_ADMIN_USER_ID: '' };
-let db: PGlite, sql: Sql;
-beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
+let db: PGlite, sql: ClickupDatabase;
+beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values), transaction: work => db.transaction(tx => work({ query: (text, values) => tx.query(text, values) })) }; });
 afterAll(async () => db.close());
 beforeEach(async () => {
   await db.exec('TRUNCATE jobs,core_navigation_menus,core_navigation_deliveries,core_operation_slots,ai_calls,ai_months CASCADE');
@@ -334,4 +334,38 @@ it('preserves pending replacement until approval and invalidates old results onl
   expect(h.messages.at(-1)!.text).toContain('connecté');
   await h.click('page', result); expect(h.messages.at(-1)!.text).toContain('ancienne connexion');
   expect(h.messages.at(-1)!.table).toBeUndefined();
+});
+
+it.each(['replacement', 'initial'])('cancels a %s callback waiting on the provider across a confirmed disconnect', async kind => {
+  const p = provider([]), h = kind === 'replacement' ? await connected(p) : harness(p.fetcher);
+  await h.module.initialize?.(sql);
+  let entered!: () => void, resume!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; }), paused = new Promise<void>(resolve => { resume = resolve; });
+  const slow = harness((async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).endsWith('/oauth/token')) { entered(); await paused; }
+    return p.fetcher(url, init);
+  }) as typeof fetch);
+  const app = createServer(readConfig(env), new JobStore(sql), slow.modules);
+  await slow.text('clickup connect', alice, 'slow-invitation');
+  const invitation = new URL(slow.messages.at(-1)!.resourceLinks![0]!.url), start = await app.inject(invitation.pathname + invitation.search);
+  const callback = app.inject({ url: `/auth/clickup/callback?state=${new URL(start.headers.location!).searchParams.get('state')}&code=code`, headers: { cookie: String(start.headers['set-cookie']).split(';')[0]! } });
+  const callbackResult = Promise.resolve(callback); await started;
+  if (kind === 'initial') { const proposal = await connect(h); await h.click('confirm', proposal); }
+  await h.text('clickup disconnect', alice, 'disconnect-during-callback'); await h.click('confirm', h.messages.at(-1)!);
+  resume(); expect((await callbackResult).statusCode).toBe(400);
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('Connectez');
+  // Persistent credential cleanup is the externally observable security requirement at this DB boundary.
+  expect((await sql.query("SELECT id FROM clickup_confirmations WHERE status='pending' AND data ? 'tokens'")).rows).toEqual([]);
+  await app.close();
+});
+
+it('does not retain a pending credential when queuing its confirmation fails, and a fresh authorization recovers', async () => {
+  const p = provider([]), h = harness(p.fetcher); await h.module.initialize?.(sql);
+  await sql.query("ALTER TABLE jobs ADD CONSTRAINT fail_clickup_enqueue CHECK(module <> 'clickup')");
+  try {
+    await expect(connect(h)).rejects.toThrow();
+    expect((await sql.query("SELECT id FROM clickup_confirmations WHERE status='pending'")).rows).toEqual([]);
+  } finally { await sql.query('ALTER TABLE jobs DROP CONSTRAINT fail_clickup_enqueue'); }
+  const proposal = await connect(h); await h.click('confirm', proposal);
+  expect(h.messages.at(-1)!.text).toContain('connecté');
 });
