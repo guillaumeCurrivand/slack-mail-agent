@@ -53,6 +53,36 @@ async function slackRead(command: string, team = 'TTEAM') {
   return messages.at(-1)!;
 }
 
+it('imports and reconciles a single Component with 26 reviewed Technologies without dropping references', async () => {
+  const workbook = JSON.parse(importSnapshot);
+  workbook.sheets.push({ name: 'Additional technologies', cells: Array.from({ length: 24 }, (_, index) => [
+    { address: `A${index + 1}`, value: `Extra technology ${index + 1}` }, { address: `B${index + 1}`, value: 'Web' },
+  ]).flat() });
+  const expandedSnapshot = JSON.stringify(workbook), base = resolvedImportReview();
+  const review = reviewSnapshot(expandedSnapshot, importConfig);
+  review.records = base.records; review.resolutions = base.resolutions;
+  const component = review.records.find(record => record.key === 'web')!;
+  for (let index = 0; index < 24; index++) {
+    const key = `extra-${index + 1}`, nameCell = `Additional technologies!A${index + 1}`, usageCell = `Additional technologies!B${index + 1}`;
+    review.records.push({ key, kind: 'technology', fields: { name: `Extra technology ${index + 1}` }, evidence: { name: [{ cell: nameCell, reason: 'Synthetic explicit Technology name' }] } });
+    (component.fields.technologies as string[]).push(`@${key}`);
+    component.evidence.technologies!.push({ cell: usageCell, reason: 'Synthetic User confirms the explicitly named Web Component uses this Technology' });
+  }
+  for (const cell of review.cells) {
+    const keys = review.records.filter(record => Object.values(record.evidence).flat().some(entry => entry.cell === cell.cell)).map(record => record.key);
+    cell.decision = { disposition: keys.length ? 'mapped' : 'retained', records: keys, reason: 'Synthetic User resolved the complete mapping; original source preserved' };
+  }
+  const approval = approveReview(expandedSnapshot, review, importConfig, 'Synthetic User');
+  const importer = new DocumentationImport(sql, importConfig);
+  expect(await importer.apply(expandedSnapshot, review, approval)).toMatchObject({ authoritative: true, reconciled: true, expected: 32, applied: 32, initialHistory: 32, relationships: 30,
+    counts: { project: 1, technology: 26, host: 2, component: 1, hosting: 1, tool: 1 }, problems: [] });
+  const detail = await slackRead('documentation component Web');
+  expect(detail.buttons?.filter(button => /^(React|Node|Extra technology \d+)$/.test(button.label))).toHaveLength(26);
+  expect(detail.buttons?.some(button => button.label === 'Extra technology 24')).toBe(true);
+  expect(await importer.apply(expandedSnapshot, review, approval)).toMatchObject({ applied: 32, initialHistory: 32, relationships: 30 });
+  expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+});
+
 it('applies an explicitly reviewed workbook through operator commands and reconciles public Slack lists, relationships and history', async () => {
   const directory = await mkdtemp(join(tmpdir(), 'documentation-import-'));
   const source = join(directory, 'snapshot.json'), mapping = join(directory, 'review.json'), approvalFile = join(directory, 'approval.json');

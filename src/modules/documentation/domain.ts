@@ -34,7 +34,7 @@ export type RecordKind = 'technology' | 'component' | 'host' | 'hosting' | 'tool
 const toolDefinitions = { name, category: technologyDefinitions.category, usage: z.string().max(1500).nullable(), referent: z.string().max(1500).nullable(), companyWide: z.boolean().nullable(), projects: z.array(name).max(20).nullable(), notes: fieldDefinitions.notes };
 export const toolFields = z.strictObject({ ...toolDefinitions, category: toolDefinitions.category.default(null), usage: toolDefinitions.usage.default(null), referent: toolDefinitions.referent.default(null), companyWide: toolDefinitions.companyWide.default(null), projects: toolDefinitions.projects.default(null), notes: toolDefinitions.notes.default(null) }).refine(value => JSON.stringify(value).length <= 5000);
 export const toolEdit = z.strictObject(toolDefinitions).partial().refine(value => Object.keys(value).length > 0 && JSON.stringify(value).length <= 5000);
-const componentDefinitions = { name, type: z.string().max(120).nullable(), technologies: z.array(name).max(20).nullable() };
+const componentDefinitions = { name, type: z.string().max(120).nullable(), technologies: z.array(name).max(50).nullable() };
 export const componentFields = z.strictObject({ ...componentDefinitions, projectId: z.uuid(), type: componentDefinitions.type.default(null), technologies: componentDefinitions.technologies.default(null) });
 export const componentEdit = z.strictObject(componentDefinitions).partial().refine(value => Object.keys(value).length > 0);
 const hostDefinitions = { name, role: z.string().max(120).nullable(), monthlyCost: z.number().finite().min(0).max(1e12).nullable(), currency: z.string().trim().toUpperCase().regex(/^[A-Z]{3}$/).nullable(), notes: fieldDefinitions.notes };

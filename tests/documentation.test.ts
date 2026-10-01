@@ -1501,6 +1501,38 @@ it('maintains Project Components with many shared Technologies and stable naviga
   } finally { await h.app.close(); }
 });
 
+it('confirms a combined Component stack above 20, preserves all 50 references on edit and rejects 51 before proposing', async () => {
+  const h = await harness();
+  try {
+    const technologies = Array.from({ length: 51 }, (_, index) => ({ id: randomUUID(), name: `Stack technology ${index + 1}` }));
+    for (const technology of technologies) await sql.query('INSERT INTO documentation_records(team,id,kind,fields) VALUES($1,$2,$3,$4::jsonb)',
+      [alice.team, technology.id, 'technology', JSON.stringify({ name: technology.name, category: null, notes: null })]);
+    await h.click(await h.dm('documentation create project {"name":"Combined stack"}'), 'Confirm creation');
+    const projectId = bodyText(await h.dm('documentation project Combined stack')).match(/Identifier: ([\w-]+)/)![1]!;
+    const first = technologies.slice(0, 26).map(technology => technology.id);
+    const proposal = await h.dm(`documentation create component ${JSON.stringify({ name: 'Application', projectId, technologies: first })}`);
+    expect(kind(proposal)).toBe('Create Component confirmation');
+    expect(bodyText(proposal)).toContain(JSON.stringify(first));
+    expect((await sql.query("SELECT count(*)::int count FROM documentation_records WHERE kind='component'")).rows[0].count).toBe(0);
+    await h.click(proposal, 'Confirm creation');
+    const componentId = bodyText(await h.dm('documentation component Application')).match(/Identifier: ([\w-]+)/)![1]!;
+    const full = technologies.slice(0, 50).map(technology => technology.id);
+    await h.click(await h.dm(`documentation edit component ${componentId} ${JSON.stringify({ technologies: full })}`), 'Confirm edit');
+    const detail = await h.dm(`documentation component ${componentId}`);
+    expect(buttons(detail).filter(control => control.text.text.startsWith('Stack technology '))).toHaveLength(50);
+    expect(bodyText(await h.click(detail, 'Stack technology 50'))).toContain(`Identifier: ${full[49]}`);
+    expect((await sql.query('SELECT fields FROM documentation_records WHERE id=$1', [componentId])).rows[0].fields.technologies).toEqual(full);
+    const pending = (await sql.query('SELECT count(*)::int count FROM documentation_confirmations')).rows[0].count;
+    const excessive = technologies.map(technology => technology.id);
+    expect(kind(await h.dm(`documentation create component ${JSON.stringify({ name: 'Excessive', projectId, technologies: excessive })}`))).toBe('Invalid Component');
+    expect(kind(await h.dm(`documentation edit component ${componentId} ${JSON.stringify({ technologies: excessive })}`))).toBe('Invalid Component edit');
+    expect((await sql.query('SELECT count(*)::int count FROM documentation_confirmations')).rows[0].count).toBe(pending);
+    const history = await h.dm(`documentation history component ${componentId}`);
+    expect(bodyText(await h.click(history, 'Next'))).toContain(JSON.stringify(full));
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.app.close(); }
+});
+
 it('rejects ambiguous, missing, foreign and malformed relationships before proposal and again at apply', async () => {
   const h = await harness(), foreign = await harness('documentation', 'TOTHER');
   const other = { ...alice, team: 'TOTHER' };
