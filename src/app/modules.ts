@@ -8,12 +8,15 @@ import { createDocumentationModule } from '../modules/documentation/index.js';
 import { readDocumentationAIConfig } from '../modules/documentation/ai.js';
 import type { Config } from './config.js';
 import { frenchCommand } from './commands.js';
+import { readClickupConfig } from '../modules/clickup/config.js';
+import { createClickupModule } from '../modules/clickup/index.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
     mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
     slack: () => createSlackModule(config.SLACK_BOT_TOKEN, sql, readSlackConfig(env)),
     documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env)),
+    clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
   };
   return new ModuleRegistry(config.enabledModules.map(id => {
     if (!Object.hasOwn(factories, id)) throw new Error(`Unknown enabled module: ${id}`);

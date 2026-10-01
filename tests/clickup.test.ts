@@ -1,0 +1,337 @@
+import { createHmac, randomBytes } from 'node:crypto';
+import { PGlite } from '@electric-sql/pglite';
+import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { createModules } from '../src/app/modules.js';
+import { readConfig } from '../src/app/config.js';
+import { schema } from '../src/app/schema.js';
+import { dispatchJob } from '../src/core/dispatch.js';
+import type { AgentMessage } from '../src/core/slack.js';
+import type { Sql } from '../src/core/store.js';
+import { JobStore } from '../src/core/store.js';
+import { createServer } from '../src/core/server.js';
+import { ModuleRegistry, type RoutedJob } from '../src/core/modules.js';
+import { createClickupModule } from '../src/modules/clickup/index.js';
+import { Slack, SlackDeliveryRejected } from '../src/core/slack.js';
+
+const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'unused', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'clickup', ENCRYPTION_KEY: randomBytes(32).toString('base64'), CLICKUP_CLIENT_ID: 'client', CLICKUP_CLIENT_SECRET: 'secret', CLICKUP_WORKSPACE_ID: '42' };
+const runtime = { AI_MONTHLY_LIMIT_USD: 0, AI_USER_MONTHLY_LIMIT_USD: 0, AI_ALERT_USD: 0, SLACK_ADMIN_USER_ID: '' };
+let db: PGlite, sql: Sql;
+beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
+afterAll(async () => db.close());
+beforeEach(async () => {
+  await db.exec('TRUNCATE jobs,core_navigation_menus,core_navigation_deliveries,core_operation_slots,ai_calls,ai_months CASCADE');
+  for (const { tablename } of (await db.query<{ tablename: string }>("SELECT tablename FROM pg_tables WHERE tablename LIKE 'clickup_%'")).rows) await db.exec(`TRUNCATE ${tablename} CASCADE`);
+});
+
+function harness(fetcher: typeof fetch) {
+  const module = createClickupModule({ ...env }, sql, { fetcher });
+  const modules = new ModuleRegistry([{ ...module, normalizeText: text => text === 'tâches' ? 'tasks' : text }]);
+  const messages: Array<AgentMessage & { timestamp: string }> = [];
+  const messenger = {
+    async send(_actor: unknown, message: AgentMessage) { messages.push({ ...message, timestamp: `${messages.length + 1}.000` }); },
+    async post(_actor: unknown, message: AgentMessage) { const timestamp = `${messages.length + 1}.000`; messages.push({ ...message, timestamp }); return timestamp; },
+    async update(_actor: unknown, timestamp: string, message: AgentMessage) { messages.push({ ...message, timestamp }); },
+  };
+  const run = (route: RoutedJob, actor = alice, id = `event-${messages.length}`) => dispatchJob(sql, { ...runtime, AI_ALERT_USD: 8 }, modules, messenger, { ...route, actor, id });
+  const text = (value: string, actor = alice, id?: string) => run(modules.text(value), actor, id);
+  const click = (action: string, message = messages.at(-1)!, actor = alice, id?: string) => {
+    const button = message.buttons!.find(button => button.action === `clickup:${action}`)!;
+    return run({ ...modules.action(button.action, button.value), payload: { ...modules.action(button.action, button.value).payload, timestamp: message.timestamp } }, actor, id);
+  };
+  return { module, modules, messages, messenger, run, text, click };
+}
+
+async function connect(h: ReturnType<typeof harness>) {
+  await h.module.initialize?.(sql);
+  const app = createServer(readConfig(env), new JobStore(sql), h.modules);
+  await h.text('clickup connect');
+  const invitation = h.messages.at(-1)!.resourceLinks![0]!.url;
+  const start = await app.inject(new URL(invitation).pathname + new URL(invitation).search);
+  const state = new URL(start.headers.location!).searchParams.get('state')!;
+  const cookie = String(start.headers['set-cookie']).split(';')[0]!;
+  const finish = await app.inject({ url: `/auth/clickup/callback?state=${state}&code=code`, headers: { cookie } });
+  expect(finish.statusCode).toBe(200);
+  const job = (await sql.query("SELECT * FROM jobs WHERE module='clickup' AND payload->>'type'='connection' ORDER BY created_at DESC")).rows[0];
+  await h.run({ module: job.module, payload: job.payload }, job.actor, job.id);
+  await app.close();
+  return h.messages.at(-1)!;
+}
+
+it('routes French assigned-task requests without Gmail or AI and requires a ClickUp connection', async () => {
+  const modules = createModules(readConfig(env), sql, env);
+  for (const module of modules.all()) await module.initialize?.(sql);
+  expect(modules.text('clickup tâches')).toEqual({ module: 'clickup', payload: { type: 'text', text: 'tasks' } });
+  const messages: AgentMessage[] = [];
+  await dispatchJob(sql, runtime, modules, { async send(_actor, message) { messages.push(message); } }, { ...modules.text('clickup tâches'), actor: alice, id: 'not-connected' });
+  expect(messages.at(-1)?.text).toContain('Connectez');
+  expect(messages.at(-1)?.buttons?.some(button => button.action === 'clickup:connect')).toBe(true);
+});
+
+it('binds OAuth to its browser and requires private confirmation of the authenticated Mayasquad identity', async () => {
+  const calls: string[] = [];
+  const fetcher = (async (url: string | URL | Request) => {
+    calls.push(String(url));
+    if (String(url).endsWith('/oauth/token')) return Response.json({ access_token: 'alice-secret' });
+    if (String(url).endsWith('/user')) return Response.json({ user: { id: 7, username: 'Alice', email: 'alice@clickup.example' } });
+    if (String(url).endsWith('/team')) return Response.json({ teams: [{ id: '42', name: 'Renamed Mayasquad' }, { id: '99', name: 'Other' }] });
+    throw new Error(`Unexpected provider call ${url}`);
+  }) as typeof fetch;
+  const h = harness(fetcher), proposal = await connect(h);
+  expect(proposal.text.replaceAll('\\', '')).toContain('alice@clickup.example');
+  await h.text('clickup tasks');
+  expect(h.messages.at(-1)!.text).toContain('Connectez');
+  await h.click('confirm', proposal, { ...alice, user: 'UBOB', channel: 'DBOB' });
+  expect(h.messages.at(-1)!.text).toContain('indisponible');
+  await h.click('confirm', proposal);
+  expect(h.messages.at(-1)!.text).toContain('connecté');
+  expect(calls.filter(url => url.endsWith('/oauth/token'))).toHaveLength(1);
+});
+
+function task(id: string, overrides: Record<string, unknown> = {}) {
+  return { id, name: `Task ${id}`, status: { status: 'In progress', type: 'custom' }, archived: false, assignees: [{ id: 7 }], due_date: null, priority: null, list: { id: '12', name: 'Delivery' }, url: `https://app.clickup.com/t/${id}`, ...overrides };
+}
+function provider(pages: unknown[][]) {
+  const calls: string[] = [];
+  const tasks = new Map(pages.flat().map(value => [(value as { id: string }).id, value]));
+  const failures = new Map<string, number>();
+  let subject = 7, workspace = '42';
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    const url = new URL(String(input)); calls.push(url.pathname + url.search);
+    if (url.pathname.endsWith('/oauth/token')) return Response.json({ access_token: 'alice-secret' });
+    expect((init?.headers as { Authorization: string }).Authorization).toBe('alice-secret');
+    const failure = failures.get(url.pathname + url.search) ?? failures.get(url.pathname);
+    if (failure) return new Response('', { status: failure });
+    if (url.pathname.endsWith('/user')) return Response.json({ user: { id: subject, username: 'Alice', email: 'alice@example.com' } });
+    if (url.pathname.endsWith('/team')) return Response.json({ teams: [{ id: workspace, name: 'Mayasquad' }, { id: '99', name: 'Other' }] });
+    if (url.pathname === '/api/v2/team/42/task') {
+      expect(url.searchParams.get('assignees[]')).toBe('7'); expect(url.searchParams.get('subtasks')).toBe('true');
+      return Response.json({ tasks: pages[Number(url.searchParams.get('page'))] ?? [] });
+    }
+    if (url.pathname.startsWith('/api/v2/task/')) {
+      const value = tasks.get(url.pathname.split('/').at(-1)!);
+      return value ? Response.json(value) : new Response('', { status: 404 });
+    }
+    throw new Error(`Unexpected call ${input}`);
+  }) as typeof fetch;
+  return { fetcher, calls, tasks, failures, changeIdentity: (id: number) => { subject = id; }, changeWorkspace: (id: string) => { workspace = id; } };
+}
+async function connected(p: ReturnType<typeof provider>) {
+  const h = harness(p.fetcher), proposal = await connect(h);
+  await h.click('confirm', proposal);
+  return h;
+}
+
+it('fetches all raw pages and lists direct assignments in a linked eight-row table, excluding only completed/individual archives', async () => {
+  const p = provider([
+    [task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Complete', type: 'closed' } }), task('archived', { archived: true }), task('other', { assignees: [{ id: 8 }] })],
+    [task('old', { due_date: String(Date.UTC(2020, 0, 1)) }), task('subtask', { parent: 'someone-elses-task', assignees: [{ id: 7 }, { id: 8 }] }), task('active-in-archived-folder', { folder: { archived: true } }), ...Array.from({ length: 7 }, (_, i) => task(`item${i}`))],
+  ]);
+  const h = await connected(p);
+  await h.text('clickup tasks');
+  const first = h.messages.at(-1)!;
+  expect(first.table!.columns).toEqual(['Tâche', 'Statut', 'Échéance', 'Priorité', 'Workspace', 'Liste']);
+  expect(first.table!.rows).toHaveLength(8);
+  expect(first.table!.rows[0]![0]).toEqual([{ text: 'Task old', url: 'https://app.clickup.com/t/old' }]);
+  expect(first.text).toContain('10 tâches');
+  expect(p.calls.filter(url => url.startsWith('/api/v2/team/42/task')).map(url => new URL(`https://unused${url}`).searchParams.get('page'))).toEqual(['0', '1', '2']);
+  await h.click('page', first);
+  expect(h.messages.at(-1)!.table!.rows).toHaveLength(2);
+  expect(p.calls.some(url => url.includes('/team/99/task'))).toBe(false);
+});
+
+it('hides cached task text when task access, workspace access or authenticated identity is lost', async () => {
+  const p = provider([Array.from({ length: 10 }, (_, i) => task(`a${i}`, { name: `Secret ${i}` }))]), h = await connected(p);
+  await h.text('clickup tasks'); const first = h.messages.at(-1)!;
+  p.failures.set('/api/v2/task/a8', 403);
+  await h.click('page', first);
+  expect(JSON.stringify(h.messages.at(-1)!.table)).not.toContain('Secret 8');
+  expect(h.messages.at(-1)!.text).toContain('masquées');
+  p.changeWorkspace('999');
+  await h.click('page', first);
+  expect(h.messages.at(-1)!.table).toBeUndefined();
+  expect(h.messages.at(-1)!.text).toContain('Aucun contenu');
+  p.changeWorkspace('42'); p.changeIdentity(8);
+  await h.click('page', first);
+  expect(h.messages.at(-1)!.table).toBeUndefined();
+});
+
+it('shows partial coverage when provider pages fail and detects repeated pagination without truncating silently', async () => {
+  const p = provider([[task('one')], [task('two')]]), h = await connected(p);
+  p.failures.set('/api/v2/team/42/task?assignees%5B%5D=7&subtasks=true&include_closed=false&page=1&order_by=id', 400);
+  await h.text('clickup tasks');
+  expect(h.messages.at(-1)!.text).toContain('Résultats incomplets : 1 tâches récupérées');
+  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Réessayer')).toBe(true);
+  p.failures.clear();
+  p.tasks.set('two', task('two'));
+  const looping = provider([[task('one')], [task('one')]]), h2 = harness(looping.fetcher);
+  // A new harness shares the persisted active connection and module tables.
+  await h2.text('clickup tasks', alice, 'looping-request');
+  expect(h2.messages.at(-1)!.text).toContain('pagination ClickUp n’a pas progressé');
+});
+
+it('disconnects only after confirmation, invalidates results and cannot replay against a later connection', async () => {
+  const p = provider([[task('one')]]), h = await connected(p);
+  await h.text('clickup tasks'); const result = h.messages.at(-1)!;
+  await h.text('clickup disconnect'); const disconnect = h.messages.at(-1)!;
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.table).toBeDefined();
+  await h.click('confirm', disconnect);
+  expect(h.messages.at(-1)!.text).toContain('déconnecté');
+  await h.click('tasks', result);
+  expect(h.messages.at(-1)!.text).toContain('Connectez');
+  const proposal = await connect(h); await h.click('confirm', proposal);
+  await h.click('confirm', disconnect);
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.table).toBeDefined();
+});
+
+it('rejects another Slack user sharing the same ClickUp account and preserves the first connection', async () => {
+  const p = provider([]), h = await connected(p), bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+  const app = createServer(readConfig(env), new JobStore(sql), h.modules);
+  await h.text('clickup connect', bob);
+  const url = new URL(h.messages.at(-1)!.resourceLinks![0]!.url), start = await app.inject(url.pathname + url.search);
+  await app.inject({ url: `/auth/clickup/callback?state=${new URL(start.headers.location!).searchParams.get('state')}&code=code`, headers: { cookie: String(start.headers['set-cookie']).split(';')[0]! } });
+  const job = (await sql.query("SELECT * FROM jobs WHERE owner='TTEAM:UBOB' AND module='clickup'")).rows[0];
+  await h.run({ module: job.module, payload: job.payload }, bob, job.id);
+  await h.click('confirm', h.messages.at(-1)!, bob);
+  expect(h.messages.at(-1)!.text).toContain('déjà connecté');
+  await h.text('clickup tasks', bob); expect(h.messages.at(-1)!.text).toContain('Connectez');
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('0 tâches');
+  await app.close();
+});
+
+it('rejects a wrong browser, replayed and expired OAuth links and unauthorized Mayasquad access', async () => {
+  const p = provider([]), h = harness(p.fetcher); await h.module.initialize?.(sql);
+  const app = createServer(readConfig(env), new JobStore(sql), h.modules);
+  await h.text('clickup connect');
+  const url = new URL(h.messages.at(-1)!.resourceLinks![0]!.url), start = await app.inject(url.pathname + url.search);
+  expect(start.headers['set-cookie']).toContain('HttpOnly'); expect(start.headers['set-cookie']).toContain('Secure');
+  expect((await app.inject(url.pathname + url.search)).statusCode).toBe(400);
+  const callback = `/auth/clickup/callback?state=${new URL(start.headers.location!).searchParams.get('state')}&code=code`;
+  expect((await app.inject({ url: callback, headers: { cookie: 'clickup_oauth=wrong' } })).statusCode).toBe(400);
+  expect(p.calls.filter(url => url.includes('oauth/token'))).toHaveLength(0);
+  expect((await app.inject({ url: callback, headers: { cookie: String(start.headers['set-cookie']).split(';')[0]! } })).statusCode).toBe(400);
+  await h.text('clickup connect');
+  const expired = new URL(h.messages.at(-1)!.resourceLinks![0]!.url);
+  await sql.query("UPDATE clickup_oauth_states SET expires_at=now()-interval '1 second'");
+  expect((await app.inject(expired.pathname + expired.search)).statusCode).toBe(400);
+  p.changeWorkspace('999');
+  await expect(connect(h)).rejects.toThrow();
+  await app.close();
+});
+
+it('never renews expired results or connection confirmations and rejects wrong-DM/message controls', async () => {
+  const p = provider([Array.from({ length: 10 }, (_, i) => task(`a${i}`))]), h = await connected(p);
+  await h.text('clickup tasks'); const result = h.messages.at(-1)!;
+  await h.click('tasks', result, { ...alice, channel: 'DOTHER' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
+  await h.click('tasks', { ...result, timestamp: '999.000' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
+  await sql.query("UPDATE clickup_scans SET expires_at=now()-interval '1 second'");
+  await h.click('page', result);
+  expect(h.messages.at(-1)!.text).toContain('expirés');
+  const proposal = await connect(h);
+  await sql.query("UPDATE clickup_confirmations SET expires_at=now()-interval '1 second' WHERE status='pending'");
+  await h.click('confirm', proposal); expect(h.messages.at(-1)!.text).toContain('expirée');
+});
+
+it('admits signed French commands and Refresh into one operation slot and hides a disabled module', async () => {
+  const p = provider([]), h = await connected(p), app = createServer(readConfig(env), new JobStore(sql), h.modules);
+  await h.text('clickup tasks'); const result = h.messages.at(-1)!;
+  const signed = (raw: string) => { const timestamp = String(Math.floor(Date.now() / 1000)); return { 'x-slack-request-timestamp': timestamp, 'x-slack-signature': `v0=${createHmac('sha256', 'secret').update(`v0:${timestamp}:${raw}`).digest('hex')}` }; };
+  const raw = JSON.stringify({ type: 'event_callback', team_id: alice.team, event_id: 'first', event: { type: 'message', channel_type: 'im', user: alice.user, channel: alice.channel, text: 'clickup tâches' } });
+  expect((await app.inject({ method: 'POST', url: '/slack/events', payload: raw, headers: { ...signed(raw), 'content-type': 'application/json' } })).statusCode).toBe(200);
+  const raw2 = raw.replace('first', 'second');
+  await app.inject({ method: 'POST', url: '/slack/events', payload: raw2, headers: { ...signed(raw2), 'content-type': 'application/json' } });
+  const jobs = (await sql.query("SELECT * FROM jobs WHERE id IN('slack:first','slack:second') ORDER BY id")).rows;
+  expect(jobs[0].module).toBe('clickup'); expect(jobs[1].payload.original).toBe('slack:first'); expect(jobs[1].module).toBe('core');
+  const refresh = result.buttons!.find(button => button.action === 'clickup:tasks')!;
+  const action = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: result.timestamp }, actions: [{ action_id: refresh.action, value: refresh.value }] }) }).toString();
+  expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: action, headers: { ...signed(action), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
+  const duplicate = (await sql.query("SELECT payload FROM jobs WHERE id LIKE 'action:%'")).rows[0];
+  expect(duplicate.payload.original).toBe('slack:first');
+  const disabled = createModules(readConfig({ ...env, ENABLED_MODULES: '' }), sql, {});
+  expect(disabled.text('clickup tasks').module).toBe('core');
+  const off = createServer(readConfig(env), new JobStore(sql), disabled);
+  expect((await off.inject('/auth/clickup')).statusCode).toBe(404);
+  await app.close(); await off.close();
+});
+
+it('renders the result as a native Slack table with literal values and ClickUp links', async () => {
+  const p = provider([[task('one', { name: '<@UOTHER> **literal**' })]]), h = await connected(p);
+  await h.text('clickup tasks'); const result = h.messages.at(-1)!;
+  const sent: any[] = [];
+  const slack = new Slack('fake', (async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) as typeof fetch);
+  await slack.send(alice, result);
+  const table = sent[0].blocks.find((block: any) => block.type === 'table');
+  expect(table.rows.length).toBe(2);
+  expect(JSON.stringify(table)).toContain('https://app.clickup.com/t/one');
+});
+
+it('recovers a confirmed connection after definite delivery rejection without repeating its effect', async () => {
+  const p = provider([]), h = harness(p.fetcher), proposal = await connect(h);
+  const post = h.messenger.post;
+  h.messenger.post = async () => { throw new SlackDeliveryRejected('rejected'); };
+  await expect(h.click('confirm', proposal, alice, 'approve-retry')).rejects.toThrow('rejected');
+  h.messenger.post = post;
+  await h.click('confirm', proposal, alice, 'approve-retry');
+  expect(h.messages.at(-1)!.text).toContain('connecté');
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('0 tâches');
+});
+
+it('reuses saved scan pages after a restart or delivery rejection and does not repeat uncertain delivery', async () => {
+  const p = provider([[task('one')]]), h = await connected(p);
+  const post = h.messenger.post;
+  h.messenger.post = async () => { throw new SlackDeliveryRejected('rejected'); };
+  await expect(h.text('clickup tasks', alice, 'scan-retry')).rejects.toThrow('rejected');
+  const pageCalls = p.calls.filter(url => url.startsWith('/api/v2/team/42/task')).length;
+  const restarted = harness(p.fetcher);
+  await restarted.text('clickup tasks', alice, 'scan-retry');
+  expect(p.calls.filter(url => url.startsWith('/api/v2/team/42/task'))).toHaveLength(pageCalls);
+  expect(restarted.messages.at(-1)!.text).toContain('1 tâches');
+  h.messenger.post = async () => { throw new Error('uncertain timeout'); };
+  await expect(h.text('clickup tasks', alice, 'scan-uncertain')).rejects.toThrow('uncertain');
+  h.messenger.post = post;
+  const count = h.messages.length;
+  await h.text('clickup tasks', alice, 'scan-uncertain');
+  expect(h.messages).toHaveLength(count);
+});
+
+it('respects a future rate-limit reset across fresh requests and process reconstruction', async () => {
+  const p = provider([]), h = await connected(p);
+  let rejectedCalls = 0;
+  const limitedFetch = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes('/team/42/task')) { rejectedCalls++; return new Response('', { status: 429, headers: { 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 120) } }); }
+    return p.fetcher(url, init);
+  }) as typeof fetch;
+  const limited = harness(limitedFetch);
+  await limited.text('clickup tasks', alice, 'limited-first');
+  expect(limited.messages.at(-1)!.text).toContain('incomplets');
+  const restarted = harness(limitedFetch);
+  await restarted.text('clickup tasks', alice, 'limited-second');
+  expect(rejectedCalls).toBe(1);
+});
+
+it('retries temporary provider errors and resolves missing own-archive metadata without inspecting ancestors', async () => {
+  const missingArchive = task('one'); delete (missingArchive as { archived?: boolean }).archived;
+  const p = provider([[missingArchive]]); p.tasks.set('one', task('one', { folder: { archived: true } }));
+  let attempts = 0;
+  const fetcher = (async (url: string | URL | Request, init?: RequestInit) => {
+    if (String(url).includes('/team/42/task') && ++attempts <= 2) return new Response('', { status: 503 });
+    return p.fetcher(url, init);
+  }) as typeof fetch;
+  const h = harness(fetcher), proposal = await connect(h); await h.click('confirm', proposal);
+  await h.text('clickup tasks');
+  expect(h.messages.at(-1)!.text).toContain('1 tâches');
+  expect(h.messages.at(-1)!.table).toBeDefined();
+  expect(attempts).toBe(4); // Two failed attempts, successful page zero and terminal empty page.
+  expect(p.calls.some(url => url.includes('/folder/'))).toBe(false);
+});
+
+it('preserves pending replacement until approval and invalidates old results only when the new account is activated', async () => {
+  const p = provider([Array.from({ length: 10 }, (_, i) => task(`a${i}`))]), h = await connected(p);
+  await h.text('clickup tasks'); const result = h.messages.at(-1)!;
+  p.changeIdentity(8); const replacement = await connect(h); p.changeIdentity(7);
+  await h.click('page', result); expect(h.messages.at(-1)!.table).toBeDefined();
+  p.changeIdentity(8); await h.click('confirm', replacement);
+  expect(h.messages.at(-1)!.text).toContain('connecté');
+  await h.click('page', result); expect(h.messages.at(-1)!.text).toContain('ancienne connexion');
+  expect(h.messages.at(-1)!.table).toBeUndefined();
+});

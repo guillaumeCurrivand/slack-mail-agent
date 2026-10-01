@@ -58,6 +58,10 @@ The User approved Documentation's target contract and ten-ticket breakdown. [Doc
 
 Documentation extends ownership to workspace-shared inventory and lifetime history while retaining private actor-owned confirmations, navigation and interaction metadata. It uses existing signed ingress and workspace validation without another membership check or permitted-user list. Existing Mail Sorter and Slack Unanswered isolation remains unchanged. Disabled Documentation retains inventory and pending state and pauses module cleanup. Project questions and private context are delivered in ticket 07; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline reviewed importer is delivered in ticket 10. Implementing the importer does not authorize real source review/import or switch spreadsheet authority. See [the ownership decision](adr/0004-authoritative-documentation-inventory.md); live Slack verification, deployment and actual import remain unverified.
 
+## ClickUp module (approved target)
+
+The User approved [ClickUp's feature contract](clickup.md) on 01/10/2026 after the design interview. The `clickup` Module is implemented locally and opt-in: it connects each User's personal ClickUp account through OAuth and privately lists their directly assigned tasks in the configured Mayasquad Workspace. It is read-only and requires neither Gmail nor AI. The contract owns assignment/archive rules, the linked table, date-only due-date presentation, account confirmation, result expiry and access/recovery safeguards. Live connection, provider completeness and deployment remain unverified.
+
 ## Audience and access
 
 - One Slack workspace, serving the user's team of 10.

@@ -20,6 +20,19 @@ The Module that sorts a person's connected Gmail using their approved rules.
 **Slack Unanswered**:
 A Module that privately lists unanswered messages from a person's selected Slack channels.
 
+**ClickUp**:
+The Module for privately consulting a person's assigned ClickUp tasks through the Agent.
+
+**ClickUp account**:
+The personal ClickUp identity a User connects to the Agent.
+
+**ClickUp Workspace**:
+A ClickUp workspace the User authorizes the Agent to access through their connected ClickUp account.
+
+**Assigned task**:
+A ClickUp task or subtask that directly lists the connected ClickUp account among its assignees, including tasks shared with other assignees.
+_Avoid_: Team-assigned task (when no direct personal assignment exists)
+
 **Unanswered message**:
 A channel message containing a mention, request, or question for which the listed person has not yet replied in the same thread.
 

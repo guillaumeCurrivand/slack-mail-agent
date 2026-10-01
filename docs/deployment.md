@@ -6,6 +6,28 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## ClickUp release candidate
+
+The `clickup` Module is implemented locally and opt-in. Before enabling it, preserve the existing `.env` and `ENCRYPTION_KEY`; add `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET` and the confirmed numeric `CLICKUP_WORKSPACE_ID` for Mayasquad, then append `clickup` to the existing `ENABLED_MODULES`. ClickUp-only deployments still need the shared Slack/database/public-origin configuration and encryption key, but no Gmail or AI credentials. Disabled ClickUp requires no ClickUp secrets and exposes no OAuth routes.
+
+Create/configure the OAuth application with its exact registered callback at the existing `PUBLIC_URL` plus `/auth/clickup/callback`. The reverse proxy must preserve HTTPS and omit/redact URL logs for `/auth/clickup*`. No new Slack scopes or installation are required. See [README setup](../README.md#clickup-setup); OAuth app configuration and credentials remain operator setup work, not observed results.
+
+Enabled-module startup idempotently creates `clickup_connections`, `clickup_oauth_states`, `clickup_confirmations`, `clickup_scans` and `clickup_limits`. There is no manual migration command. Existing Gmail, Slack, Documentation and shared budget data remain; preserve the Compose project, environment and database volume. Use the normal deployment script to stop old workers before starting the new image.
+
+After the reviewed `main` commit is pushed and the environment is prepared, run these commands on the confirmed server:
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+git rev-parse HEAD &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+Compare the printed revision with the handoff's target commit. After readiness succeeds, DM `menu`, open ClickUp and connect a consented test account. Check the external browser authorization and final private Slack identity confirmation, with only Mayasquad used despite extra OAuth grants. Confirm `clickup tâches` and `clickup tasks` produce the linked eight-row table with date-only Paris deadlines, original task names/statuses and visible snapshot time. Include assigned subtasks/multiple assignees, Done/Closed exclusions, individually archived tasks and active tasks in archived locations. Verify complete provider pagination and the availability/fallback of the task's own archive flag; fake tests do not establish these live API properties.
+
+Check Previous/Next, Refresh, Retry, repeated starts, private User/DM/message ownership and missing/revoked access. Disconnect or replace the test connection only with its own separately approved controls, then verify old result controls are unavailable. Confirm disabled-module startup without ClickUp secrets and continued operation of other enabled Modules. These paths incur no AI calls or task mutations. No production deployment or live OAuth/API/Slack result has been observed. Actual PostgreSQL concurrency tests, including external-account uniqueness, require disposable `TEST_DATABASE_URL` and are skipped when absent.
+
 ## Full-width Slack panels
 
 The French interface and horizontal action groups follow the same runtime rebuild/restart procedure after their reviewed `main` changes are committed and pushed. No environment variables, scopes, secrets or database migrations are added. Existing saved values, old controls, approvals, expiry times and AI checkpoints remain compatible. This is locally verified work; successful production deployment and live Slack layout still require observation.

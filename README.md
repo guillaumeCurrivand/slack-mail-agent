@@ -10,6 +10,8 @@ The [approved product specification](docs/product-spec.md) describes the scope. 
 
 Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specification](docs/product-spec.md) owns assistant-wide behavior and safeguards, [CONTEXT.md](CONTEXT.md) owns terminology, the [module guide](docs/adding-a-module.md) owns extension instructions, and [ADRs](docs/adr/) explain architectural choices. This README covers operation and usage. The [Slack Unanswered contract](docs/slack-unanswered.md) records its approved module behavior; [archived plans](docs/archive/) are historical records.
 
+The [ClickUp feature contract](docs/clickup.md) records its approved behavior and local implementation. Live OAuth/API verification and deployment remain release checks.
+
 ## What is included
 
 - Slack DMs, natural-language rule proposals, explicit rule approval, starter rules, and per-user conversation history.
@@ -26,6 +28,7 @@ Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specifi
 - `src/modules/mail/`: mail commands, Gmail/OAuth, rules, previews, undo, mail AI, state, and retention.
 - `src/modules/slack/`: per-user Slack channel choices, shared-channel discovery, and on-demand unanswered-message search with contextual AI matching.
 - `src/modules/documentation/`: workspace-shared Projects, Technologies, Components, Hosts/services, Hosting entries and Tools, lifetime history, structured creation/edits/archive/restore with private confirmations, and relationship navigation.
+- `src/modules/clickup/`: personal OAuth connections, Mayasquad-only assigned-task retrieval, private table snapshots, access checks and retention.
 
 `ENABLED_MODULES=mail` is the default. An empty value starts only shared help, budget, and health endpoints; Gmail, encryption, and AI credentials are then unnecessary. Unknown or duplicate module identifiers fail startup. Availability is deployment-wide; each user still owns their connections and data. Restart to apply a module configuration change.
 
@@ -71,6 +74,24 @@ Create or update the Slack app for your workspace using [slack-manifest.json](sl
 The app uses `message.im` events and the bot scopes `im:history`, `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, and `users:read`. The read scopes support listing shared channels, reading selected channel histories and threads, and matching Slack profile names. Update the app's scopes and reinstall it to grant them before enabling `slack`; invite the bot to channels users should be able to choose. A private channel appears in `slack channels` only when both the requesting user and the bot belong to it and the installed bot token has `groups:read`. Put the installed bot token, signing secret, and workspace ID in `.env`. Set `SLACK_ADMIN_USER_ID` if one person should receive private operational spending alerts; it grants no access to other users' rules or mail. Otherwise the user whose request crosses the threshold receives the alert.
 
 Slack requests must be signed and belong to the configured workspace. Incoming channel-message events, bot messages, edited-message events, unsigned requests and replayed timestamps are excluded from event dispatch. `slack channels` lists only shared channels using a bot token; `slack unanswered` reads selected channel history only on command. Searching long-lived channels may take time or encounter Slack rate limits because older roots must be inspected for recent thread replies. Events are acknowledged after durable enqueue, before module processing.
+
+## ClickUp setup
+
+ClickUp is opt-in: append `clickup` to the existing `ENABLED_MODULES` value while preserving other modules. It needs `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET`, the confirmed numeric `CLICKUP_WORKSPACE_ID` for Mayasquad, and the existing 32-byte base64 `ENCRYPTION_KEY`. Do not replace an existing encryption key; this can make saved credentials unreadable. ClickUp alone requires no Gmail or AI credentials.
+
+Create a ClickUp OAuth application as a Workspace owner/admin and register this exact redirect URI, replacing `YOUR_HOST` with the configured public origin:
+
+```text
+https://YOUR_HOST/auth/clickup/callback
+```
+
+Configure your HTTPS proxy to omit/redact request-URL logging for `/auth/clickup*`, because callback URLs contain short-lived authorization codes. ClickUp's documented OAuth permissions are broader than a read-only scope; the Module only reads tasks. See [ClickUp authentication](https://developer.clickup.com/docs/authentication) and the [feature contract's provider constraints](docs/clickup.md#verified-provider-constraints).
+
+DM `clickup connecter` (English `clickup connect`) or open Menu → ClickUp → Connecter ClickUp. Authorize Mayasquad in the original browser, return to Slack and separately confirm the displayed ClickUp identity within 24 hours. The OAuth link/login state lasts 10 minutes. Extra authorized Workspaces are ignored. Account email need not match Slack; one ClickUp account cannot be active for two Slack Users in the configured workspace.
+
+DM `clickup tâches` (`clickup tasks`, or `clickup taches`) or click Mes tâches. The free, read-only table lists direct personal assignments, including subtasks/multiple assignees, with eight rows per page. It excludes Done/Closed and individually archived tasks; an archived parent or location does not independently exclude a task. Deadline dates use Europe/Paris; today's tasks are not overdue. Previous/Next uses the saved snapshot and rechecks access. Actualiser/Réessayer retrieves fresh data; overlapping starts report the active request. Incomplete retrieval is labeled, rather than presented as a complete empty list. Results expire after 24 hours.
+
+`clickup aide`/`clickup help` shows connection status. `clickup déconnecter`/`clickup disconnect` requests a separately confirmed disconnect, removing credentials, pending authorizations and snapshots. Replacing the account invalidates old snapshots only after the new identity is approved. Already-posted Slack text and historical backups have separate retention; disconnect does not revoke the grant at ClickUp. Revoked access asks for reconnect without showing cached task text. See the [release checks](docs/deployment.md#clickup-release-candidate) before rollout; no live ClickUp deployment has been observed.
 
 ## Google Workspace setup
 
