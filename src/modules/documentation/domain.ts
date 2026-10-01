@@ -52,8 +52,8 @@ export const recordSchemas = {
   hosting: { create: hostingFields, edit: hostingEdit },
   tool: { create: toolFields, edit: toolEdit },
 };
-export const recordTitle = (kind: RecordKind | 'project') => ({ project: 'Project', technology: 'Technology', component: 'Component', host: 'Host/service', hosting: 'Hosting entry', tool: 'Tool' })[kind];
-export const recordName = (record: InventoryRecord) => String(record.fields.name ?? (record.fields.environment === '' ? 'Empty environment' : record.fields.environment) ?? 'Unknown environment');
+export const recordTitle = (kind: RecordKind | 'project') => ({ project: "Projet", technology: "Technologie", component: "Composant", host: "Hébergeur/service", hosting: "Hébergement", tool: "Outil" })[kind];
+export const recordName = (record: InventoryRecord) => String(record.fields.name ?? (record.fields.environment === '' ? "Environnement vide" : record.fields.environment) ?? "Environnement inconnu");
 export type InventoryValues = Record<string, string | string[] | number | boolean | null>;
 export type InventoryRecord = { id: string; kind: RecordKind; fields: InventoryValues; archived: boolean; created_at: Date | string };
 export function parseEditRequest(body: string): { selector: string; value: unknown } {

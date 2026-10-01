@@ -1,3 +1,5 @@
+import { formatDate } from '../../core/presentation.js';
+import { stateLabel, sourceLabel } from './presentation.js';
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, ModuleContext } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
@@ -14,12 +16,12 @@ import { inventoryQueryHelp } from './inventory-query.js';
 import { InventoryPresentation, tableSize, valuePages } from './presentation.js';
 
 const literal = (value: string) => escapeCardValue(value);
-const questionHelp = `Natural-language reads: documentation where is Alpha hosted?; documentation which technologies does this project use?; documentation which projects use React and Compute across any of their components?; documentation how many projects use React?; documentation which tools are company-wide? Interpretation uses the shared AI budget; opening records and result controls is free. Project context is private and expires after 30 minutes. Natural-language changes: documentation please create a project named Alpha; documentation please set this project description to Team app; documentation please archive the tool Tracker. Describe one record and explicit values; existing references resolve exactly. Interpretation uses the shared budget; nothing changes before your separate confirmation. The offline operator import is delivered in ticket 10.\n${inventoryQueryHelp}`;
-const help = 'Use documentation projects [page] to browse (pages start at 0); documentation project <identifier, exact name or alias> for details; documentation history [identifier, exact name or alias] for shared or Project history.\nCreate one Project with documentation create project {"name":"Alpha","aliases":["A"],"description":"…","repositories":["https://example.com/repo"],"documentationLinks":["https://example.com/docs"],"notes":"…"}. Only name is required. Other fields remain Unknown when omitted. Names/aliases allow 120 characters, up to 20 aliases; description/notes allow 1,500 characters each; each link list allows 10 HTTP(S) URLs of up to 400 characters without credentials. A creation record or edit replacement object allows 5,000 JSON characters.\nEdit one Project with documentation edit project <identifier, exact name or alias> {"description":"Replacement","notes":null}. Supported fields: name, aliases, description, repositories, documentationLinks, notes. Only supplied fields change; null clears optional fields to Unknown. Names cannot be cleared. System identifiers, history and lifecycle metadata cannot be edited. Creation and editing need your separate confirmation within 24 hours. Edits overwrite selected fields even after intervening edits; unrelated fields remain. No AI or Gmail is needed. See the Project-question examples below; inventory filters/counts are available below; natural-language changes use the same confirmation path with shared-budget interpretation; the offline operator import is delivered in ticket 10.';
+const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
+const help = "Consultez documentation projets [page] (première page : 0), documentation projet <identifiant, nom exact ou alias> et documentation historique [cible]. Créez avec documentation créer projet {\"name\":\"Alpha\",\"aliases\":[\"A\"],\"description\":\"Exemple\",\"repositories\":[\"https://example.com/repo\"],\"documentationLinks\":[\"https://example.com/docs\"],\"notes\":\"Exemple\"}. Seul name est obligatoire ; les champs omis restent inconnus. Noms et alias : une ligne, 120 caractères, jusqu’à 20 alias ; description et notes : 1 500 chacun ; chaque liste de liens : 10 URL HTTP(S) au maximum, 400 caractères chacune, sans identifiants de connexion. Création ou remplacements : 5 000 caractères JSON maximum. Modifiez avec documentation modifier projet <cible> {\"description\":\"Remplacement\",\"notes\":null}. Champs autorisés : name, aliases, description, repositories, documentationLinks, notes. Seuls les champs fournis changent ; null rend un champ facultatif inconnu. Le nom ne peut pas être effacé. Identifiants système, historique et état d’archivage ne sont pas modifiables. Les demandes en langage naturel utilisent le budget IA partagé et la même confirmation. L’import est un outil opérateur hors ligne. Chaque modification exige votre confirmation séparée dans cette conversation privée, sous 24 heures. Seuls les champs choisis sont remplacés, même après des modifications intermédiaires ; les autres champs sont conservés. Aucun appel IA ni Gmail pour les commandes structurées.";
 const recordPage = (destination: string, id: string) => `${destination}_${id}${['history', 'components'].includes(destination) ? '_0' : ''}`;
 const pageLinks = (prefix: string, page: number, pages: number) => [
-  ...(page > 0 ? [{ label: 'Previous', page: `${prefix}_${page - 1}` }] : []),
-  ...(page + 1 < pages ? [{ label: 'Next', page: `${prefix}_${page + 1}` }] : []),
+  ...(page > 0 ? [{ label: "Précédent", page: `${prefix}_${page - 1}` }] : []),
+  ...(page + 1 < pages ? [{ label: "Suivant", page: `${prefix}_${page + 1}` }] : []),
 ];
 function editRequest(text: string): { selector: string; fields: ProjectEdit } {
   const request = parseEditRequest(text.replace(/^edit project\s+/i, ''));
@@ -35,7 +37,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     if (message.table && tableSize(message.table) > 8500) {
       const confirmation = message.buttons?.find(button => button.action === 'open_confirmation_record' || button.action.startsWith('confirm_'))?.value;
       if (!confirmation) throw new Error('Large inventory values require a saved review destination.');
-      message = { ...message, table: undefined, text: `${message.text}\nThe full saved values span several pages. Open Review values to inspect them.`, buttons: [...(message.buttons ?? []), { label: 'Review values', action: 'open_confirmation_values', value: confirmation }] };
+      message = { ...message, table: undefined, text: `${message.text}\nLes valeurs enregistrées occupent plusieurs pages. Ouvrez Examiner les valeurs pour les consulter.`, buttons: [...(message.buttons ?? []), { label: "Examiner les valeurs", action: 'open_confirmation_values', value: confirmation }] };
     }
     if (!await store.claimDelivery(actor, eventId)) return;
     try { await context.messenger.send(actor, { ...message, buttons: [...(message.buttons ?? []), menuButton] }); }
@@ -50,9 +52,9 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     const chunks = valuePages(content);
     if (chunks.length === 1) return content;
     const index = Math.min(Number(part?.[1] ?? 0), chunks.length - 1);
-    return { ...chunks[index]!, text: `Values page ${index + 1}/${chunks.length}\n${chunks[index]!.text}`, links: [
-      ...(index > 0 ? [{ label: 'Previous values', page: `content_${index - 1}_${target}` }] : []),
-      ...(index + 1 < chunks.length ? [{ label: 'More values', page: `content_${index + 1}_${target}` }] : []),
+    return { ...chunks[index]!, text: `Valeurs — page ${index + 1}/${chunks.length}\n${chunks[index]!.text}`, links: [
+      ...(index > 0 ? [{ label: "Valeurs précédentes", page: `content_${index - 1}_${target}` }] : []),
+      ...(index + 1 < chunks.length ? [{ label: "Valeurs suivantes", page: `content_${index + 1}_${target}` }] : []),
       ...(content.links ?? []),
     ] };
   }
@@ -62,10 +64,10 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     if (confirmation) {
       const saved = await store.confirmation(actor, confirmation[1]!);
       const table = saved ? await presentation.values(saved.fields, saved.operation === 'edit' ? saved.before_values : undefined, true) : undefined;
-      if (table && saved?.operation === 'edit' && saved.before_values === null) table.rows = table.rows.map(row => [row[0]!, 'Unavailable (original values were not saved)', row[2]!]);
-      const targetName = saved?.operation === 'create' ? String(saved.fields.name ?? saved.fields.environment ?? 'Unknown environment') || 'Empty environment' : saved ? await presentation.name(saved.record_kind, saved.target_id) : '';
-      return saved ? { kind: `${saved.operation === 'create' ? 'Create' : 'Edit'} confirmation values`, table, text: `${recordTitle(saved.record_kind)}: ${literal(targetName)}\n${saved.operation === 'edit' && saved.before_values === null ? 'Unavailable for this older confirmation; original values were not saved.\n' : ''}These are saved proposal values; current values may differ. Confirm using the original confirmation Card. Expires: ${new Date(new Date(saved.created_at).getTime() + 24 * 3600_000).toISOString()}.` }
-        : { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' };
+      if (table && saved?.operation === 'edit' && saved.before_values === null) table.rows = table.rows.map(row => [row[0]!, "Indisponible (valeurs d’origine non enregistrées)", row[2]!]);
+      const targetName = saved?.operation === 'create' ? String(saved.fields.name ?? saved.fields.environment ?? "Environnement inconnu") || "Environnement vide" : saved ? await presentation.name(saved.record_kind, saved.target_id) : '';
+      return saved ? { kind: `${saved.operation === 'create' ? "Créer" : "Modifier"} — valeurs de la confirmation`, table, text: `${recordTitle(saved.record_kind)}: ${literal(targetName)}\n${saved.operation === 'edit' && saved.before_values === null ? "Indisponible pour cette ancienne confirmation ; les valeurs d’origine n’ont pas été enregistrées.\n" : ''}Ces valeurs proviennent de la proposition enregistrée ; les valeurs actuelles peuvent différer. Confirmez depuis la confirmation d’origine. Expiration : ${formatDate(new Date(saved.created_at).getTime() + 24 * 3600_000)}.` }
+        : { kind: "Confirmation indisponible", text: "Cette confirmation est indisponible ou n’appartient pas à cet utilisateur et à cette conversation privée." };
     }
     const answer = await questions.page(actor, destination);
     if (answer) return answer;
@@ -73,54 +75,54 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     if (lifecyclePage) return lifecyclePage;
     const catalogPage = await catalog.page(actor, destination);
     if (catalogPage) return catalogPage;
-    if (destination === 'help' || destination === 'add') return { kind: destination === 'add' ? 'Add Project' : 'Documentation help', text: `${help}\n${questionHelp}\n${lifecycleHelp}\n${catalogHelp}\n${componentHelp}\n${hostHelp}\n${hostingHelp}\n${toolHelp}`, links: [{ label: 'Back', page: 'main' }] };
+    if (destination === 'help' || destination === 'add') return { kind: destination === 'add' ? "Ajouter un projet" : "Aide de Documentation", text: `${help}\n${questionHelp}\n${lifecycleHelp}\n${catalogHelp}\n${componentHelp}\n${hostHelp}\n${hostingHelp}\n${toolHelp}`, links: [{ label: "Retour", page: 'main' }] };
     const list = /^projects_(\d{1,6})$/.exec(destination), lookup = /^lookup_([^_]+)_(\d{1,6})$/.exec(destination);
     if (list || lookup) {
       const saved = lookup ? await store.savedLookup(actor, lookup[1]!) : undefined;
-      if (lookup && !saved) return { kind: 'Lookup unavailable', text: 'Repeat the exact lookup to open a fresh choice.', links: [{ label: 'Projects', page: 'projects_0' }] };
+      if (lookup && !saved) return { kind: "Recherche indisponible", text: "Répétez la recherche exacte pour obtenir un nouveau choix.", links: [{ label: "Projets", page: 'projects_0' }] };
       const { projects, total, page, pages } = await store.projects(actor, Number(list?.[1] ?? lookup?.[2] ?? 0), saved?.selector ?? null);
       const prefix = saved ? `lookup_${lookup![1]}` : 'projects';
-      return { kind: saved ? 'Choose a Project' : 'Projects', text: `${saved ? 'This lookup is ambiguous. Choose a Project.\n' : ''}page ${page + 1}/${pages} · ${total} Projects\n${projects.length ? '' : 'No Projects have been saved.'}`,
+      return { kind: saved ? "Choisir un projet" : "Projets", text: `${saved ? "Cette recherche est ambiguë. Choisissez un projet.\n" : ''}page ${page + 1}/${pages} · ${total} projets\n${projects.length ? '' : "Aucun projet n’a été enregistré."}`,
         ...await presentation.list(projects.map(project => ({ ...project, kind: 'project' as const })), projects.map(project => recordPage(saved?.destination ?? 'project', project.id))),
-        links: [...pageLinks(prefix, page, pages), { label: 'Add Project', page: 'add' }, { label: 'Back', page: 'main' }] };
+        links: [...pageLinks(prefix, page, pages), { label: "Ajouter un projet", page: 'add' }, { label: "Retour", page: 'main' }] };
     }
     const hostingPage = /^projecthosting_([^_]+)_(\d{1,6})$/.exec(destination);
     if (destination.startsWith('project_') || hostingPage) {
       const project = await store.project(actor, hostingPage?.[1] ?? destination.slice(8));
-      if (!project) return { kind: 'Project unavailable', text: 'That Project was not found.', links: [{ label: 'Projects', page: 'projects_0' }] };
+      if (!project) return { kind: "Projet indisponible", text: "Ce projet est introuvable.", links: [{ label: "Projets", page: 'projects_0' }] };
       await questions.remember(actor, project.id);
       const hosting = hostingPage ? await store.projectHosting(actor, project.id, Number(hostingPage[2])) : undefined;
       const view = hosting
         ? await presentation.list(hosting.entries.filter(entry => entry.fields && entry.hosting_id).map(entry => ({ id: entry.hosting_id!, kind: 'hosting' as const, fields: entry.fields!, archived: !!entry.hosting_archived })))
         : await presentation.details(project.fields);
       const missing = hosting?.entries.filter(entry => !entry.hosting_id) ?? [];
-      return { ...view, kind: hosting ? 'Project hosting' : 'Project', text: `Project: ${literal(project.fields.name)}\n${statusText(project)}\n${hosting ? `Hosting page ${hosting.page + 1}/${hosting.pages}\n${!hosting.entries.length ? 'Components: Unknown\nHosting entries: Unknown' : missing.map(entry => `Component: ${literal(entry.component_name)}\nHosting entries: Unknown`).join('\n')}` : ('text' in view ? view.text : '')}`,
+      return { ...view, kind: hosting ? "Hébergements du projet" : "Projet", text: `Projet : ${literal(project.fields.name)}\n${statusText(project)}\n${hosting ? `Hébergements — page ${hosting.page + 1}/${hosting.pages}\n${!hosting.entries.length ? "Composants : inconnus\nHébergements : inconnus" : missing.map(entry => `Composant : ${literal(entry.component_name)}\nHébergements : inconnus`).join('\n')}` : ('text' in view ? view.text : '')}`,
         buttons: lifecycleButton('project', project),
-        links: [...(hosting ? pageLinks(`projecthosting_${project.id}`, hosting.page, hosting.pages) : [{ label: 'Hosting entries', page: `projecthosting_${project.id}_0` }]),
-          ...missing.map(entry => ({ label: `Component: ${entry.component_name}`, page: `component_${entry.component_id}` })),
-          ...(!project.archived ? [{ label: 'Edit', page: `edit_${project.id}` }] : []), { label: 'Components', page: `components_${project.id}_0` }, { label: 'Tools', page: `projecttools_${project.id}_0` }, { label: 'History', page: `history_${project.id}_0` }, { label: 'Back to Projects', page: 'projects_0' }] };
+        links: [...(hosting ? pageLinks(`projecthosting_${project.id}`, hosting.page, hosting.pages) : [{ label: "Hébergements", page: `projecthosting_${project.id}_0` }]),
+          ...missing.map(entry => ({ label: `Composant : ${entry.component_name}`, page: `component_${entry.component_id}` })),
+          ...(!project.archived ? [{ label: "Modifier", page: `edit_${project.id}` }] : []), { label: "Composants", page: `components_${project.id}_0` }, { label: "Outils", page: `projecttools_${project.id}_0` }, { label: "Historique", page: `history_${project.id}_0` }, { label: "Retour aux projets", page: 'projects_0' }] };
     }
     if (destination.startsWith('edit_')) {
       const project = await store.project(actor, destination.slice(5));
-      if (!project) return { kind: 'Project unavailable', text: 'That Project was not found.', links: [{ label: 'Projects', page: 'projects_0' }] };
-      if (project.archived) return { kind: 'Edit requires restoration', text: `Project: ${literal(project.fields.name)}\nStatus: Archived\nExplicitly restore this Project before editing.`, buttons: lifecycleButton('project', project), links: [{ label: 'Back to Project', page: `project_${project.id}` }] };
-      return { kind: 'Edit Project', text: `Project: ${literal(project.fields.name)} (${project.id})\nUse documentation edit project ${project.id} {"description":"Replacement","notes":null}\n${help}`, links: [{ label: 'Back to Project', page: `project_${project.id}` }] };
+      if (!project) return { kind: "Projet indisponible", text: "Ce projet est introuvable.", links: [{ label: "Projets", page: 'projects_0' }] };
+      if (project.archived) return { kind: "Restauration nécessaire avant modification", text: `Projet : ${literal(project.fields.name)}\nÉtat : archivé\nRestaurez explicitement ce projet avant de le modifier.`, buttons: lifecycleButton('project', project), links: [{ label: "Retour au projet", page: `project_${project.id}` }] };
+      return { kind: "Modifier le projet", text: `Projet : ${literal(project.fields.name)} (${project.id})\nUtilisez documentation modifier projet ${project.id} {\"description\":\"Remplacement\",\"notes\":null}\n${help}`, links: [{ label: "Retour au projet", page: `project_${project.id}` }] };
     }
     if (destination.startsWith('history_') || destination.startsWith('sharedhistory_')) {
       const shared = /^sharedhistory_(\d{1,6})$/.exec(destination);
       const match = /^history_([^_]+)_(\d{1,6})$/.exec(destination);
       const id = match?.[1] ?? null, project = id ? await store.project(actor, id) : undefined;
-      if (!shared && !project) return { kind: 'History unavailable', text: 'That Project was not found.', links: [{ label: 'Projects', page: 'projects_0' }] };
+      if (!shared && !project) return { kind: "Historique indisponible", text: "Ce projet est introuvable.", links: [{ label: "Projets", page: 'projects_0' }] };
       const { changes, page, pages } = await store.history(actor, id, Number(match?.[2] ?? shared?.[1] ?? 0));
       const change = changes[0];
-      return { kind: shared ? 'Shared history' : 'Project history', ...(change ? { table: await presentation.values(change.after_values, change.before_values) } : {}), text: `${project ? `Project: ${literal(project.fields.name)}\n${statusText(project)}\n` : ''}History page ${page + 1}/${pages}\n${change ? `${recordTitle(change.record_kind)}: ${literal(await presentation.name(change.record_kind, change.project_id))}\nActor: ${literal(change.actor)}\nTime: ${new Date(change.changed_at).toISOString()}\nSource: ${literal(change.source)}\n${change.before_values === null ? 'Before: No record' : ''}` : 'No changes have been saved.'}`, links: [...pageLinks(shared ? 'sharedhistory' : `history_${id}`, page, pages), ...(shared ? [...changes.map(change => ({ label: 'Record details', page: `${change.record_kind}_${change.project_id}` })), { label: 'Back', page: 'main' }] : [{ label: 'Back to Project', page: `project_${id}` }])] };
+      return { kind: shared ? "Historique partagé" : "Historique du projet", ...(change ? { table: await presentation.values(change.after_values, change.before_values) } : {}), text: `${project ? `Projet : ${literal(project.fields.name)}\n${statusText(project)}\n` : ''}Historique — page ${page + 1}/${pages}\n${change ? `${recordTitle(change.record_kind)}: ${literal(await presentation.name(change.record_kind, change.project_id))}\nAuteur : ${literal(change.actor)}\nDate : ${formatDate(change.changed_at)}\nSource : ${literal(sourceLabel(change.source))}\n${change.before_values === null ? "Avant : aucune fiche" : ''}` : "Aucune modification n’a été enregistrée."}`, links: [...pageLinks(shared ? 'sharedhistory' : `history_${id}`, page, pages), ...(shared ? [...changes.map(change => ({ label: "Détails de la fiche", page: `${change.record_kind}_${change.project_id}` })), { label: "Retour", page: 'main' }] : [{ label: "Retour au projet", page: `project_${id}` }])] };
     }
-    return { kind: 'Documentation', text: 'Create, edit and browse shared Projects, Technologies, Components, Hosts/services, Hosting entries and Tools. Every typed request needs the documentation prefix. Browsing and structured mutations use no AI.',
-      links: [{ label: 'Projects', page: 'projects_0' }, { label: 'Add Project', page: 'add' }, { label: 'Technologies', page: 'technologies_0' }, { label: 'Hosts/services', page: 'hosts_0' }, { label: 'Tools', page: 'tools_0' }, { label: 'Archived', page: 'archived_0' }, { label: 'History', page: 'sharedhistory_0' }, { label: 'Help', page: 'help' }] };
+    return { kind: 'Documentation', text: "Créez, modifiez et consultez les projets, technologies, composants, hébergeurs/services, hébergements et outils partagés. Commencez chaque demande par documentation. La consultation et les modifications structurées n’utilisent pas d’IA.",
+      links: [{ label: "Projets", page: 'projects_0' }, { label: "Ajouter un projet", page: 'add' }, { label: "Technologies", page: 'technologies_0' }, { label: "Hébergeurs/services", page: 'hosts_0' }, { label: "Outils", page: 'tools_0' }, { label: "Archivé", page: 'archived_0' }, { label: "Historique", page: 'sharedhistory_0' }, { label: "Aide", page: 'help' }] };
   }
   return {
     menuActions: ['request_archive', 'request_restore'],
-    id: 'documentation', name: 'Documentation', description: 'Create, edit and browse shared inventory and its history',
+    id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
     initialize: async database => { await database.query(documentationSchema + questionSchema + documentationImportSchema); },
     cleanup: async () => { await store.cleanup(); await questions.cleanup(); },
     menu: (actor, destination) => page(actor, destination),
@@ -130,7 +132,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       const navigation = new Navigation(context.sql, context.messenger);
       const show = async (destination: string) => {
         const content = await page(actor, destination);
-        await navigation.show(actor, eventId, { ...content, recordChoices: content.recordChoices?.map(link => ({ ...link, page: `documentation:${link.page}` })), links: [...(content.links ?? []).map(link => ({ ...link, page: `documentation:${link.page}` })), { label: 'Back to menu', page: 'main' }] });
+        await navigation.show(actor, eventId, { ...content, recordChoices: content.recordChoices?.map(link => ({ ...link, page: `documentation:${link.page}` })), links: [...(content.links ?? []).map(link => ({ ...link, page: `documentation:${link.page}` })), { label: "Retour au menu", page: 'main' }] });
       };
       const interpret = async (text: string) => {
         const result = await questions.ask(actor, text, eventId, context);
@@ -139,12 +141,12 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       };
       if (payload.type === 'action' && payload.action === 'open_confirmation_values') {
         const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;
-        if (!saved) return deliver(actor, eventId, { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' }, context);
+        if (!saved) return deliver(actor, eventId, { kind: "Confirmation indisponible", text: "Cette confirmation est indisponible ou n’appartient pas à cet utilisateur et à cette conversation privée." }, context);
         return show(`confirmation_${saved.id}`);
       }
       if (payload.type === 'action' && ['open_confirmation_record', 'open_confirmation_history'].includes(String(payload.action))) {
         const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;
-        if (!saved?.applied_at) return deliver(actor, eventId, { kind: 'Result unavailable', text: 'This saved result is private to its User and DM or is unavailable.' }, context);
+        if (!saved?.applied_at) return deliver(actor, eventId, { kind: "Résultat indisponible", text: "Ce résultat enregistré est privé à son utilisateur et à sa conversation, ou indisponible." }, context);
         const history = payload.action === 'open_confirmation_history';
         return show(history ? `${saved.record_kind === 'project' ? 'history' : `history${saved.record_kind}`}_${saved.target_id}_0` : `${saved.record_kind}_${saved.target_id}`);
       }
@@ -168,19 +170,19 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       if (payload.type === 'action' && ['confirm_create', 'confirm_edit'].includes(String(payload.action))) {
         const operation = payload.action === 'confirm_edit' ? 'edit' : 'create';
         const saved = typeof payload.value === 'string' ? await (operation === 'edit' ? store.confirmEdit(actor, payload.value) : store.confirm(actor, payload.value)) : undefined;
-        if (!saved || saved.record_kind !== 'project' || saved.operation !== operation) return deliver(actor, eventId, { kind: 'Confirmation unavailable', text: 'This confirmation does not belong to this User and DM, or is unavailable.' }, context);
-        if (saved.outcome === 'archived') return deliver(actor, eventId, { kind: 'Edit requires restoration', text: `Project ${literal(await presentation.name('project', saved.target_id))} is archived. Explicitly restore it, then retry this confirmation within its original 24-hour window.` }, context);
-        if (!saved.applied_at) return deliver(actor, eventId, { kind: 'Confirmation expired', text: `This confirmation has expired. Submit a fresh documentation ${operation} project request.` }, context);
-        if (operation === 'edit') return deliver(actor, eventId, { kind: saved.outcome === 'missing' ? 'Edit failed' : saved.outcome === 'satisfied' ? 'Edit already satisfied' : 'Project edited', buttons: outcomeButtons(saved.id), table: await presentation.values(saved.fields), text: `Project: ${literal(await presentation.name('project', saved.target_id))}\n${saved.outcome === 'missing' ? 'The target was unavailable at confirmation; no edit was applied.' : saved.outcome === 'satisfied' ? 'The selected fields already matched at confirmation; no change or history entry was added.' : 'The approved replacements were saved once. Later edits may have changed the current values.'}\nOpen Record details to read current values.` }, context);
-        return deliver(actor, eventId, { kind: 'Project created', buttons: outcomeButtons(saved.id), table: await presentation.values(saved.fields), text: `Project: ${literal(String(saved.fields.name))}\nOpen Record details to read the record.` }, context);
+        if (!saved || saved.record_kind !== 'project' || saved.operation !== operation) return deliver(actor, eventId, { kind: "Confirmation indisponible", text: "Cette confirmation est indisponible ou n’appartient pas à cet utilisateur et à cette conversation privée." }, context);
+        if (saved.outcome === 'archived') return deliver(actor, eventId, { kind: "Restauration nécessaire avant modification", text: `Projet ${literal(await presentation.name('project', saved.target_id))} est archivé. Restaurez-le explicitement, puis réessayez cette confirmation dans son délai d’origine de 24 heures.` }, context);
+        if (!saved.applied_at) return deliver(actor, eventId, { kind: "Confirmation expirée", text: `Cette confirmation a expiré. Envoyez une nouvelle demande documentation ${stateLabel(operation)} pour le projet.` }, context);
+        if (operation === 'edit') return deliver(actor, eventId, { kind: saved.outcome === 'missing' ? "Modification échouée" : saved.outcome === 'satisfied' ? "Modification déjà satisfaite" : "Projet modifié", buttons: outcomeButtons(saved.id), table: await presentation.values(saved.fields), text: `Projet : ${literal(await presentation.name('project', saved.target_id))}\n${saved.outcome === 'missing' ? "La cible était indisponible à la confirmation ; aucune modification n’a été appliquée." : saved.outcome === 'satisfied' ? "Les champs sélectionnés correspondaient déjà à la confirmation ; aucune modification ni entrée d’historique n’a été ajoutée." : "Les remplacements approuvés ont été enregistrés une seule fois. Des modifications ultérieures peuvent avoir changé les valeurs actuelles."}\nOuvrez Détails de la fiche pour consulter les valeurs actuelles.` }, context);
+        return deliver(actor, eventId, { kind: "Projet créé", buttons: outcomeButtons(saved.id), table: await presentation.values(saved.fields), text: `Projet : ${literal(String(saved.fields.name))}\nOuvrez Détails de la fiche pour consulter la fiche.` }, context);
       }
-      if (payload.type !== 'text') return deliver(actor, eventId, { kind: 'Documentation help', text: help }, context);
+      if (payload.type !== 'text') return deliver(actor, eventId, { kind: "Aide de Documentation", text: help }, context);
       const text = String(payload.text ?? '').trim();
       const query = /^(search|count)\s+([\s\S]+)$/i.exec(text);
       if (query) {
         let value: unknown;
         try { value = JSON.parse(query[2]!); }
-        catch { return deliver(actor, eventId, { kind: 'Invalid inventory query', text: inventoryQueryHelp }, context); }
+        catch { return deliver(actor, eventId, { kind: "Requête d’inventaire invalide", text: inventoryQueryHelp }, context); }
         const result = await questions.structured(actor, value, query[1]!.toLowerCase() === 'count' ? 'count' : 'list', eventId);
         return typeof result === 'string' ? show(result) : deliver(actor, eventId, result, context);
       }
@@ -190,23 +192,23 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         if (!proposal) {
           let request: ReturnType<typeof editRequest>;
           try { request = editRequest(text); }
-          catch { return deliver(actor, eventId, { kind: 'Invalid Project edit', text: `Choose one Project and provide one nonempty JSON object of supported fields. Optional values can be null; names must remain valid. Unsupported fields, metadata and multiple records cannot be edited.\n${help}` }, context); }
+          catch { return deliver(actor, eventId, { kind: "Modification de projet invalide", text: `Choisissez un projet et fournissez un objet JSON non vide de champs autorisés. Les valeurs facultatives peuvent être null ; les noms doivent rester valides. Les champs non autorisés, métadonnées et opérations sur plusieurs fiches sont refusés.\n${help}` }, context); }
           const { projects, total } = await store.lookup(actor, request.selector);
-          if (total === 0) return deliver(actor, eventId, { kind: 'Project not found', text: 'No Project matches that exact identifier, name or alias.' }, context);
-          if (total > 1) return deliver(actor, eventId, { kind: 'Ambiguous Project edit', text: `That exact name or alias matches ${total} Projects. Use documentation project ${literal(request.selector)} to inspect the choices, then repeat the edit with one stable identifier. Nothing has been proposed or saved.` }, context);
-          if (projects[0]!.archived) return deliver(actor, eventId, { kind: 'Edit requires restoration', text: 'This Project is archived. Explicitly restore it before editing.' }, context);
+          if (total === 0) return deliver(actor, eventId, { kind: "Projet introuvable", text: "Aucun projet ne correspond exactement à cet identifiant, nom ou alias." }, context);
+          if (total > 1) return deliver(actor, eventId, { kind: "Modification de projet ambiguë", text: `Ce nom ou alias exact correspond à ${total} projets. Utilisez documentation projet ${literal(request.selector)} pour examiner les choix, puis répétez la modification avec un identifiant stable. Rien n’a été proposé ni enregistré.` }, context);
+          if (projects[0]!.archived) return deliver(actor, eventId, { kind: "Restauration nécessaire avant modification", text: "Ce projet est archivé. Restaurez-le explicitement avant de le modifier." }, context);
           proposal = await store.proposeEdit(actor, eventId, projects[0]!, request.fields, source);
         }
         const preview = await presentation.confirmation(proposal);
-        return deliver(actor, eventId, { ...preview, kind: 'Edit Project confirmation', text: `Edit shared Project: ${literal(await presentation.name('project', proposal.target_id))}\n${preview.text}\nOnly these fields will change. Confirmation overwrites them even after another User edits them; unrelated fields remain. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`, buttons: [{ label: 'Confirm edit', action: 'confirm_edit', value: proposal.id, style: 'primary' }, { label: 'Review values', action: 'open_confirmation_values', value: proposal.id }] }, context);
+        return deliver(actor, eventId, { ...preview, kind: "Confirmation de modification du projet", text: `Modifier le projet partagé : ${literal(await presentation.name('project', proposal.target_id))}\n${preview.text}\nSeuls ces champs changeront. La confirmation les remplace même après la modification d’un autre utilisateur ; les autres champs sont conservés. Vous seul pouvez confirmer dans cette conversation privée. Expiration : ${formatDate(new Date(proposal.created_at).getTime() + 24 * 3600_000)}. Rien n’est enregistré avant votre confirmation.`, buttons: [{ label: "Confirmer la modification", action: 'confirm_edit', value: proposal.id, style: 'primary' }, { label: "Examiner les valeurs", action: 'open_confirmation_values', value: proposal.id }] }, context);
       }
       if (/^create project\s/i.test(text)) {
         let fields: ProjectFields;
         try { fields = projectFields.parse(JSON.parse(text.replace(/^create project\s+/i, ''))); }
-        catch { return deliver(actor, eventId, { kind: 'Invalid Project', text: `Provide one JSON object using only the fixed Project fields. Name must be nonempty; links must be HTTP(S) URLs without credentials. The complete record must fit within 5,000 JSON characters.\n${help}` }, context); }
+        catch { return deliver(actor, eventId, { kind: "Projet invalide", text: `Fournissez un objet JSON contenant uniquement les champs du projet autorisés. Le nom doit être non vide ; les liens doivent être des URL HTTP(S) sans identifiants de connexion. La fiche complète doit tenir dans 5 000 caractères JSON.\n${help}` }, context); }
         const proposal = await store.propose(actor, eventId, fields, source);
         const preview = await presentation.confirmation(proposal);
-        return deliver(actor, eventId, { ...preview, kind: 'Create Project confirmation', text: `Create shared Project: ${literal(String(proposal.fields.name))}\n${preview.text}\nOnly you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`, buttons: [{ label: 'Confirm creation', action: 'confirm_create', value: proposal.id, style: 'primary' }, ...(!preview.table ? [{ label: 'Review values', action: 'open_confirmation_values', value: proposal.id }] : [])] }, context);
+        return deliver(actor, eventId, { ...preview, kind: "Confirmation de création du projet", text: `Créer le projet partagé : ${literal(String(proposal.fields.name))}\n${preview.text}\nVous seul pouvez confirmer dans cette conversation privée. Expiration : ${formatDate(new Date(proposal.created_at).getTime() + 24 * 3600_000)}. Rien n’est enregistré avant votre confirmation.`, buttons: [{ label: "Confirmer la création", action: 'confirm_create', value: proposal.id, style: 'primary' }, ...(!preview.table ? [{ label: "Examiner les valeurs", action: 'open_confirmation_values', value: proposal.id }] : [])] }, context);
       }
       const projects = /^projects(?:\s+(\d{1,6}))?$/i.exec(text);
       if (projects) return show(`projects_${projects[1] ?? '0'}`);
@@ -216,12 +218,12 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         const destination = lookup[1]!.toLowerCase(), { projects, total } = await store.lookup(actor, lookup[2]!.trim());
         if (total === 1) return show(recordPage(destination, projects[0]!.id));
         if (total > 1) return show(`lookup_${await store.saveLookup(actor, eventId, lookup[2]!.trim(), destination)}_0`);
-        return deliver(actor, eventId, { kind: 'Project not found', text: 'No Project matches that exact identifier, name or alias.' }, context);
+        return deliver(actor, eventId, { kind: "Projet introuvable", text: "Aucun projet ne correspond exactement à cet identifiant, nom ou alias." }, context);
       }
       if (text.toLowerCase() !== 'help') {
         return interpret(text);
       }
-      return deliver(actor, eventId, { kind: 'Documentation help', text: `${help}\n${questionHelp}\n${lifecycleHelp}\n${catalogHelp}\n${componentHelp}\n${hostHelp}\n${hostingHelp}\n${toolHelp}` }, context);
+      return deliver(actor, eventId, { kind: "Aide de Documentation", text: `${help}\n${questionHelp}\n${lifecycleHelp}\n${catalogHelp}\n${componentHelp}\n${hostHelp}\n${hostingHelp}\n${toolHelp}` }, context);
     },
   };
 }

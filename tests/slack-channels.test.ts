@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHash, createHmac } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import type { Pool } from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -7,9 +7,10 @@ import { createModules } from '../src/app/modules.js';
 import { schema } from '../src/app/schema.js';
 import type { Actor } from '../src/core/identity.js';
 import { createServer } from '../src/core/server.js';
-import { Slack, SlackDeliveryRejected, type AgentMessage, type Messenger } from '../src/core/slack.js';
+import { Slack, SlackDeliveryRejected, escapeCardValue, type AgentMessage, type Messenger } from '../src/core/slack.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { worker } from '../src/core/worker.js';
+import { retainedTextNotice } from '../src/core/presentation.js';
 
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'token', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'slack' };
 const alice: Actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
@@ -119,7 +120,7 @@ it('offers Menu after an unrecognized Slack command', async () => {
   const h = await harness();
   try {
     const reply = await h.dm('slack unknown');
-    expect(reply.message.text).toContain('slack channels');
+    expect(reply.message.text).toContain("slack canaux");
     expect(reply.message.buttons?.some(button => button.action === 'core:menu')).toBe(true);
   } finally { await h.close(); }
 });
@@ -132,14 +133,14 @@ it('accepts historical unbound channel controls using current owner state and ac
     await sql.query('DELETE FROM core_navigation_menus WHERE timestamp=$1', [list.ts]);
     await h.postAction({ label: 'Select general', action: 'slack:channel_select', value: 'CPUBLIC|0' }, alice, list.ts);
     await h.drain();
-    expect(h.messages.at(-1)?.message.text).toContain('Selected channels: 1');
+    expect(h.messages.at(-1)?.message.text).toContain("Canaux sélectionnés : 1");
     expect(h.messages.at(-1)?.method).toBe('post');
-    await h.postAction({ label: 'Next', action: 'slack:channel_page', value: '0' }, alice, list.ts);
+    await h.postAction({ label: "Suivant", action: 'slack:channel_page', value: '0' }, alice, list.ts);
     await h.drain();
     expect(h.messages.at(-1)?.message.text).toContain('general');
     await h.postAction({ label: 'Remove general', action: 'slack:channel_remove', value: 'CPUBLIC|0' }, alice, list.ts);
     await h.drain();
-    expect(h.messages.at(-1)?.message.text).toContain('Selected channels: 0');
+    expect(h.messages.at(-1)?.message.text).toContain("Canaux sélectionnés : 0");
   } finally { await h.close(); }
 });
 
@@ -177,9 +178,9 @@ it('routes a signed slack request to shared guidance without running a disabled 
   try {
     const reply = await h.dm('slack unanswered');
     expect(reply.actor).toEqual(alice);
-    expect(reply.message.kind).toBe('Help');
-    expect(reply.message.text).toContain('This request was not sent to a module.');
-    expect(reply.message.text).toContain('No modules are currently enabled.');
+    expect(reply.message.kind).toBe("Aide");
+    expect(reply.message.text).toContain("Cette demande n’a été transmise à aucun module.");
+    expect(reply.message.text).toContain("Aucun module n’est actuellement activé.");
     expect(provider).not.toHaveBeenCalled();
     expect((await sql.query('SELECT module FROM jobs')).rows).toEqual([{ module: 'core' }]);
   } finally { await h.close(); }
@@ -198,41 +199,41 @@ it('keeps each user selection across restarts and temporary access loss until th
   try {
     const list = await first.dm('slack channels');
     const selectPrivate = list.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
-    expect((await first.click(selectPrivate)).message.text).toContain('Selected channels: 1');
-    expect((await first.click(selectPrivate)).message.text).toContain('Selected channels: 1');
+    expect((await first.click(selectPrivate)).message.text).toContain("Canaux sélectionnés : 1");
+    expect((await first.click(selectPrivate)).message.text).toContain("Canaux sélectionnés : 1");
   } finally { await first.close(); }
 
   const second = await harness();
   try {
-    expect((await second.dm('slack channels')).message.text).toContain('Selected channels: 1');
+    expect((await second.dm("slack canaux")).message.text).toContain("Canaux sélectionnés : 1");
     const bobList = await second.dm('slack channels', bob);
     expect(bobList.actor).toEqual(bob);
-    expect(bobList.message.text).toContain('Selected channels: 0');
+    expect(bobList.message.text).toContain("Canaux sélectionnés : 0");
     expect(bobList.message.text).not.toContain('planning');
     const aliceList = await second.dm('slack channels');
     const oldPrivateButton = aliceList.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
-    expect((await second.click(oldPrivateButton, bob)).message.text).toContain('unavailable');
+    expect((await second.click(oldPrivateButton, bob)).message.text).toContain('indisponible');
 
     aliceCanSeePrivate = false;
     const unavailable = await second.dm('slack channels');
-    expect(unavailable.message.text).toContain('Unavailable selected channel GPRIVATE');
-    expect(unavailable.message.text).toContain('Selected channels: 1');
+    expect(unavailable.message.text).toContain('Canal sélectionné indisponible GPRIVATE');
+    expect(unavailable.message.text).toContain("Canaux sélectionnés : 1");
     aliceCanSeePrivate = true;
     const restored = await second.dm('slack channels');
-    expect(restored.message.text).toContain('Selected channels: 1');
+    expect(restored.message.text).toContain("Canaux sélectionnés : 1");
     const removePrivate = restored.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     expect(removePrivate.action).toBe('slack:channel_remove');
     const removed = await second.click(removePrivate);
-    expect(removed.message.text).toContain('Selected channels: 0');
-    expect((await second.dm('slack channels')).message.text).toContain('Selected channels: 0');
+    expect(removed.message.text).toContain("Canaux sélectionnés : 0");
+    expect((await second.dm("slack canaux")).message.text).toContain("Canaux sélectionnés : 0");
     await second.click(removed.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!);
     aliceCanSeePrivate = false;
     const inaccessible = await second.dm('slack channels');
     const removeInaccessible = inaccessible.message.buttons!.find(button => button.value.includes('|GPRIVATE|'))!;
     expect(removeInaccessible.action).toBe('slack:channel_remove');
-    expect((await second.click(removeInaccessible)).message.text).toContain('Selected channels: 0');
+    expect((await second.click(removeInaccessible)).message.text).toContain("Canaux sélectionnés : 0");
     aliceCanSeePrivate = true;
-    expect((await second.dm('slack channels')).message.text).toContain('Selected channels: 0');
+    expect((await second.dm("slack canaux")).message.text).toContain("Canaux sélectionnés : 0");
   } finally { await second.close(); }
 });
 
@@ -245,14 +246,14 @@ it('paginates long channel lists and keeps page controls private to the requesti
     const first = await h.dm('slack channels');
     expect(first.message.text).toContain('page 1/2');
     expect(first.message.text).not.toContain('channel-11');
-    const next = first.message.buttons!.find(button => button.action === 'slack:channel_page' && button.label === 'Next')!;
+    const next = first.message.buttons!.find(button => button.action === 'slack:channel_page' && button.label === "Suivant")!;
     const second = await h.click(next);
     expect(second.actor).toEqual(alice);
     expect(second.message.text).toContain('page 2/2');
     expect(second.message.buttons?.some(button => button.label.includes('channel-11'))).toBe(true);
     expect(second.message.buttons).toHaveLength(4);
     const selected = await h.click(second.message.buttons!.find(button => button.value.includes('|CCHANNEL11|'))!);
-    expect(selected.message.text).toContain('Selected channels: 1');
+    expect(selected.message.text).toContain("Canaux sélectionnés : 1");
     expect(selected.message.text).toContain('page 2/2');
   } finally { await h.close(); }
 });
@@ -268,7 +269,7 @@ it('does not repeat a private response when a processed selection job is replaye
     await sql.query("UPDATE jobs SET status='queued',available_at=now() WHERE module='slack' AND id LIKE 'action:%'");
     await h.drain();
     expect(h.messages).toHaveLength(delivered);
-    expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 1');
+    expect((await h.dm("slack canaux")).message.text).toContain("Canaux sélectionnés : 1");
   } finally { await h.close(); }
 });
 
@@ -284,7 +285,7 @@ it('does not blindly resend a selection response after an uncertain delivery out
     await sql.query("UPDATE jobs SET available_at=now() WHERE module='slack' AND status='queued' AND id LIKE 'action:%'");
     await h.drain();
     expect(h.messages).toHaveLength(delivered);
-    expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 1');
+    expect((await h.dm("slack canaux")).message.text).toContain("Canaux sélectionnés : 1");
   } finally { await h.close(); }
 });
 
@@ -337,7 +338,7 @@ it('retries a private response when Slack definitely rejects the first delivery'
     await sql.query("UPDATE jobs SET available_at=now() WHERE module='slack' AND status='queued' AND id LIKE 'action:%'");
     await h.drain();
     expect(h.messages).toHaveLength(delivered + 1);
-    expect(h.messages.at(-1)!.message.text).toContain('Selected channels: 1');
+    expect(h.messages.at(-1)!.message.text).toContain("Canaux sélectionnés : 1");
   } finally { await h.close(); }
 });
 
@@ -368,7 +369,7 @@ it('lists an unanswered direct mention from a selected channel in a private repl
     await h.click(channels.message.buttons![0]!);
     const result = await h.dm('slack unanswered');
     expect(result.actor).toEqual(alice);
-    expect(result.message.kind).toBe('Unanswered for you');
+    expect(result.message.kind).toBe("Messages sans réponse");
     expect(result.message.text).toContain('general');
     expect(result.message.text).toContain('Bob');
     expect(result.message.text).toContain('the report is ready');
@@ -427,7 +428,7 @@ it('uses the command time and full threads for name matches, collisions, and lat
     expect(text.indexOf('Hello Alice')).toBeLessThan(text.indexOf('at the boundary'));
     const bobBefore = await h.dm('slack unanswered', bob, new Date(anchor * 1000));
     expect(bobBefore.actor).toEqual(bob);
-    expect(bobBefore.message.text).toContain('Choose sources with slack channels');
+    expect(bobBefore.message.text).toContain("Choisissez les sources avec slack canaux");
     expect(bobBefore.message.text).not.toContain('Hello Alice');
     const bobChannels = await h.dm('slack channels', bob);
     await h.click(bobChannels.message.buttons![0]!, bob);
@@ -467,9 +468,9 @@ it('groups and paginates private results while reporting inaccessible selected c
     expect(first.message.text).toContain('general');
     expect(first.message.text).toContain('public 0');
     expect(first.message.text).not.toContain('private result');
-    const next = first.message.buttons!.find(button => button.label === 'Next')!;
+    const next = first.message.buttons!.find(button => button.label === "Suivant")!;
     const originalJob = (await sql.query('SELECT created_at FROM jobs WHERE id=$1', [next.value.split('|')[0]])).rows[0]!;
-    const legacyPage = { label: 'Next', action: 'slack:unanswered_page', value: `${new Date(originalJob.created_at).getTime()}|1` };
+    const legacyPage = { label: "Suivant", action: 'slack:unanswered_page', value: `${new Date(originalJob.created_at).getTime()}|1` };
     const providerCalls = vi.mocked(fetch).mock.calls.length;
     const restarted = await harness();
     try {
@@ -478,7 +479,7 @@ it('groups and paginates private results while reporting inaccessible selected c
       expect(second.message.text).toContain('page 2/2');
       expect(second.message.text).toContain('planning');
       expect(second.message.text).toContain('private result');
-      expect(second.message.text).toContain('Open message');
+      expect(second.message.text).toContain("Ouvrir le message");
       expect(vi.mocked(fetch).mock.calls.slice(providerCalls).every(([url]) => new URL(String(url)).pathname.endsWith('/users.conversations'))).toBe(true);
       await sql.query('DELETE FROM slack_unanswered_results WHERE event_id=$1', [next.value.split('|')[0]]);
       await restarted.postAction(legacyPage, alice, first.ts);
@@ -488,31 +489,31 @@ it('groups and paginates private results while reporting inaccessible selected c
       expect(vi.mocked(fetch).mock.calls.every(([url]) => new URL(String(url)).hostname !== 'api.openai.com')).toBe(true);
       await restarted.postAction(legacyPage, bob, first.ts);
       await restarted.drain();
-      expect(restarted.messages.at(-1)?.message.text).toContain('results are unavailable');
+      expect(restarted.messages.at(-1)?.message.text).toContain('résultats sont indisponibles');
       expect(restarted.messages.at(-1)?.message.text).not.toContain('private result');
       const otherUser = await restarted.click(next, bob);
-      expect(otherUser.message.text).toContain('results are unavailable');
+      expect(otherUser.message.text).toContain('résultats sont indisponibles');
       expect(otherUser.message.text).not.toContain('private result');
       const beforeRemoval = await h.dm('slack channels');
       const removed = await h.click(beforeRemoval.message.buttons!.find(button => button.value.includes('|CEMPTY|'))!);
       const changedSelection = await restarted.click(next);
-      expect(changedSelection.message.text).toContain('no longer selected or accessible');
+      expect(changedSelection.message.text).toContain('plus sélectionné ou accessible');
       expect(changedSelection.message.text).not.toContain('private result');
       await h.click(removed.message.buttons!.find(button => button.value.includes('|CEMPTY|'))!);
       privateVisible = false;
       const revoked = await restarted.click(next);
-      expect(revoked.message.text).toContain('no longer selected or accessible');
+      expect(revoked.message.text).toContain('plus sélectionné ou accessible');
       expect(revoked.message.text).not.toContain('private result');
       privateVisible = true;
       await sql.query(`UPDATE slack_unanswered_results SET created_at=now()-interval '31 days' WHERE event_id=$1`, [next.value.split('|')[0]]);
       const expired = await restarted.click(next);
-      expect(expired.message.text).toContain('results are unavailable');
+      expect(expired.message.text).toContain('résultats sont indisponibles');
       expect(expired.message.text).not.toContain('private result');
       privateVisible = false;
     } finally { await restarted.close(); }
     const skipped = await h.dm('slack unanswered');
-    expect(skipped.message.text).toContain('Skipped inaccessible selected channels: GPRIVATE');
-    expect((await h.dm('slack channels')).message.text).toContain('Selected channels: 3');
+    expect(skipped.message.text).toContain('Canaux sélectionnés inaccessibles ignorés : GPRIVATE');
+    expect((await h.dm("slack canaux")).message.text).toContain("Canaux sélectionnés : 3");
   } finally { await h.close(); }
 });
 
@@ -555,17 +556,17 @@ it('finds clear requests and contextually possible replies without assigning gen
   }));
   const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
   try {
-    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    await h.click((await h.dm("slack canaux")).message.buttons![0]!);
     const result = await h.dm('slack unanswered');
     expect(result.actor).toEqual(alice);
-    expect(result.message.kind).toBe('Unanswered for you');
+    expect(result.message.kind).toBe("Messages sans réponse");
     expect(result.message.text).toContain('here is your update');
     expect(result.message.text).toContain('report owner send');
-    expect(result.message.text).toContain('Possibly for you');
+    expect(result.message.text).toContain("Vous concerne peut-être");
     expect(result.message.text).toContain('finish this handoff');
     expect(result.message.text).not.toContain('Can anyone help');
     expect(result.message.text).not.toContain('approve this too');
-    expect(result.message.text).toContain('Open message');
+    expect(result.message.text).toContain("Ouvrir le message");
     expect(JSON.stringify(modelInputs)).toContain('Alice owns the release report');
     expect(JSON.stringify(modelInputs)).toContain('I have the handoff notes');
     expect(JSON.stringify(modelInputs)).not.toContain('here is your update');
@@ -573,7 +574,7 @@ it('finds clear requests and contextually possible replies without assigning gen
     expect(modelInputs.some(input => input.instructions?.includes('untrusted'))).toBe(true);
     expect(modelInputs.some(input => input.store === false)).toBe(true);
     const budget = await h.dm('budget');
-    expect(budget.message.text).toContain('slack: $');
+    expect(budget.message.text).toContain('Messages Slack sans réponse : ');
   } finally { await h.close(); }
 });
 
@@ -618,14 +619,14 @@ it('finds new requests after a reply and distinguishes acknowledgements and thir
   }));
   const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
   try {
-    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    await h.click((await h.dm("slack canaux")).message.buttons![0]!);
     const result = await h.dm('slack unanswered');
     const text = result.message.text;
     for (const message of [date, file, otherAsk, ambiguous]) {
       expect(text).toContain(message.text);
       expect(text).toContain(`p${message.ts.replace('.', '')}`);
     }
-    expect(text).toContain('Possibly for you');
+    expect(text).toContain("Vous concerne peut-être");
     for (const message of [root, otherAnswer]) expect(text).not.toContain(message.text);
     expect(text).not.toContain('Thanks');
     expect(text).not.toContain('confirm the owner?');
@@ -668,7 +669,7 @@ it('keeps a follow-up request when the model cites the asker’s intervening exp
   }));
   const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
   try {
-    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    await h.click((await h.dm("slack canaux")).message.buttons![0]!);
     const result = await h.dm('slack unanswered');
     expect(result.message.text).toContain(followup.text);
   } finally { await h.close(); }
@@ -703,7 +704,7 @@ it('keeps direct follow-up requests but filters obvious thanks without AI budget
   }));
   const h = await harness({ ...env, OPENAI_API_KEY: 'fake', AI_MONTHLY_LIMIT_USD: '0' });
   try {
-    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    await h.click((await h.dm("slack canaux")).message.buttons![0]!);
     const text = (await h.dm('slack unanswered')).message.text;
     expect(text).toContain('can you send the source file?');
     expect(text).toContain('can you check the totals?');
@@ -712,7 +713,7 @@ it('keeps direct follow-up requests but filters obvious thanks without AI budget
     expect(text).not.toContain('Thanks for the update');
     expect(text).not.toContain(unnamed.text);
     expect(text).not.toContain(root.text);
-    expect(text).toContain('Follow-up resolution could not be fully checked');
+    expect(text).toContain("Les messages qui pourraient vous concerner et les demandes de suivi n’ont pas pu être entièrement vérifiés");
     expect(paidCalls).toBe(0);
   } finally { await h.close(); }
 });
@@ -738,11 +739,11 @@ it('keeps direct matches and discloses incomplete contextual search when the sha
   }));
   const h = await harness({ ...env, OPENAI_API_KEY: 'fake', AI_MONTHLY_LIMIT_USD: '0' });
   try {
-    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    await h.click((await h.dm("slack canaux")).message.buttons![0]!);
     const result = await h.dm('slack unanswered');
     expect(result.actor).toEqual(alice);
     expect(result.message.text).toContain('please review the draft');
-    expect(result.message.text).toContain('Possibly for you could not be fully checked');
+    expect(result.message.text).toContain("Les messages qui pourraient vous concerner et les demandes de suivi n’ont pas pu être entièrement vérifiés");
     expect(result.message.text).not.toContain('owner approve');
     expect(paidCalls).toBe(0);
   } finally { await h.close(); }
@@ -753,14 +754,19 @@ it('does not pay for the same contextual classification again after Slack reject
   const old = { type: 'message', ts: `${now - 60 * 60 * 60}.000001`, user: 'UTHIRD', text: 'Alice owns the release.', reply_count: 1, latest_reply: `${now - 10}.000001` };
   const candidate = { type: 'message', ts: `${now - 10}.000001`, user: 'UAUTHOR', text: 'Can the owner send the release report?' };
   let paidCalls = 0;
+  let countedBody: any;
   vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
     const request = new URL(url), method = request.pathname.split('/').at(-1);
     if (request.hostname === 'api.openai.com') {
-      if (method === 'input_tokens') return Response.json({ input_tokens: 100 });
+      if (method === 'input_tokens') {
+        countedBody = JSON.parse(String(options?.body));
+        expect(countedBody.instructions).toContain('Write every reason in French');
+        return Response.json({ input_tokens: 100 });
+      }
       paidCalls++;
       const id = JSON.parse(JSON.parse(String(options?.body)).input).candidates[0].id;
       return Response.json({ status: 'completed', usage: { input_tokens: 100, output_tokens: 40 },
-        output: [{ content: [{ type: 'output_text', text: JSON.stringify({ results: [{ id, decision: 'clear', evidenceTs: old.ts, reason: 'Alice owns the release.' }] }) }] }] });
+        output: [{ content: [{ type: 'output_text', text: JSON.stringify({ results: [{ id, decision: 'possible', evidenceTs: old.ts, reason: 'Alice owns the release.' }] }) }] }] });
     }
     if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
     if (method === 'users.info') return Response.json({ ok: true, user: { profile: request.searchParams.get('user') === 'UALICE'
@@ -772,29 +778,37 @@ it('does not pay for the same contextual classification again after Slack reject
   }));
   const h = await harness({ ...env, OPENAI_API_KEY: 'fake' });
   try {
-    await h.click((await h.dm('slack channels')).message.buttons![0]!);
+    await h.click((await h.dm("slack canaux")).message.buttons![0]!);
     h.rejectNextDelivery();
     await h.postDm('slack unanswered');
     await h.drain();
     expect(h.messages).toHaveLength(2);
+    const legacyHash = createHash('sha256').update(JSON.stringify({ ...countedBody, instructions: countedBody.instructions.replace(' Write every reason in French; preserve quoted Slack content and schema values.', '') })).digest('hex');
+    await sql.query("UPDATE slack_ai_attempts SET input_hash=$1 WHERE status='complete'", [legacyHash]);
+    const retainedPages = [{ text: 'Old retained result: owner send the release report [Open message](https://example.slack.com/archives/CPUBLIC/p1)', channels: ['CPUBLIC'], selected: ['CPUBLIC'] }];
+    await sql.query('UPDATE slack_unanswered_results SET pages=$1', [JSON.stringify(retainedPages)]);
     await sql.query("UPDATE jobs SET available_at=now() WHERE module='slack' AND status='queued'");
     const restarted = await harness({ ...env, OPENAI_API_KEY: 'fake' });
     try {
       await restarted.drain();
       expect(restarted.messages).toHaveLength(1);
       expect(restarted.messages[0]!.message.text).toContain('owner send the release report');
+      expect(restarted.messages[0]!.message.text).toContain(retainedTextNotice);
+      expect((await sql.query('SELECT pages FROM slack_unanswered_results')).rows[0].pages).toEqual(retainedPages);
       const original = (await sql.query("SELECT id,created_at FROM jobs WHERE module='slack' AND id LIKE 'slack:%' ORDER BY created_at DESC LIMIT 1")).rows[0]!;
       await sql.query('DELETE FROM slack_unanswered_results WHERE event_id=$1', [original.id]);
       await restarted.postAction({ label: 'Old page', action: 'slack:unanswered_page',
         value: `${new Date(original.created_at).getTime()}|0` }, alice, restarted.messages[0]!.ts);
       await restarted.drain();
       expect(restarted.messages.at(-1)?.message.text).toContain('owner send the release report');
+      expect(restarted.messages.at(-1)?.message.text).toContain(escapeCardValue(`${retainedTextNotice} Alice owns the release.`));
+      expect((await sql.query('SELECT result,input_hash FROM slack_ai_attempts')).rows[0]).toMatchObject({ input_hash: legacyHash, result: { results: [{ reason: 'Alice owns the release.' }] } });
       await sql.query('DELETE FROM slack_unanswered_results WHERE event_id=$1', [original.id]);
       await sql.query('DELETE FROM slack_ai_attempts WHERE event_id=$1', [original.id]);
       await restarted.postAction({ label: 'Old page', action: 'slack:unanswered_page',
         value: `${new Date(original.created_at).getTime()}|0` }, alice, restarted.messages[0]!.ts);
       await restarted.drain();
-      expect(restarted.messages.at(-1)?.message.text).toContain('Older contextual results could not be restored');
+      expect(restarted.messages.at(-1)?.message.text).toContain('Les anciens résultats contextuels ne peuvent pas être restaurés');
     } finally { await restarted.close(); }
     expect(paidCalls).toBe(1);
   } finally { await h.close(); }

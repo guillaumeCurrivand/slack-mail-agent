@@ -3,14 +3,15 @@ import type { MenuPage } from '../../core/navigation.js';
 import { cellText, escapeCardValue, validResourceUrl, type MessageTable, type TableCell } from '../../core/slack.js';
 import { recordTitle, type InventoryValues, type RecordKind } from './domain.js';
 import type { Confirmation, DocumentationStore } from './store.js';
+import { formatNumber } from '../../core/presentation.js';
 
 type Kind = 'project' | RecordKind;
 type RecordView = { id: string; kind: Kind; fields: InventoryValues; archived: boolean };
-const labels: Record<string, string> = { name: 'Name', aliases: 'Aliases', description: 'Description', repositories: 'Repositories', documentationLinks: 'Documentation links', notes: 'Notes', projectId: 'Project', type: 'Type', technologies: 'Technologies', componentId: 'Component', serviceId: 'Host/service', environment: 'Environment', accountReference: 'Account reference', urls: 'URLs', accessInstructions: 'Access instructions', category: 'Category', role: 'Role', monthlyCost: 'Monthly cost', currency: 'Currency', usage: 'Usage', referent: 'Referent', companyWide: 'Company-wide', projects: 'Projects', archived: 'Archived' };
+const labels: Record<string, string> = { name: "Nom", aliases: "Alias", description: "Description", repositories: "Dépôts", documentationLinks: "Liens de documentation", notes: "Notes", projectId: "Projet", type: "Type", technologies: "Technologies", componentId: "Composant", serviceId: "Hébergeur/service", environment: "Environnement", accountReference: "Référence du compte", urls: 'URLs', accessInstructions: "Instructions d’accès", category: "Catégorie", role: "Rôle", monthlyCost: "Coût mensuel", currency: "Devise", usage: "Utilisation", referent: "Référent", companyWide: "Toute l’entreprise", projects: "Projets", archived: "Archivé" };
 const referenceKinds: Record<string, Kind> = { projectId: 'project', projects: 'project', componentId: 'component', serviceId: 'host', technologies: 'technology' };
 const urlFields = new Set(['repositories', 'documentationLinks', 'urls']);
 const title = (field: string) => labels[field] ?? field;
-const abbreviation = (text: string, limit = 180) => text.length > limit ? `${text.slice(0, limit)}… [abbreviated; open record details]` : text;
+const abbreviation = (text: string, limit = 180) => text.length > limit ? `${text.slice(0, limit)}… [abrégé ; ouvrir les détails de la fiche]` : text;
 export const tableSize = (table: MessageTable) => table.columns.join('').length + table.rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0);
 
 /** Module-owned names, relationships and values. The transport only receives literal cells. */
@@ -24,36 +25,36 @@ export class InventoryPresentation {
   }
   async name(kind: Kind, id: string, historical = false): Promise<string> {
     const record = await this.record(kind, id);
-    if (!record) return 'Referenced record unavailable';
-    let name = String(record.fields.name ?? record.fields.environment ?? 'Unknown environment') || 'Empty environment';
+    if (!record) return "Fiche référencée indisponible";
+    let name = String(record.fields.name ?? record.fields.environment ?? "Environnement inconnu") || "Environnement vide";
     if (kind === 'component') name = `${await this.name('project', String(record.fields.projectId))} / ${name}`;
     if (kind === 'hosting') name = `${await this.name('component', String(record.fields.componentId))} / ${name} / ${await this.name('host', String(record.fields.serviceId))}`;
-    return `${name}${record.archived ? ' [Archived]' : ''}${historical ? ' (current name)' : ''}`;
+    return `${name}${record.archived ? " [Archivé]" : ''}${historical ? " (nom actuel)" : ''}`;
   }
   private links(urls: string[], field: string, exact = false, summary = false): TableCell {
-    if (!urls.length) return 'None recorded';
+    if (!urls.length) return "Aucun élément enregistré";
     const parts = (summary ? urls.slice(0, 1) : urls).flatMap((url, index) => {
       let label = url;
-      if (!exact && validResourceUrl(url)) { const parsed = new URL(url); label = `${field === 'repositories' ? 'Repository' : field === 'documentationLinks' ? 'Documentation' : 'Open'}: ${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`; }
+      if (!exact && validResourceUrl(url)) { const parsed = new URL(url); label = `${field === 'repositories' ? "Dépôt" : field === 'documentationLinks' ? 'Documentation' : "Ouvrir"}: ${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`; }
       return [...(index ? [{ text: '\n' }] : []), { text: summary ? abbreviation(label, 100) : label, ...(validResourceUrl(url) ? { url } : {}) }];
     });
-    return summary && urls.length > 1 ? [...parts, { text: `\n+ ${urls.length - 1} more links (open record details)` }] : parts;
+    return summary && urls.length > 1 ? [...parts, { text: `\n+ ${urls.length - 1} autres liens (ouvrir les détails de la fiche)` }] : parts;
   }
   async value(field: string, value: unknown, historical = false): Promise<TableCell> {
-    if (value === null || value === undefined) return 'Unknown';
+    if (value === null || value === undefined) return "Inconnu";
     if (referenceKinds[field]) {
       const refs = Array.isArray(value) ? value : [value];
-      return refs.length ? (await Promise.all(refs.map(ref => this.name(referenceKinds[field]!, String(ref), historical)))).join('\n') : 'None recorded';
+      return refs.length ? (await Promise.all(refs.map(ref => this.name(referenceKinds[field]!, String(ref), historical)))).join('\n') : "Aucun élément enregistré";
     }
     if (urlFields.has(field) && Array.isArray(value)) return this.links(value, field, historical);
-    if (Array.isArray(value)) return value.length ? value.join('\n') : 'None recorded';
-    if (value === '') return '(empty)';
-    return String(value);
+    if (Array.isArray(value)) return value.length ? value.join('\n') : "Aucun élément enregistré";
+    if (value === '') return "(vide)";
+    return typeof value === 'boolean' ? value ? 'Oui' : 'Non' : typeof value === 'number' ? formatNumber(value) : String(value);
   }
   async values(fields: InventoryValues, before?: InventoryValues | null, savedReferences = false): Promise<MessageTable> {
     const comparison = before !== undefined;
-    const rows = await Promise.all(Object.entries(fields).map(async ([field, value]) => [title(field), ...(comparison ? [before === null ? 'No record' : await this.value(field, before[field], true)] : []), await this.value(field, value, comparison || savedReferences)]));
-    return { columns: comparison ? ['Field', 'Before', 'After'] : ['Field', 'Value'], rows };
+    const rows = await Promise.all(Object.entries(fields).map(async ([field, value]) => [title(field), ...(comparison ? [before === null ? "Aucune fiche" : await this.value(field, before[field], true)] : []), await this.value(field, value, comparison || savedReferences)]));
+    return { columns: comparison ? ["Champ", "Avant", "Après"] : ["Champ", "Valeur"], rows };
   }
   async details(fields: InventoryValues): Promise<Pick<MenuPage, 'text' | 'table'>> {
     const short: InventoryValues = {}, paragraphs: string[] = [];
@@ -65,28 +66,28 @@ export class InventoryPresentation {
   }
   async confirmation(saved: Confirmation): Promise<Pick<MenuPage, 'text' | 'table'>> {
     const table = await this.values(saved.fields, saved.operation === 'edit' ? saved.before_values : undefined, true);
-    if (saved.operation === 'edit' && saved.before_values === null) table.rows = table.rows.map(row => [row[0]!, 'Unavailable (original values were not saved)', row[2]!]);
-    const text = saved.operation === 'edit' && saved.before_values === null ? 'Before: Unavailable for this older confirmation; original values were not saved.' : '';
-    return tableSize(table) > 8500 ? { text: `${text}\nThe full saved values span several pages. Open Review values to inspect them before confirming.`.trim() } : { table, text };
+    if (saved.operation === 'edit' && saved.before_values === null) table.rows = table.rows.map(row => [row[0]!, "Indisponible (valeurs d’origine non enregistrées)", row[2]!]);
+    const text = saved.operation === 'edit' && saved.before_values === null ? "Avant : indisponible pour cette ancienne confirmation ; les valeurs d’origine n’ont pas été enregistrées." : '';
+    return tableSize(table) > 8500 ? { text: `${text}\nLes valeurs enregistrées occupent plusieurs pages. Ouvrez Examiner les valeurs pour les consulter avant de confirmer.`.trim() } : { table, text };
   }
   async list(records: RecordView[], destinations?: string[], archived = false): Promise<Pick<MenuPage, 'table' | 'recordChoices'>> {
     if (!records.length) return { recordChoices: [] };
     const kind = records[0]?.kind ?? 'project';
     const fields: Record<Kind, string[]> = { project: ['name', 'description', 'links'], technology: ['name', 'category'], component: ['name', 'projectId', 'type', 'technologies'], host: ['name', 'role', 'cost'], hosting: ['environment', 'componentId', 'serviceId', 'urls'], tool: ['name', 'category', 'usedBy', 'referent'] };
-    const columns = archived ? ['Kind', 'Name', 'Context'] : ({ project: ['Name', 'Description', 'Links'], technology: ['Name', 'Category'], component: ['Name', 'Project', 'Type', 'Technologies'], host: ['Name', 'Role', 'Monthly cost'], hosting: ['Environment', 'Project / Component', 'Host/service', 'URLs'], tool: ['Name', 'Category', 'Used by', 'Referent'] })[kind];
+    const columns = archived ? ["Type de fiche", "Nom", "Contexte"] : ({ project: ["Nom", "Description", "Liens"], technology: ["Nom", "Catégorie"], component: ["Nom", "Projet", "Type", "Technologies"], host: ["Nom", "Rôle", "Coût mensuel"], hosting: ["Environnement", "Projet / Composant", "Hébergeur/service", 'URLs'], tool: ["Nom", "Catégorie", "Utilisé par", "Référent"] })[kind];
     const rows = await Promise.all(records.map(async record => {
-      if (archived) return [recordTitle(record.kind), `${String(record.fields.name ?? record.fields.environment ?? 'Unknown environment')} [Archived]`, await this.name(record.kind, record.id)];
+      if (archived) return [recordTitle(record.kind), `${String(record.fields.name ?? record.fields.environment ?? "Environnement inconnu")} [Archivé]`, await this.name(record.kind, record.id)];
       return Promise.all(fields[kind].map(async field => {
         if (field === 'links') {
           const urls = [...(record.fields.repositories as string[] ?? []), ...(record.fields.documentationLinks as string[] ?? [])];
           const unknown = record.fields.repositories == null || record.fields.documentationLinks == null;
-          return urls.length ? this.links(urls, field, false, true) : unknown ? 'Unknown' : 'None recorded';
+          return urls.length ? this.links(urls, field, false, true) : unknown ? "Inconnu" : "Aucun élément enregistré";
         }
-        if (field === 'urls') return record.fields.urls == null ? 'Unknown' : this.links(record.fields.urls as string[], field, false, true);
-        if (field === 'cost') return record.fields.monthlyCost == null ? 'Unknown' : `${record.fields.monthlyCost} ${record.fields.currency}`;
-        if (field === 'usedBy') return `${record.fields.companyWide === true ? 'Company-wide\n' : record.fields.companyWide === null ? 'Company-wide: Unknown\n' : ''}${cellText(await this.value('projects', record.fields.projects))}`;
+        if (field === 'urls') return record.fields.urls == null ? "Inconnu" : this.links(record.fields.urls as string[], field, false, true);
+        if (field === 'cost') return record.fields.monthlyCost == null ? "Inconnu" : `${formatNumber(Number(record.fields.monthlyCost))} ${record.fields.currency}`;
+        if (field === 'usedBy') return `${record.fields.companyWide === true ? "Toute l’entreprise\n" : record.fields.companyWide === null ? "Toute l’entreprise : inconnu\n" : ''}${cellText(await this.value('projects', record.fields.projects))}`;
         const value = await this.value(field, record.fields[field]);
-        return typeof value === 'string' ? abbreviation(value) + ((field === 'name' || field === 'environment') && record.archived ? ' [Archived]' : '') : value;
+        return typeof value === 'string' ? abbreviation(value) + ((field === 'name' || field === 'environment') && record.archived ? " [Archivé]" : '') : value;
       }));
     }));
     // Cap list summaries while keeping all eight records and every destination available.
@@ -122,10 +123,26 @@ export function valuePages(content: MenuPage): MenuPage[] {
     });
     const count = Math.max(...chunks.map(parts => parts.length));
     for (let i = 0; i < count; i++) {
-      const piece = chunks.map((parts, index) => parts[i] ?? (index === 0 ? `${cellText(row[0]!)} (continued)` : ''));
+      const piece = chunks.map((parts, index) => parts[i] ?? (index === 0 ? `${cellText(row[0]!)} (suite)` : ''));
       if (tableSize({ ...tables.at(-1)!, rows: [...tables.at(-1)!.rows, piece] }) > 8500) tables.push({ columns: content.table.columns, rows: [] });
       tables.at(-1)!.rows.push(piece);
     }
   }
-  return Array.from({ length: Math.max(textPages.length, tables.length) }, (_, index) => ({ ...content, text: textPages[index] ?? 'Complete saved values (continued).', table: tables[index] }));
+  return Array.from({ length: Math.max(textPages.length, tables.length) }, (_, index) => ({ ...content, text: textPages[index] ?? "Valeurs enregistrées complètes (suite).", table: tables[index] }));
+}
+
+const operations: Record<string, string> = { create: "créer", edit: "modifier", archive: "archiver", restore: "restaurer" };
+export const stateLabel = (value: string) => operations[value] ?? value;
+
+/** Translate application-written audit prefixes, preserving imported source references. */
+export function sourceLabel(value: string): string {
+  const slack = /^(Slack structured|Slack natural-language)(?: (creation|edit|archive|restore))?$/.exec(value);
+  if (slack) {
+    const operation: Record<string, string> = { creation: 'création', edit: 'modification', archive: 'archivage', restore: 'restauration' };
+    return `${slack[1] === 'Slack structured' ? 'Commande structurée Slack' : 'Demande Slack en langage naturel'}${slack[2] ? ` — ${operation[slack[2]]}` : ''}`;
+  }
+  return value.replace(/^Slack structured(?=\s|$)/, 'Commande structurée Slack')
+    .replace(/^Slack natural-language(?=\s|$)/, 'Demande Slack en langage naturel')
+    .replace(/^Spreadsheet import(?=\s|$)/, 'Import de feuille de calcul')
+    .replace(/; batch /g, '; lot ').replace(/; effect /g, '; effet ');
 }

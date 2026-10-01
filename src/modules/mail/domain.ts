@@ -2,7 +2,7 @@ import type { Actor } from '../../core/identity.js';
 export { ownerKey, uid, type Actor } from '../../core/identity.js';
 import { z } from 'zod';
 
-export const labelSchema = z.string().min(1).max(100).refine(v => !/[\x00-\x1f]/.test(v) && !/^(INBOX|TRASH|SPAM|UNREAD|STARRED|IMPORTANT|SENT|DRAFT|CATEGORY_.*)$/i.test(v), 'Use a custom Gmail label');
+export const labelSchema = z.string().min(1).max(100).refine(v => !/[\x00-\x1f]/.test(v) && !/^(INBOX|TRASH|SPAM|UNREAD|STARRED|IMPORTANT|SENT|DRAFT|CATEGORY_.*)$/i.test(v), "Utilisez un libellé Gmail personnalisé");
 export const ruleSchema = z.object({
   name: z.string().min(1).max(100), category: z.enum(['urgent', 'project', 'newsletter', 'custom']),
   kind: z.enum(['sender', 'semantic']), condition: z.string().min(1).max(1200),
@@ -19,9 +19,9 @@ export type Item = {
   status: 'pending' | 'skipped' | 'prepared' | 'applied' | 'conflict' | 'unknown' | 'undo_prepared' | 'undone';
   add?: string[]; remove?: string[]; after?: string[]; afterHistory?: string; note?: string;
 };
-export type Run = { id: string; created: string; ruleVersion: number; connectionId: string; status: 'scanning' | 'preview' | 'applying' | 'done' | 'undoing' | 'undone' | 'cancelled'; items: Item[]; correction?: boolean; sourceId?: string; messageIds?: string[]; newLabels?: string[] };
+export type Run = { id: string; created: string; ruleVersion: number; connectionId: string; status: 'scanning' | 'preview' | 'applying' | 'done' | 'undoing' | 'undone' | 'cancelled'; items: Item[]; language?: 'fr'; correction?: boolean; sourceId?: string; messageIds?: string[]; newLabels?: string[] };
 export type Connection = { id: string; subject: string; email: string; encryptedTokens: string };
-export type Draft = { id: string; created: string; kind: 'rules' | 'delete' | 'connection'; rules?: RuleInput[]; replaceId?: string; ruleId?: string; connection?: Connection };
+export type Draft = { id: string; created: string; kind: 'rules' | 'delete' | 'connection'; language?: 'fr'; rules?: RuleInput[]; replaceId?: string; ruleId?: string; connection?: Connection };
 export type UserState = { rules: Rule[]; ruleVersion: number; drafts: Draft[]; runs: Run[]; history: { role: 'user' | 'assistant'; content: string; at: string }[]; connection?: Connection; handled: string[] };
 export const emptyState = (): UserState => ({ rules: [], ruleVersion: 0, drafts: [], runs: [], history: [], handled: [] });
 export const currentPreview = (state: UserState, run: Run, now = Date.now()) =>
@@ -34,15 +34,15 @@ export const senderAddress = (from: string) => (from.match(/<([^<>]+)>/)?.[1] ??
 
 export function validateRule(value: unknown): RuleInput {
   const rule = ruleSchema.parse(value);
-  if (rule.kind === 'sender' && !rule.senders.length) throw new Error('A sender rule needs at least one email address.');
-  if (rule.kind === 'semantic' && rule.senders.length) throw new Error('Put sender conditions in the semantic description or use a sender rule.');
+  if (rule.kind === 'sender' && !rule.senders.length) throw new Error("Une règle d’expéditeur nécessite au moins une adresse e-mail.");
+  if (rule.kind === 'semantic' && rule.senders.length) throw new Error("Ajoutez les conditions d’expéditeur dans la description ou utilisez une règle d’expéditeur.");
   return rule;
 }
 
 export function planMessage(mail: Mail, rules: Rule[], semantic: Match[]): Plan {
   const matches = rules.map(rule => rule.kind === 'sender'
-    ? { ruleId: rule.id, decision: (rule.senders.map(s => s.toLowerCase()).includes(senderAddress(mail.from)) ? 'yes' : 'no') as Match['decision'], reason: 'Exact sender mapping' }
-    : semantic.find(m => m.ruleId === rule.id) ?? { ruleId: rule.id, decision: 'uncertain' as const, reason: 'No classification available' });
+    ? { ruleId: rule.id, decision: (rule.senders.map(s => s.toLowerCase()).includes(senderAddress(mail.from)) ? 'yes' : 'no') as Match['decision'], reason: "Correspondance exacte de l’expéditeur" }
+    : semantic.find(m => m.ruleId === rule.id) ?? { ruleId: rule.id, decision: 'uncertain' as const, reason: "Aucune classification disponible" });
   // Uncertain matches contribute a candidate action, never automatic permission.
   // The preview remains excluded until the owner explicitly accepts that candidate.
   const chosen = rules.filter(r => matches.some(m => m.ruleId === r.id && m.decision !== 'no'));
@@ -57,15 +57,15 @@ export function planMessage(mail: Mail, rules: Rule[], semantic: Match[]): Plan 
     disposition: trash ? 'trash' : archive && !chosen.some(r => r.action === 'keep') ? 'archive' : 'keep',
     needsDecision: uncertain,
     reasons: [...matches.filter(m => m.decision !== 'no').map(m => `${rules.find(r => r.id === m.ruleId)?.name}: ${m.reason}`),
-      ...(ambiguousProjects ? ['Several project mappings match; choose the project.'] : []),
-      ...(conflicting ? ['Keep and Trash rules conflict.'] : []),
-      ...(mail.oversized ? ['Message is too large to classify completely.'] : [])],
+      ...(ambiguousProjects ? ["Plusieurs associations de projets correspondent ; choisissez le projet."] : []),
+      ...(conflicting ? ["Les règles de conservation et de mise à la corbeille sont contradictoires."] : []),
+      ...(mail.oversized ? ["Le message est trop long pour une classification complète."] : [])],
   };
 }
 
 export function starterRules(): RuleInput[] {
   return [
-    { name: 'Urgent', kind: 'semantic', category: 'urgent', condition: 'Requires time-sensitive attention or action from the recipient. Marketing urgency alone is not urgent.', senders: [], labels: ['Urgent'], action: 'keep', examples: ['A client needs a response today → Urgent, keep in inbox.', 'A promotion says last chance → not urgent by itself.'] },
-    { name: 'Newsletters', kind: 'semantic', category: 'newsletter', condition: 'Recurring promotional newsletter or digest. Exclude receipts, invoices, security alerts, transactional notifications, urgent messages and project-related messages.', senders: [], labels: [], action: 'trash', examples: ['A recurring promotional digest → propose Trash.', 'An invoice or password alert → leave alone.'] },
+    { name: 'Urgent', kind: 'semantic', category: 'urgent', condition: "Nécessite une attention ou une action rapide du destinataire. L’urgence commerciale seule ne suffit pas.", senders: [], labels: ['Urgent'], action: 'keep', examples: ["Un client attend une réponse aujourd’hui → Urgent, conserver dans la boîte de réception.", "Une promotion annonce une dernière chance → cela ne suffit pas à la rendre urgente."] },
+    { name: "Lettres d’information", kind: 'semantic', category: 'newsletter', condition: "Lettre d’information promotionnelle ou récapitulatif récurrent. Exclure reçus, factures, alertes de sécurité, notifications transactionnelles, messages urgents et liés aux projets.", senders: [], labels: [], action: 'trash', examples: ["Un récapitulatif promotionnel récurrent → proposer la corbeille.", "Une facture ou une alerte de mot de passe → ne pas modifier."] },
   ];
 }

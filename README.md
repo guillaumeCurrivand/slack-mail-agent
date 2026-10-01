@@ -2,6 +2,8 @@
 
 A private Slack assistant for a 10-person Google Workspace team, organized into independently enabled modules. Mail Sorter is the first module. Users connect their own Gmail account, approve personal rules, request a preview of their latest 100 inbox messages, and confirm before any messages are labeled, archived, or moved to Trash.
 
+The application-owned interface is French. Original inventory values, approved rules, message excerpts and URLs remain literal. Dates display `DD/MM/YYYY HH:mm (Europe/Paris)` and numbers use French separators. Buttons share horizontal action rows; Slack can wrap them on narrow clients, and Documentation's record selector stays separate. English commands remain compatible alongside the French shortcuts below. See the [presentation contract](docs/product-spec.md#interactive-message-presentation).
+
 The [approved product specification](docs/product-spec.md) describes the scope. The application is implemented locally; a real Slack/Google/OpenAI deployment and model-quality evaluation are still required before team rollout.
 
 ## Documentation map
@@ -80,7 +82,7 @@ https://YOUR_HOST/auth/google/callback
 
 Set `GOOGLE_CLIENT_ID`, `GOOGLE_CLIENT_SECRET`, and the comma-separated `GOOGLE_WORKSPACE_DOMAINS`. These are Google's verified hosted-domain values, not merely email suffixes. Request `openid`, `email`, and `https://www.googleapis.com/auth/gmail.modify`. Your Workspace administrator may need to allow the app and scope. Internal-app eligibility and organization policies must be checked in your own Google Cloud/Workspace configuration.
 
-Each teammate opens `menu` → Mail Sorter → Gmail connection → Connect Gmail (or sends `mail connect`), follows their short-lived link, grants access using their own Workspace account, and confirms the resulting email address back in Slack. Authorization is not activated until this last confirmation. An account cannot be activated for two Slack users in the configured workspace.
+Each teammate opens `menu` → Tri des e-mails → Connexion Gmail → Connecter Gmail (or sends `courrier connecter`), follows their short-lived link, grants access using their own Workspace account, and confirms the resulting email address back in Slack. Authorization is not activated until this last confirmation. An account cannot be activated for two Slack users in the configured workspace.
 
 `mail disconnect` removes the application's active credentials and cancels pending previews after confirmation. It leaves rules in place. Users can additionally revoke the OAuth grant in their Google account. Historical encrypted credentials may remain in database backups until their retention period expires.
 
@@ -96,25 +98,27 @@ The limit governs this app's recorded generation usage at its configured prices.
 
 ## Using it
 
-Send `menu`, `help`, `hello` or `hi` to open a private menu. Click an enabled Module, Budget or Help; Back navigation updates that same message. Mail Sorter → Gmail connection shows connection status and offers Connect Gmail or confirmed disconnect. Google sign-in still opens externally, and the resulting mailbox still needs your approval in Slack. Mail workflow Cards include Menu buttons that open separate navigation without replacing the Card.
+Send `menu`, `aide`, `bonjour` or `salut` to open a private menu; `help`, `hello` and `hi` remain compatible. Click an enabled Module, Budget or Aide; Retour navigation updates that same message. Tri des e-mails → Connexion Gmail shows connection status and offers Connecter Gmail or confirmed disconnect. Google sign-in still opens externally, and the resulting mailbox still needs your approval in Slack. Mail workflow Cards include Menu buttons that open separate navigation without replacing the Card.
 
-Mail Sorter also offers Manage rules, Latest report and Pending approvals when needed. Rule lists paginate in place and summarize long fields. Add/Edit gives instructions for a `mail`-prefixed description; starter rules and removal still need separate approval. Saved Proposals, Previews and Reports reopen as separate Cards without new AI work or extended validity. Expired or invalidated approvals cannot be reopened as current work.
+Tri des e-mails also offers Gérer les règles, Dernier rapport and Approbations en attente when needed. Rule lists paginate in place and summarize long fields. Add/Edit gives instructions for a `courrier`-prefixed description; starter rules and removal still need separate approval. Saved Proposals, Previews and Reports reopen as separate Cards without new AI work or extended validity. Old generated text keeps its original language with a French notice; approved values and posted messages are not rewritten. Expired or invalidated approvals cannot be reopened as current work.
 
-Mail Sorter → Sort inbox and Slack Unanswered → Find unanswered start their existing work immediately. The corresponding `mail sort` and `slack unanswered` shortcuts use the same active-operation admission: another request received while that User's operation is queued, running or retrying reports the original request. After completion or terminal failure, a deliberate new request can start. A Preview still requires separate approval before Gmail changes. Slack search still uses the original request time for its 48-hour window; paging its saved result does not rerun classification or spend AI, and checks current channel access before showing excerpts. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation and the other Module can continue during a long provider call.
+Tri des e-mails → Trier la boîte de réception and Messages Slack sans réponse → Chercher les messages sans réponse start their existing work immediately. The corresponding `courrier trier` and `slack sans-réponse` shortcuts, and their English forms, use the same active-operation admission: another request received while that User's operation is queued, running or retrying reports the original request. After completion or terminal failure, a deliberate new request can start. A Preview still requires separate approval before Gmail changes. Slack search still uses the original request time for its 48-hour window; paging its saved result does not rerun classification or spend AI, and checks current channel access before showing excerpts. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation and the other Module can continue during a long provider call.
 
 Send these in a private conversation with the bot. Every module request, including natural-language follow-ups, needs its prefix; the assistant does not remember an active module:
 
-- `mail connect`: connect Gmail.
-- `mail starters`: review Urgent and Newsletter templates; describe project names and exact sender addresses separately.
-- `mail rules`: inspect approved rules and their IDs.
-- `mail sort`: scan the latest 100 inbox messages and receive a preview.
-- `mail report`: inspect the latest run, open detailed pages, or undo a completed run.
-- `mail details <run-id> <page>`: open a retained run's details (page numbers start at zero).
-- `help`: list enabled modules; `mail help` shows mail commands.
+- `courrier connecter`: connect Gmail.
+- `courrier modèles`: review Urgent and Lettres d’information templates; describe project names and exact sender addresses separately.
+- `courrier règles`: inspect approved rules and their IDs.
+- `courrier trier`: scan the latest 100 inbox messages and receive a preview.
+- `courrier rapport`: inspect the latest run, open detailed pages, or undo a completed run.
+- `courrier détails <run-id> <page>`: open a retained run's details (page numbers start at zero).
+- `aide`: list enabled modules; `courrier aide` shows mail commands.
 - `budget`: see shared recorded and reserved AI usage without paying for a model call.
-- `mail disconnect`: propose disconnecting Gmail.
+- `courrier déconnecter`: propose disconnecting Gmail.
+- `slack canaux` / `slack sans-réponse`: choose sources, then search their unanswered messages.
+- `documentation aide` / `documentation projets` / `documentation projet <cible>`: browse shared inventory. Use `documentation créer projet {"name":"Alpha"}` or `documentation modifier projet Alpha {"notes":null}` for separately confirmed changes. JSON keys remain English. See [Documentation](docs/documentation.md) for all French aliases and compatible English commands.
 
-Natural-language examples: “mail Label messages from alex@example.com as Projects/Alpha and keep them in my inbox.” “mail Change my newsletter rule to exclude product announcements.” “mail For message `<message-id>` in run `<run-id>`, remove the Urgent label and keep it in my inbox.” Corrections have their own confirmation preview; a future-rule change requires separate approval.
+Natural-language examples: “courrier Applique le libellé Projects/Alpha aux messages de alex@example.com et conserve-les dans ma boîte de réception.” “courrier Modifie ma règle de lettres d’information pour exclure les annonces de produits.” “courrier Pour le message `<message-id>` du traitement `<run-id>`, retire le libellé Urgent et conserve-le dans ma boîte de réception.” Corrections have their own confirmation preview; a future-rule change requires separate approval.
 
 Previews show proposed label creation, archive and Trash counts, and paginated message explanations. Uncertain messages are excluded until explicitly included using their individual proposal button. Confirmation applies only the saved run. Changing rules or reconnecting Gmail invalidates old previews, which also expire after 24 hours.
 

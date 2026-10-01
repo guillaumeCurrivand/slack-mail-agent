@@ -1,3 +1,4 @@
+import { formatDate, retainedTextNotice } from '../../core/presentation.js';
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, JobPayload, ModuleContext } from '../../core/modules.js';
 import { boundMenuTarget } from '../../core/navigation.js';
@@ -29,33 +30,33 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
 
   async function sendUnansweredPage(actor: Actor, sourceId: string, requestedPage: number, context: ModuleContext) {
     const pages = await savedResults.load(actor, sourceId);
-    if (!pages?.length) return context.messenger.send(actor, { text: 'These results are unavailable. Run slack unanswered again.', buttons: [menuButton] });
+    if (!pages?.length) return context.messenger.send(actor, { text: "Ces résultats sont indisponibles. Relancez slack sans-réponse.", buttons: [menuButton] });
     const page = Math.min(requestedPage, pages.length - 1);
     const saved = pages[page]!;
     if (!Array.isArray(saved.selected) || !Array.isArray(saved.channels)) return context.messenger.send(actor, {
-      text: 'These results are unavailable. Run slack unanswered again.', buttons: [menuButton],
+      text: "Ces résultats sont indisponibles. Relancez slack sans-réponse.", buttons: [menuButton],
     });
     try {
       const selected = await selections.list(actor);
       const sameSelection = selected.length === saved.selected.length && selected.every((id, index) => id === saved.selected[index]);
       if (!sameSelection) return context.messenger.send(actor, {
-        text: 'A channel in these results is no longer selected or accessible. No message content was shown. Run slack unanswered again for current results.', buttons: [menuButton],
+        text: "Un canal de ces résultats n’est plus sélectionné ou accessible. Aucun contenu de message n’a été affiché. Relancez slack sans-réponse pour des résultats actuels.", buttons: [menuButton],
       });
       if (selected.length) {
         const available = new Set((await directory.listFor(actor.user)).map(channel => channel.id));
         const availableSources = selected.filter(id => available.has(id));
         const sameAccess = availableSources.length === saved.channels.length && availableSources.every((id, index) => id === saved.channels[index]);
         if (!sameAccess) return context.messenger.send(actor, {
-          text: 'A channel in these results is no longer selected or accessible. No message content was shown. Run slack unanswered again for current results.', buttons: [menuButton],
+          text: "Un canal de ces résultats n’est plus sélectionné ou accessible. Aucun contenu de message n’a été affiché. Relancez slack sans-réponse pour des résultats actuels.", buttons: [menuButton],
         });
       }
     } catch {
-      return context.messenger.send(actor, { text: 'Could not verify channel access for these results. Run slack unanswered again.', buttons: [menuButton] });
+      return context.messenger.send(actor, { text: "L’accès aux canaux de ces résultats n’a pas pu être vérifié. Relancez slack sans-réponse.", buttons: [menuButton] });
     }
     const buttons: Button[] = [];
-    if (page > 0) buttons.push({ label: 'Previous', action: 'unanswered_page', value: `${sourceId}|${page - 1}` });
-    if (page + 1 < pages.length) buttons.push({ label: 'Next', action: 'unanswered_page', value: `${sourceId}|${page + 1}` });
-    return context.messenger.send(actor, { kind: 'Unanswered for you', text: saved.text, buttons: [...buttons, menuButton] });
+    if (page > 0) buttons.push({ label: "Précédent", action: 'unanswered_page', value: `${sourceId}|${page - 1}` });
+    if (page + 1 < pages.length) buttons.push({ label: "Suivant", action: 'unanswered_page', value: `${sourceId}|${page + 1}` });
+    return context.messenger.send(actor, { kind: "Messages sans réponse", text: `${saved.language === 'fr' ? '' : `${retainedTextNotice}\n\n`}${saved.text}`, buttons: [...buttons, menuButton] });
   }
 
   async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchor: Date, requestedPage = 0, replayOnly = false) {
@@ -63,7 +64,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     let results;
     try { results = await unanswered.search(actor, anchor); }
     catch {
-      await context.messenger.send(actor, { text: 'Could not search Slack channels right now. Try slack unanswered again.', buttons: [menuButton] });
+      await context.messenger.send(actor, { text: "Impossible de rechercher dans les canaux Slack pour le moment. Réessayez slack sans-réponse.", buttons: [menuButton] });
       return;
     }
     const clear: UnansweredMatch[] = [...results.matches];
@@ -96,19 +97,19 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     const pageCount = Math.max(1, Math.ceil(entries.length / RESULT_PAGE_SIZE));
     const selectedCount = entries.length ? 0 : results.selected.length;
     const availableSources = results.available;
-    const pages: Array<{ text: string; channels: string[]; selected: string[] }> = [];
+    const pages: Array<{ text: string; channels: string[]; selected: string[]; language: 'fr' }> = [];
     const authors = new Map<string, string>();
     try {
       for (let page = 0; page < pageCount; page++) {
         const visible = entries.slice(page * RESULT_PAGE_SIZE, (page + 1) * RESULT_PAGE_SIZE);
-        const lines = [`Messages from the 48 hours before your command (page ${page + 1}/${pageCount}):`];
-        if (!entries.length) lines.push('No confirmed unanswered messages found in your selected channels.');
-        if (!entries.length && !selectedCount) lines.push('Choose sources with slack channels.');
+        const lines = [`Messages des 48 heures précédant votre commande (page ${page + 1}/${pageCount}):`];
+        if (!entries.length) lines.push("Aucun message confirmé sans réponse dans les canaux sélectionnés.");
+        if (!entries.length && !selectedCount) lines.push("Choisissez les sources avec slack canaux.");
         let previousChannel = '';
         let previousGroup = '';
         for (const { channel, message, group, reason } of visible) {
           if (group !== previousGroup) {
-            lines.push(group === 'clear' ? '*Unanswered for you*' : '*Possibly for you*');
+            lines.push(group === 'clear' ? "*Messages sans réponse*" : "*Vous concerne peut-être*");
             previousGroup = group; previousChannel = '';
           }
           if (channel.id !== previousChannel) lines.push(`*#${escapeCardValue(escapeSlack(channel.name))}*`);
@@ -117,21 +118,21 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
             const names = await history.profile(message.user).catch(() => []);
             authors.set(message.user, escapeCardValue(escapeSlack(names[0] ?? message.user)));
           }
-          const time = new Date(Number(message.ts) * 1000).toISOString().replace('T', ' ').slice(0, 16) + ' UTC';
+          const time = formatDate(Number(message.ts) * 1000);
           const excerpt = escapeCardValue(escapeSlack(message.text.replace(/\s+/g, ' ').slice(0, 220)));
           const link = await history.permalink(channel.id, message.ts);
-          lines.push(`• ${authors.get(message.user)} · ${time}: ${excerpt}${message.text.length > 220 ? '…' : ''} [Open message](${link})`);
-          if (group === 'possible') lines.push(`  Why it may concern you: ${escapeCardValue(escapeSlack(reason))}`);
+          lines.push(`• ${authors.get(message.user)} · ${time}: ${excerpt}${message.text.length > 220 ? '…' : ''} [Ouvrir le message](${link})`);
+          if (group === 'possible') lines.push(`  Pourquoi ce message pourrait vous concerner : ${escapeCardValue(escapeSlack(reason))}`);
         }
-        if (results.skipped.length) lines.push(`Skipped inaccessible selected channels: ${results.skipped.join(', ')}. Your selections are saved.`);
-        if (incomplete === 'budget') lines.push('Possibly for you could not be fully checked because the shared AI allowance is unavailable. Follow-up resolution could not be fully checked either. Direct mention and name matches are still shown.');
-        if (incomplete === 'provider') lines.push('Contextual matching and follow-up resolution could not be completed right now. Direct mention and name matches are still shown.');
-        if (incomplete === 'config') lines.push('Contextual matching and follow-up resolution are not configured. Direct mention and name matches are still shown.');
-        if (incomplete === 'saved') lines.push('Older contextual results could not be restored without new AI work. Direct mention and name matches are still shown. Run slack unanswered for a fresh search.');
-        pages.push({ text: lines.join('\n'), channels: availableSources, selected: results.selected });
+        if (results.skipped.length) lines.push(`Canaux sélectionnés inaccessibles ignorés : ${results.skipped.join(', ')}. Vos sélections sont conservées.`);
+        if (incomplete === 'budget') lines.push("Les messages qui pourraient vous concerner et les demandes de suivi n’ont pas pu être entièrement vérifiés car le budget d’IA partagé est indisponible. Les mentions directes et les correspondances de noms restent affichées.");
+        if (incomplete === 'provider') lines.push("L’analyse du contexte et des demandes de suivi n’a pas pu aboutir. Les mentions directes et les correspondances de noms restent affichées.");
+        if (incomplete === 'config') lines.push("L’analyse du contexte et des demandes de suivi n’est pas configurée. Les mentions directes et les correspondances de noms restent affichées.");
+        if (incomplete === 'saved') lines.push("Les anciens résultats contextuels ne peuvent pas être restaurés sans nouveau traitement d’IA. Les mentions directes et les correspondances de noms restent affichées. Relancez slack sans-réponse pour une nouvelle recherche.");
+        pages.push({ text: lines.join('\n'), channels: availableSources, selected: results.selected, language: 'fr' });
       }
     } catch {
-      await context.messenger.send(actor, { text: 'Could not load Slack message details right now. Try slack unanswered again.', buttons: [menuButton] });
+      await context.messenger.send(actor, { text: "Impossible de charger les détails des messages Slack pour le moment. Réessayez slack sans-réponse.", buttons: [menuButton] });
       return;
     }
     await savedResults.save(actor, eventId, pages);
@@ -142,21 +143,21 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     if (payload.type === 'text') {
       const command = String(payload.text ?? '').trim().toLowerCase();
       if (command === 'unanswered') return showUnanswered(actor, eventId, context, context.requestedAt);
-      return context.messenger.send(actor, { text: 'Use slack channels to choose your sources, then slack unanswered to search them.', buttons: [menuButton] });
+      return context.messenger.send(actor, { text: "Utilisez slack canaux pour choisir les sources, puis slack sans-réponse pour rechercher.", buttons: [menuButton] });
     }
     if (payload.type === 'menu_action' && payload.action === 'find_unanswered') {
       const bound = await boundMenuTarget(context.sql, actor, payload.value, payload.timestamp);
-      if (!bound || bound.value !== 'unanswered') return context.messenger.send(actor, { text: 'This work control is unavailable. Send menu to open a fresh one.', buttons: [menuButton] });
+      if (!bound || bound.value !== 'unanswered') return context.messenger.send(actor, { text: "Ce bouton de lancement est indisponible. Envoyez menu pour en ouvrir un nouveau.", buttons: [menuButton] });
       return showUnanswered(actor, eventId, context, context.requestedAt);
     }
     if (payload.type !== 'action') return;
     if (payload.action === 'unanswered_page') {
       const page = parseResultsPage(payload.value);
-      if (!page) return context.messenger.send(actor, { text: 'That results control is invalid. Run slack unanswered again.', buttons: [menuButton] });
+      if (!page) return context.messenger.send(actor, { text: "Ce bouton de résultats est invalide. Relancez slack sans-réponse.", buttons: [menuButton] });
       if (/^\d{13}$/.test(page.sourceId)) {
         const anchor = Number(page.sourceId);
         const sourceId = await savedResults.legacySource(actor, anchor);
-        if (!sourceId) return context.messenger.send(actor, { text: 'These results are unavailable. Run slack unanswered again.', buttons: [menuButton] });
+        if (!sourceId) return context.messenger.send(actor, { text: "Ces résultats sont indisponibles. Relancez slack sans-réponse.", buttons: [menuButton] });
         return showUnanswered(actor, sourceId, context, new Date(anchor), page.page, true);
       }
       return sendUnansweredPage(actor, page.sourceId, page.page, context);
@@ -165,13 +166,13 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
   }
 
   return {
-    id: 'slack', name: 'Slack Unanswered', description: 'Find unanswered messages in selected Slack channels',
-    workOperations: [{ key: 'unanswered', label: 'Find unanswered', commands: ['unanswered'], action: 'find_unanswered' }],
+    id: 'slack', name: "Messages Slack sans réponse", description: "Trouver les messages sans réponse dans les canaux Slack sélectionnés",
+    workOperations: [{ key: 'unanswered', label: "Chercher les messages sans réponse", commands: ['unanswered'], action: 'find_unanswered' }],
     menuActions: ['channel_page', 'channel_select', 'channel_remove', 'find_unanswered'],
     async menu(actor, page) {
       if (page.startsWith('channels_')) return channelMenu.page(actor, /^channels_(\d{1,6})$/.test(page) ? Number(page.slice(9)) : 0);
-      return { kind: 'Slack Unanswered', text: 'Choose channels to manage your sources, or find unanswered messages. Shortcuts: slack channels, slack unanswered. Gmail is not required.',
-        buttons: [{ label: 'Find unanswered', action: 'find_unanswered', value: 'unanswered', bound: true, style: 'primary' }], links: [{ label: 'Choose channels', page: 'channels_0' }] };
+      return { kind: "Messages Slack sans réponse", text: "Choisissez les canaux pour gérer vos sources ou cherchez les messages sans réponse. Raccourcis : slack canaux, slack sans-réponse. Gmail n’est pas nécessaire.",
+        buttons: [{ label: "Chercher les messages sans réponse", action: 'find_unanswered', value: 'unanswered', bound: true, style: 'primary' }], links: [{ label: "Choisir les canaux", page: 'channels_0' }] };
     },
     async initialize(database) { await database.query(slackSchema); await database.query(slackHandledSchema); await database.query(slackAiSchema); await database.query(slackResultsSchema); },
     async cleanup() { await selections.cleanup(); await aiAttempts.cleanup(); await savedResults.cleanup(); },

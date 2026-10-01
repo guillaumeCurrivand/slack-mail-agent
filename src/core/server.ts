@@ -1,6 +1,7 @@
 import Fastify from 'fastify';
 import { digest, verifySlack } from './crypto.js';
 import { boundMenuTarget } from './navigation.js';
+import { logicalAction } from './presentation.js';
 import type { ModuleRegistry } from './modules.js';
 import type { JobStore } from './store.js';
 
@@ -8,7 +9,7 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
   const app = Fastify({ logger: false, bodyLimit: 1_000_000, requestTimeout: 10_000 });
   app.removeAllContentTypeParsers();
   app.addContentTypeParser(['application/json', 'application/x-www-form-urlencoded'], { parseAs: 'string' }, (_req, body, done) => done(null, body));
-  app.setErrorHandler((_error, _request, reply) => reply.code(400).send({ error: 'Request could not be processed.' }));
+  app.setErrorHandler((_error, _request, reply) => reply.code(400).send({ error: "La demande n’a pas pu être traitée." }));
   app.get('/health', async () => ({ ok: true }));
   app.get('/ready', async (_req, reply) => {
     try { await store.sql.query('SELECT 1'); return { ok: true }; } catch { return reply.code(503).send({ ok: false }); }
@@ -44,6 +45,7 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     }
     if (body.type !== 'block_actions' || typeof action?.action_id !== 'string' ||
       (action.value !== undefined && (typeof action.value !== 'string' || action.value.length > 500))) return reply.code(400).send();
+    if (logicalAction(action.action_id) === undefined) return reply.code(400).send();
     const route = modules.action(action.action_id, action.value ?? '');
     if ((route.module === 'core' && route.payload.type === 'navigation') || route.payload.type === 'menu_action') {
       const timestamp = body.message?.ts;

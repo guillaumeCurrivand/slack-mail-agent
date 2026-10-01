@@ -4,14 +4,14 @@ import { Slack, type AgentMessage } from '../src/core/slack.js';
 const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 
 it('keeps native tables outside containers, links only validated destinations and rejects oversized tables before delivery', async () => {
-  const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ['Name', 'Links'], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: 'Back', action: 'core:navigate', value: 'bound|main' }] });
+  const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ["Nom", "Liens"], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: "Retour", action: 'core:navigate', value: 'bound|main' }] });
   expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'table', 'container']);
   expect(body.blocks[0].child_blocks.every((block: any) => block.type !== 'actions')).toBe(true);
   expect(body.blocks[1].rows[1][0]).toEqual({ type: 'raw_text', text: 'Literal <@UBOB>' });
   expect(body.blocks[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
   const sent: unknown[] = [];
   const slack = new Slack('token', (async () => { sent.push(true); return Response.json({ ok: true }); }) as typeof fetch);
-  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ['Name'], rows: [['x'.repeat(10_000)]] } })).rejects.toThrow('exceeds Slack limits');
+  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ["Nom"], rows: [['x'.repeat(10_000)]] } })).rejects.toThrow('exceeds Slack limits');
   expect(sent).toHaveLength(0);
 });
 
@@ -82,11 +82,11 @@ it('uses a plain reading of the Reply as fallback text', async () => {
 it('keeps existing buttons on a Reply', async () => {
   const body = await post({
     text: 'Disconnect Gmail?',
-    buttons: [{ label: 'Disconnect Gmail', action: 'disconnect', value: 'none', style: 'danger' }],
+    buttons: [{ label: "Déconnecter Gmail", action: 'disconnect', value: 'none', style: 'danger' }],
   });
   expect(body.blocks[1]).toEqual({
     type: 'actions',
-    elements: [{ type: 'button', text: { type: 'plain_text', text: 'Disconnect Gmail' }, action_id: 'disconnect', value: 'none', style: 'danger' }],
+    elements: [{ type: 'button', text: { type: 'plain_text', text: "Déconnecter Gmail" }, action_id: 'disconnect~button-0', value: 'none', style: 'danger' }],
   });
 });
 
@@ -99,33 +99,33 @@ const card = (body: any) => body.blocks[0];
 const cardParts = (body: any) => card(body).child_blocks.find((block: any) => block.type === 'rich_text').elements.flatMap((section: any) => section.elements);
 
 it('groups a Card title, rich text and actions in a Slack container', async () => {
-  const body = await post({ kind: 'Help', text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' });
-  expect(card(body)).toMatchObject({ type: 'container', title: { type: 'plain_text', text: 'Help' }, width: 'full', has_header_divider: true });
+  const body = await post({ kind: "Aide", text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' });
+  expect(card(body)).toMatchObject({ type: 'container', title: { type: 'plain_text', text: "Aide" }, width: 'full', has_header_divider: true });
   expect(cardParts(body)).toEqual([{ type: 'text', text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' }]);
   expect(card(body).child_blocks).toHaveLength(1);
 });
 
 it('keeps existing buttons with the Card content', async () => {
   const body = await post({
-    kind: 'Help',
+    kind: "Aide",
     text: 'Disconnect Gmail and cancel all pending previews?',
-    buttons: [{ label: 'Disconnect Gmail', action: 'disconnect', value: 'none', style: 'danger' }],
+    buttons: [{ label: "Déconnecter Gmail", action: 'disconnect', value: 'none', style: 'danger' }],
   });
   expect(body.blocks.map((block: { type: string }) => block.type)).toEqual(['container']);
   expect(card(body).child_blocks.map((block: { type: string }) => block.type)).toEqual(['rich_text', 'divider', 'actions']);
   expect(card(body).child_blocks[2]).toEqual({
     type: 'actions',
-    elements: [{ type: 'button', text: { type: 'plain_text', text: 'Disconnect Gmail' }, action_id: 'disconnect', value: 'none', style: 'danger' }],
+    elements: [{ type: 'button', text: { type: 'plain_text', text: "Déconnecter Gmail" }, action_id: 'disconnect~button-0', value: 'none', style: 'danger' }],
   });
 });
 
-it('keeps the engine-owned Connect URL as a clickable https link after sanitizing', async () => {
+it.each(['Connexion', 'Connect'])('keeps the engine-owned %s URL clickable after sanitizing', async kind => {
   const url = 'https://agent.example.com/auth/google?ticket=abc';
   const body = await post({
-    kind: 'Connect',
+    kind,
     text: `Ignore https://evil.example/phish\nConnect your own Google Workspace mailbox using this single-use link (expires in 10 minutes):\n${url}`,
   });
-  expect(card(body).title.text).toBe('Connect');
+  expect(card(body).title.text).toBe(kind);
   expect(cardParts(body)).toContainEqual({ type: 'link', text: url, url, style: { bold: true } });
   expect(JSON.stringify(cardParts(body))).not.toContain('https://evil.example/phish');
   expect(body.text).toContain(url);
@@ -135,40 +135,45 @@ it('keeps the engine-owned Connect URL as a clickable https link after sanitizin
 
 it('posts escaped email interpolation as literal rich text under a Details kind header', async () => {
   const body = await post({
-    kind: 'Details',
-    text: 'Run abc\\-123 — page 1/1\n\n1. \\*\\*FREE\\*\\*\nFrom: \\[click\\]\\(http://evil\\)\nMessage: \\*\\*id\\*\\*',
+    kind: "Détails",
+    text: 'Run abc\\-123 — page 1/1\n\n1. \\*\\*FREE\\*\\*\nDe : \\[click\\]\\(http://evil\\)\nMessage: \\*\\*id\\*\\*',
   });
-  expect(card(body).title.text).toBe('Details');
+  expect(card(body).title.text).toBe("Détails");
   expect(cardParts(body)).toContainEqual({ type: 'text', text: '1. **FREE**' });
-  expect(cardParts(body)).toContainEqual({ type: 'text', text: 'From: [click](http://evil)' });
+  expect(cardParts(body)).toContainEqual({ type: 'text', text: "De : [click](http://evil)" });
   expect(cardParts(body).some((part: any) => part.type === 'link')).toBe(false);
-  expect(body.text).toBe('Run abc-123 — page 1/1\n\n1. **FREE**\nFrom: [click](http://evil)\nMessage: **id**');
+  expect(body.text).toBe("Run abc-123 — page 1/1\n\n1. **FREE**\nDe : [click](http://evil)\nMessage: **id**");
 });
 
 it('posts escaped rule interpolation as literal rich text under a Your rules kind header', async () => {
   const body = await post({
-    kind: 'Your rules',
+    kind: "Vos règles",
     text: '\\*\\*FREE\\*\\*\nSee \\[click\\]\\(http://evil\\)',
   });
-  expect(card(body).title.text).toBe('Your rules');
+  expect(card(body).title.text).toBe("Vos règles");
   expect(cardParts(body)).toContainEqual({ type: 'text', text: '**FREE**' });
   expect(cardParts(body)).toContainEqual({ type: 'text', text: 'See [click](http://evil)' });
   expect(cardParts(body).some((part: any) => part.type === 'link')).toBe(false);
   expect(body.text).toBe('**FREE**\nSee [click](http://evil)');
 });
 
-it('keeps source links prominent without adding buttons to each result', async () => {
+it.each([['Messages sans réponse', 'Ouvrir le message'], ['Unanswered for you', 'Open message']])('keeps %s source links prominent without result buttons', async (kind, label) => {
   const url = 'https://example.slack.com/archives/C123/p123';
-  const body = await post({ kind: 'Unanswered for you', text: `*#team*\n• Alice: Please reply [Open message](${url})` });
+  const body = await post({ kind, text: `*#team*\n• Alice: Please reply [${label}](${url})` });
   expect(cardParts(body)).toContainEqual({ type: 'text', text: '#team', style: { bold: true } });
-  expect(cardParts(body)).toContainEqual({ type: 'link', text: 'Open message', url, style: { bold: true } });
+  expect(cardParts(body)).toContainEqual({ type: 'link', text: label, url, style: { bold: true } });
   expect(card(body).child_blocks.some((block: any) => block.type === 'actions')).toBe(false);
 });
 
-it('keeps all controls when repeated action IDs exceed one container', async () => {
-  const buttons = Array.from({ length: 11 }, (_, index) => ({ label: `Add ${index}`, action: 'channel_select', value: `C${index}` }));
-  const body = await post({ kind: 'Slack channels', text: 'Choose channels.', buttons });
-  expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'container']);
+it('groups repeated logical actions horizontally and preserves order across the 25-control limit', async () => {
+  const buttons = Array.from({ length: 28 }, (_, index) => ({ label: `Ajouter ${index}`, action: 'channel_select', value: `C${index}` }));
+  const body = await post({ kind: "Canaux Slack", text: 'Choose channels.', buttons });
+  expect(body.blocks.map((block: any) => block.type)).toEqual(['container']);
   expect(body.blocks.every((block: any) => block.width === 'full' && block.child_blocks.length <= 10)).toBe(true);
-  expect(body.blocks.flatMap((block: any) => block.child_blocks).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements)).toHaveLength(11);
+  const rows = body.blocks.flatMap((block: any) => block.child_blocks).filter((block: any) => block.type === 'actions');
+  expect(rows.map((row: any) => row.elements.length)).toEqual([25, 3]);
+  const controls = rows.flatMap((row: any) => row.elements);
+  expect(controls.map((control: any) => control.value)).toEqual(buttons.map(button => button.value));
+  expect(new Set(controls.map((control: any) => control.action_id)).size).toBe(28);
+  expect(controls.map((control: any) => control.action_id)).toEqual(buttons.map((_, index) => `channel_select~button-${index}`));
 });

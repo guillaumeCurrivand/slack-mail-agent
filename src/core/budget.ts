@@ -1,7 +1,8 @@
 import { uid, ownerKey, type Actor } from './identity.js';
 import type { Sql } from './store.js';
+import { formatNumber } from './presentation.js';
 
-export class BudgetExceeded extends Error { constructor() { super('The monthly AI allowance is exhausted or reserved by work already in progress. Commands that do not use AI remain available.'); } }
+export class BudgetExceeded extends Error { constructor() { super("Le budget mensuel d’IA est épuisé ou réservé par des traitements en cours. Les commandes sans IA restent disponibles."); } }
 // Prices verified 2026-09-17; deliberately pin model and rates together. USD / million tokens.
 export const PRICE_CARD = { 'gpt-4.1-mini-2025-04-14': { input: 0.4, cached: 0.1, output: 1.6 } } as const;
 export const costMicro = (input: number, output: number) => Math.ceil(input * 0.4 + output * 1.6);
@@ -54,5 +55,6 @@ export class Budget {
 export async function budgetReport(budget: Budget) {
   const now = new Date();
   const usage = await budget.usage(now), modules = await budget.byModule(now);
-  return `Team AI usage this UTC calendar month: $${usage.charged.toFixed(4)} recorded, $${usage.reserved.toFixed(4)} reserved. All modules share the same allowance. Hosting is billed separately. Uncertain requests retain their reservation.${modules.map(m => `\n${m.module}: $${m.charged.toFixed(4)} recorded, $${m.reserved.toFixed(4)} reserved.`).join('')}`;
+  const names: Record<string, string> = { core: 'Commandes communes', mail: 'Tri des e-mails', slack: 'Messages Slack sans réponse', documentation: 'Documentation' };
+  return `Utilisation de l’IA de l’équipe pour ce mois civil UTC : ${formatNumber(usage.charged, 4)} USD enregistrés, ${formatNumber(usage.reserved, 4)} USD réservés. Tous les modules partagent le même budget. L’hébergement est facturé séparément. Les demandes incertaines conservent leur réservation.${modules.map(m => `\n${names[m.module] ?? m.module} : ${formatNumber(m.charged, 4)} USD enregistrés, ${formatNumber(m.reserved, 4)} USD réservés.`).join('')}`;
 }

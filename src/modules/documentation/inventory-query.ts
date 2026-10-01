@@ -1,3 +1,4 @@
+import { formatDate, formatNumber } from '../../core/presentation.js';
 import { z } from 'zod';
 import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
@@ -23,7 +24,7 @@ export const inventoryQuery = z.strictObject({
 });
 export type InventoryQuery = z.infer<typeof inventoryQuery>;
 type Node = { id: string; kind: Kind; fields: InventoryValues; archived: boolean };
-export const inventoryQueryHelp = 'Free exact queries: documentation search {"target":"project","filters":[{"kind":"technology","selector":"React"},{"kind":"host","selector":"Compute"}],"scope":"project"}; documentation count with the same JSON. Targets: project, component, technology, host, hosting, tool. Filters use exact identifiers/names (Project aliases too). scope: project allows separate Components; same-component requires one Component. Optional component, environment, includeArchived, and fields:[{field,value}] use saved exact values; null explicitly finds Unknown. Company-wide Tools: target tool, fields:[{"field":"companyWide","value":true}]. Project-specific Tools use a project relationship filter. Missing/ambiguous references require clarification. Results page with free Previous/Next controls.';
+export const inventoryQueryHelp = "Requêtes gratuites : documentation rechercher <objet JSON> ou documentation compter <objet JSON>. Exemple : documentation rechercher {\"target\":\"project\",\"filters\":[{\"kind\":\"technology\",\"selector\":\"React\"}],\"fields\":[],\"scope\":\"project\",\"environment\":null,\"includeArchived\":false}. Les clés et valeurs d’énumération JSON restent techniques. target/kind : project, component, technology, host, hosting ou tool ; références exactes par identifiant ou nom (alias pour les projets). filters combine jusqu’à 6 relations explicites par ET ; scope distingue project (ensemble des composants) et same-component (un même composant). component peut désigner un composant exact. environment choisit un environnement d’hébergement exact. fields accepte jusqu’à 6 filtres sur les champs autorisés, par égalité exacte ; aucune relation n’est déduite d’un texte libre. includeArchived vaut false par défaut. Les totaux couvrent les correspondances distinctes enregistrées ; les relations inconnues ne prouvent pas une correspondance. Résultats par pages de 8 ; les sources des comptages couvrent les 8 premières correspondances. Les données sont relues à chaque page ; une modification de l’inventaire redémarre la consultation. Les liens enregistrés ne sont pas lus. Aucun appel IA.";
 
 // The inventory relationship graph is a tree. Each read follows its unique
 // simple path, never an arbitrary walk through shared catalogs into other Projects.
@@ -59,10 +60,10 @@ export class InventoryQueries {
     for (const filter of query.fields) {
       const expected = filter.field === 'companyWide' ? 'boolean' : filter.field === 'monthlyCost' ? 'number' : 'string';
       if (!allowedFields[query.target].includes(filter.field) || (filter.value !== null && typeof filter.value !== expected))
-        return { kind: 'Unsupported filter', text: `Supported exact fields for ${recordTitle(query.target)}: ${allowedFields[query.target].join(', ')}. Unknown is requested explicitly with null. Nothing was queried.` };
+        return { kind: 'Filtre non pris en charge', text: `Champs exacts autorisés — ${recordTitle(query.target)}: ${allowedFields[query.target].join(', ')}. Une valeur inconnue doit être demandée explicitement avec null. Aucune requête n’a été exécutée.` };
     }
     if (query.target === 'project' && query.filters.some(f => f.kind === 'technology') && query.filters.some(f => ['host', 'hosting'].includes(f.kind)) && query.scope === null && !query.component)
-      return { kind: 'Clarify filter scope', text: 'May Technology and Host/service matches occur on separate Components of a Project, or must one Component match both? Repeat with scope "project" or "same-component", or select an exact Component. Nothing was queried.' };
+      return { kind: 'Préciser le périmètre du filtre', text: "Les correspondances de technologie et d’hébergeur/service peuvent-elles concerner des composants distincts du projet, ou un même composant doit-il correspondre aux deux ? Répétez avec scope \"project\" ou \"same-component\", ou sélectionnez un composant exact. Aucune requête n’a été exécutée." };
     const selectors = [...query.filters, ...(query.component ? [{ kind: 'component' as const, selector: query.component }] : [])];
     const resolved: string[] = [];
     for (const filter of selectors) {
@@ -74,7 +75,7 @@ export class InventoryQueries {
           (lower(fields->>'name')=lower($3) OR (kind='project' AND EXISTS(
             SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(fields->'aliases','null'::jsonb),'[]'::jsonb)) alias WHERE lower(alias)=lower($3))))))`,
       [actor.team, filter.kind, filter.selector, query.includeArchived]);
-      if (result.rows.length !== 1) return { kind: result.rows.length ? 'Ambiguous filter' : 'Filter not found', text: `${recordTitle(filter.kind)} selector ${escapeCardValue(filter.selector)} ${result.rows.length ? 'matches multiple records. Repeat with one stable identifier.' : 'does not match an eligible saved record. Unknown or archived references have not been counted as zero matches; check the identifier or explicitly includeArchived.'}` };
+      if (result.rows.length !== 1) return { kind: result.rows.length ? 'Filtre ambigu' : "Filtre introuvable", text: `${recordTitle(filter.kind)} : référence ${escapeCardValue(filter.selector)} ${result.rows.length ? "correspond à plusieurs fiches. Répétez avec un identifiant stable." : "ne correspond à aucune fiche enregistrée admissible. Les références inconnues ou archivées ne sont pas comptées comme zéro correspondance ; vérifiez l’identifiant ou utilisez explicitement includeArchived."}` };
       resolved.push(result.rows[0].id);
     }
     return { ...query, filters: query.filters.map((filter, index) => ({ ...filter, selector: resolved[index]! })), component: query.component ? resolved.at(-1)! : null };
@@ -137,18 +138,18 @@ export class InventoryQueries {
     const unavailable = selectors.find(filter => !references.some(record => record.id === filter.selector
       && record.kind === filter.kind && (query.includeArchived || !record.archived)));
     if (unavailable) return { fingerprint: row.fingerprint, page: 0, pages: 1,
-      content: { kind: 'Filter not found', text: `${recordTitle(unavailable.kind)} reference does not match an eligible saved record. Unknown or archived references have not been counted as zero matches; inspect the reference or explicitly includeArchived.` } };
-    const name = (record: Node) => String(record.fields.name ?? record.fields.environment ?? 'Unknown environment');
+      content: { kind: "Filtre introuvable", text: `${recordTitle(unavailable.kind)} : la référence ne correspond à aucune fiche enregistrée admissible. Les références inconnues ou archivées ne sont pas comptées comme zéro correspondance ; examinez la référence ou utilisez explicitement includeArchived.` } };
+    const name = (record: Node) => String(record.fields.name ?? record.fields.environment ?? "Environnement inconnu");
     const criteria = [references.map(record => `${recordTitle(record.kind)}: ${referenceLabel(name(record), record)}`).join('; '),
-      ...query.fields.map(filter => `${filter.field} = ${String(filter.value ?? 'Unknown')}`),
-      ...(query.scope ? [`Scope: ${query.scope === 'project' ? 'across Project Components' : 'one Component'}`] : []),
-      ...(query.environment ? [`Environment: ${query.environment}`] : []), `Archived records: ${query.includeArchived ? 'included' : 'excluded'}`].filter(Boolean).join('\n');
+      ...query.fields.map(filter => `${filter.field} = ${typeof filter.value === 'number' ? formatNumber(filter.value) : typeof filter.value === 'boolean' ? filter.value ? 'Oui' : 'Non' : String(filter.value ?? "Inconnu")}`),
+      ...(query.scope ? [`Périmètre : ${query.scope === 'project' ? "sur les composants du projet" : "un composant"}`] : []),
+      ...(query.environment ? [`Environnement : ${query.environment}`] : []), `Fiches archivées : ${query.includeArchived ? "incluses" : "exclues"}`].filter(Boolean).join('\n');
     const links = references.map(record => ({ label: referenceLabel(name(record), record), page: `${record.kind}_${record.id}` }));
-    const header = `Sources: current inventory records at ${new Date(row.read_at).toISOString()}. Saved links have not been read.\nFilters:\n${escapeCardValue(criteria)}\n${changed ? 'Inventory changed since the previous page. Coverage restarted at page 1; earlier pages are not part of this read.\n' : ''}Total matching ${recordTitle(query.target)} records: ${row.total}\nCounts cover all distinct saved matches, not only this page. Unknown relationships are not evidence of a match; missing inventory is not evidence of real-world absence.\n`;
-    const coverage = `Results page ${row.page + 1}/${row.pages}; records ${row.total ? row.page * 8 + 1 : 0}–${Math.min(row.total, row.page * 8 + 8)} of ${row.total}. Each page rereads current data.\n`;
+    const header = `Sources : fiches actuelles de l’inventaire au ${formatDate(row.read_at)}. Les liens enregistrés n’ont pas été lus.\nFiltres :\n${escapeCardValue(criteria)}\n${changed ? "L’inventaire a changé depuis la page précédente. La consultation reprend à la page 1 ; les pages précédentes ne font pas partie de cette lecture.\n" : ''}Total de fiches correspondantes — ${recordTitle(query.target)} : ${row.total}\nLes totaux couvrent toutes les correspondances enregistrées distinctes, pas seulement cette page. Une relation inconnue ne prouve pas une correspondance ; un inventaire incomplet ne prouve pas une absence réelle.\n`;
+    const coverage = `Résultats — page ${row.page + 1}/${row.pages} ; fiches ${row.total ? row.page * 8 + 1 : 0}–${Math.min(row.total, row.page * 8 + 8)} sur ${row.total}. Chaque page relit les données actuelles.\n`;
     return { fingerprint: row.fingerprint, page: row.page, pages: query.result === 'count' ? 1 : row.pages,
-      content: { kind: 'Inventory answer',
-        ...await new InventoryPresentation(new DocumentationStore(this.sql), actor).list(records), text: header + (query.result === 'count' ? 'Count only. Source controls cover up to the first 8 matches; use search for all matches.' : coverage + (records.length ? '' : 'No saved matches.')),
+      content: { kind: "Réponse de l’inventaire",
+        ...await new InventoryPresentation(new DocumentationStore(this.sql), actor).list(records), text: header + (query.result === 'count' ? "Comptage uniquement. Les sources donnent accès aux 8 premières correspondances au maximum ; utilisez rechercher pour toutes les correspondances." : coverage + (records.length ? '' : "Aucune correspondance enregistrée.")),
         links } };
   }
 }

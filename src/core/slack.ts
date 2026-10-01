@@ -1,4 +1,5 @@
 import type { Actor } from './identity.js';
+import { logicalAction } from './presentation.js';
 
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core'; bound?: boolean };
 export type TableCell = string | Array<{ text: string; url?: string }>;
@@ -72,7 +73,7 @@ function cardBody(kind: string, text: string) {
     for (const match of line.matchAll(linkPattern)) {
       const index = match.index;
       const label = match[1]!, url = match[2]!;
-      if (!((kind === 'Unanswered for you' && label === 'Open message') || (kind === 'Connect' && label === url))) continue;
+      if (!((['Unanswered for you', 'Messages sans réponse'].includes(kind) && ['Open message', 'Ouvrir le message'].includes(label)) || (['Connect', 'Connexion'].includes(kind) && label === url))) continue;
       if (index > offset) parts.push({ type: 'text', text: plainReading(line.slice(offset, index)), ...(bold ? { style: { bold: true } } : {}) });
       parts.push({ type: 'link', text: label, url, style: { bold: true } });
       offset = index + match[0].length;
@@ -97,7 +98,7 @@ export class Slack implements Messenger {
     await this.deliver(actor, message, timestamp);
   }
   private async deliver(actor: Actor, message: AgentMessage, timestamp?: string) {
-    const text = message.kind === 'Connect' ? withMintedConnectUrl(message.text) : message.kind ? message.text : sanitizeReply(message.text);
+    const text = ['Connect', 'Connexion'].includes(message.kind ?? '') ? withMintedConnectUrl(message.text) : message.kind ? message.text : sanitizeReply(message.text);
     const buttons = message.buttons ?? [];
     const blocks: any[] = [];
     // Replies remain sanitized markdown. Cards use grouped rich text and actions.
@@ -110,18 +111,15 @@ export class Slack implements Messenger {
     }
     if (message.kind && buttons.length) cardBlocks.push({ type: 'divider' });
     let actionElements: any[] = [];
-    let actionIds = new Set<string>();
     const flushActions = () => {
       if (actionElements.length) (message.kind ? cardBlocks : blocks).push({ type: 'actions', elements: actionElements });
       actionElements = [];
-      actionIds = new Set();
     };
-    for (const button of buttons) {
-      // Slack requires action IDs to be unique within each actions block.
-      if (actionIds.has(button.action) || actionElements.length === 25) flushActions();
-      actionElements.push({ type: 'button', text: { type: 'plain_text', text: button.label.slice(0, 75) }, action_id: button.action,
+    for (const [index, button] of buttons.entries()) {
+      if (actionElements.length === 25) flushActions();
+      if (logicalAction(button.action) !== button.action) throw new SlackDeliveryRejected('Invalid logical button action.');
+      actionElements.push({ type: 'button', text: { type: 'plain_text', text: button.label.slice(0, 75) }, action_id: `${button.action}~button-${index}`,
         ...(button.value ? { value: button.value } : {}), ...(button.style ? { style: button.style } : {}) });
-      actionIds.add(button.action);
     }
     flushActions();
     for (const select of message.selects ?? []) {
@@ -131,10 +129,9 @@ export class Slack implements Messenger {
         options: select.options.map(option => ({ text: { type: 'plain_text', text: option.label.slice(0, 75) }, value: option.value })) }] });
     }
     if (message.kind) {
-      // A channel list can need more than ten action rows because repeated
-      // action IDs must live in separate actions blocks. Keep every control.
+      // Preserve every control across continuation containers.
       for (let index = 0; index < Math.max(1, cardBlocks.length); index += 10) {
-        blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'More actions' : message.kind.slice(0, 150) },
+        blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : message.kind.slice(0, 150) },
           width: 'full', has_header_divider: true, child_blocks: cardBlocks.slice(index, index + 10) });
       }
     }
@@ -154,7 +151,7 @@ export class Slack implements Messenger {
       blocks.push({ type: 'table', column_settings: table.columns.map(() => ({ is_wrapped: true })), rows: rows.map(row => row.map(cell =>
         typeof cell === 'string' ? { type: 'raw_text', text: cell || ' ' } : { type: 'rich_text', elements: [{ type: 'rich_text_section', elements:
           cell.length ? cell.map(part => part.url && validResourceUrl(part.url) ? { type: 'link', text: part.text, url: part.url } : { type: 'text', text: part.text || ' ' }) : [{ type: 'text', text: ' ' }] }] })) });
-      for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'More actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
+      for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
     }
     const response = await this.fetcher(`https://slack.com/api/${timestamp ? 'chat.update' : 'chat.postMessage'}`, {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },

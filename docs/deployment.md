@@ -8,6 +8,10 @@ For a documentation-only change, pulling the commit is sufficient if the running
 
 ## Full-width Slack panels
 
+The French interface and horizontal action groups follow the same runtime rebuild/restart procedure after their reviewed `main` changes are committed and pushed. No environment variables, scopes, secrets or database migrations are added. Existing saved values, old controls, approvals, expiry times and AI checkpoints remain compatible. This is locally verified work; successful production deployment and live Slack layout still require observation.
+
+After updating and checking `/ready`, send `aide` and open each enabled Module. Check French menus/help, side-by-side buttons and a separate Documentation record selector on desktop and a narrow client. Open an existing record to verify clickable URLs and French dates/numbers; reopening old generated text should show a French notice while retaining its original content. Check `courrier aide`, `slack aide` and `documentation aide`; English shortcuts should continue to work. Use approved synthetic data for mutation checks, and do not make paid model requests solely to verify translation. Slack may wrap buttons when space is limited.
+
 The shared Slack renderer requests `width: "full"` for every grouped panel, including continuation panels, as specified in [interactive message presentation](product-spec.md#interactive-message-presentation). This runtime change requires the existing [update-and-restart procedure](#update-and-restart) after its `main` commit is pushed. There are no environment, permission, or database migration changes.
 
 After `/ready` succeeds, send `menu` and open a Module to check both newly posted and updated panels fill Slack's available message space. Check a long result or Help Card at different window sizes; Slack controls the actual client layout. Existing messages acquire the new width only when updated or posted again. Live Slack rendering and production deployment require separate verification.

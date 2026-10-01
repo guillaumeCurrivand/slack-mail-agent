@@ -8,6 +8,8 @@ People can miss Slack messages that mention them, ask them a question, or reques
 
 ## Solution
 
+The application interface uses French under the [shared presentation contract](product-spec.md#interactive-message-presentation). The visible Module is **Messages Slack sans réponse**, with **Choisir les canaux**, **Messages sans réponse**, **Vous concerne peut-être** and **Ouvrir le message** controls/labels. `slack canaux`, `slack sans-réponse` and `slack aide` are the French shortcuts; the English commands documented below remain compatible. New model reasons use French. Old saved text/checkpoints retain their content and recovery safeguards, with the French retained-content notice when reopened; language changes do not pay to classify again.
+
 Add a `slack` module with a `slack unanswered` command. Users choose the public and private channels to search with `slack channels`; the bot must also have access, and group DMs are excluded. The command searches on demand for messages posted during the preceding rolling 48 hours and returns matching messages privately, grouped by channel.
 
 Separate clear matches from **Possibly for you** messages whose thread context gives a specific reason they may concern the user without establishing that they are the intended recipient. The list reflects current Slack thread state: a user's later message in a thread removes earlier requests from future lists. A subsequent question or request directed back to the user is a new unanswered message. The feature does not create or manage separate task records.

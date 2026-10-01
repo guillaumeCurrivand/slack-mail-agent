@@ -147,7 +147,7 @@ export class DocumentationStore {
             AND EXISTS(SELECT 1 FROM documentation_records WHERE team=$2 AND kind='host' AND id=$12)))
       ON CONFLICT(owner,request_id) DO UPDATE SET request_id=excluded.request_id RETURNING ${confirmationColumns}`,
     [uid(), actor.team, ownerKey(actor), actor.channel, eventId, target?.id ?? uid(), JSON.stringify(fields), target ? 'edit' : 'create', kind, fields.projectId ?? target?.fields.projectId ?? null, fields.componentId ?? target?.fields.componentId ?? null, fields.serviceId ?? target?.fields.serviceId ?? null, source]);
-    if (!result.rows.length) throw new Error('Inventory target or references changed; submit a fresh request');
+    if (!result.rows.length) throw new Error('La cible ou les références d’inventaire ont changé ; envoyez une nouvelle demande');
     return result.rows[0];
   }
   async confirmRecord(actor: Actor, id: string, kind: RecordKind, operation: 'create' | 'edit'): Promise<Confirmation | undefined> {

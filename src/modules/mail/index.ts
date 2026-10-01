@@ -17,8 +17,8 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
   const oauth = new GoogleOAuth(config, new Store(sql), vault);
   return {
-    id: 'mail', name: 'Mail Sorter', description: 'Sort your Gmail using approved personal rules',
-    workOperations: [{ key: SORT_OPERATION, label: 'Sort inbox', commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
+    id: 'mail', name: "Tri des e-mails", description: "Trier votre Gmail selon vos règles personnelles approuvées",
+    workOperations: [{ key: SORT_OPERATION, label: "Trier la boîte de réception", commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
     menuActions: ['sort_inbox'],
     async menu(actor, page, context) {
       const state = await new Store(context.sql).load(actor);
@@ -47,13 +47,13 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
       let event = payload as Event;
       if (payload.type === 'menu_action') {
         const bound = await boundMenuTarget(context.sql, actor, payload.value, payload.timestamp);
-        if (!bound || payload.action !== 'sort_inbox' || bound.value !== 'sort') return context.messenger.send(actor, { text: 'This work control is unavailable. Send menu to open a fresh one.', buttons: [menuButton] });
+        if (!bound || payload.action !== 'sort_inbox' || bound.value !== 'sort') return context.messenger.send(actor, { text: "Ce bouton de lancement est indisponible. Envoyez menu pour en ouvrir un nouveau.", buttons: [menuButton] });
         event = { type: 'text', text: 'sort' };
       }
       if (payload.type === 'action' && ['menu_connect', 'menu_disconnect'].includes(String(payload.action))) {
         const state = await store.load(actor);
-        if (payload.action === 'menu_connect' && state.connection) return context.messenger.send(actor, { text: 'Gmail is already connected. Open Menu to review the current connection.', buttons: [menuButton] });
-        if (payload.action === 'menu_disconnect' && (!state.connection || payload.value !== state.connection.id)) return context.messenger.send(actor, { text: 'This connection control is no longer current. Open Menu to review the connection.', buttons: [menuButton] });
+        if (payload.action === 'menu_connect' && state.connection) return context.messenger.send(actor, { text: "Gmail est déjà connecté. Ouvrez le menu pour examiner la connexion actuelle.", buttons: [menuButton] });
+        if (payload.action === 'menu_disconnect' && (!state.connection || payload.value !== state.connection.id)) return context.messenger.send(actor, { text: "Ce bouton de connexion n’est plus valide. Ouvrez le menu pour examiner la connexion.", buttons: [menuButton] });
         event = { type: 'text', text: payload.action === 'menu_connect' ? 'connect' : 'disconnect' };
       }
       const engine = new Engine({ store, budget: context.budget, messenger: { send: (recipient, message) => context.messenger.send(recipient, {

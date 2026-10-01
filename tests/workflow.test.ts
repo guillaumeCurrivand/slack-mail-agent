@@ -183,15 +183,15 @@ describe('shared AI allowance', () => {
 
 describe('Help Card', () => {
   const expectHelpCard = (message: AgentMessage) => {
-    expect(message.kind).toBe('Help');
+    expect(message.kind).toBe("Aide");
     expect(message.text).toMatch(/connect/i);
-    expect(message.text).toMatch(/starters/i);
-    expect(message.text).toMatch(/rules/i);
-    expect(message.text).toMatch(/sort/i);
-    expect(message.text).toMatch(/report/i);
+    expect(message.text).toMatch(/modèles/i);
+    expect(message.text).toMatch(/règles/i);
+    expect(message.text).toMatch(/trier/i);
+    expect(message.text).toMatch(/rapport/i);
     expect(message.text).toMatch(/budget/i);
-    expect(message.text).toMatch(/disconnect/i);
-    expect(message.text).toMatch(/approv/i);
+    expect(message.text).toMatch(/déconnecter/i);
+    expect(message.text).toMatch(/approbation/i);
   };
 
   it('sends hi and help as a Card with kind header Help', async () => {
@@ -218,7 +218,7 @@ describe('Connection Cards', () => {
     const h = harness();
     await h.engine.handle(alice, { type: 'text', text: 'connect' }, uid());
     expect(h.messages.at(-1)).toMatchObject({
-      kind: 'Connect',
+      kind: "Connexion",
       text: expect.stringContaining('https://agent.example.com/auth/google?ticket=test'),
     });
   });
@@ -227,11 +227,11 @@ describe('Connection Cards', () => {
     const h = harness();
     await h.engine.handle(alice, { type: 'connection', connection: { id: 'c1', subject: 'google-alice', email: 'alice@example.com', encryptedTokens: 'sealed' } }, uid());
     const message = h.messages.at(-1)!;
-    expect(message.kind).toBe('Confirm mailbox');
+    expect(message.kind).toBe("Confirmer la boîte e-mail");
     expect(message.text).toContain('alice@example.com');
     expect(message.buttons).toEqual([
-      { label: 'Connect this mailbox', action: 'approve_draft', value: expect.any(String), style: 'primary' },
-      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+      { label: "Connecter cette boîte", action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: "Annuler", action: 'cancel_draft', value: expect.any(String) },
     ]);
     expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);
   });
@@ -242,9 +242,9 @@ describe('Connection Cards', () => {
     await h.engine.handle(alice, { type: 'text', text: 'disconnect' }, uid());
     expect(h.messages.at(-1)).toEqual({
       actor: alice,
-      kind: 'Disconnect Gmail',
-      text: 'Disconnect Gmail and cancel all pending previews? Saved rules remain. You can also revoke the app from your Google account.',
-      buttons: [{ label: 'Disconnect Gmail', action: 'disconnect', value: 'connection-a', style: 'danger' }],
+      kind: "Déconnecter Gmail",
+      text: "Déconnecter Gmail et annuler tous les aperçus en attente ? Les règles enregistrées sont conservées. Vous pouvez aussi révoquer l’application depuis votre compte Google.",
+      buttons: [{ label: "Déconnecter Gmail", action: 'disconnect', value: 'connection-a', style: 'danger' }],
     });
   });
 
@@ -255,7 +255,7 @@ describe('Connection Cards', () => {
     await action(h, 'approve_draft', draftId);
     expect(h.messages.at(-1)).toEqual({
       actor: alice,
-      text: 'Connected alice@example.com. Send mail starters to review initial rules, or mail sort if your rules are ready.',
+      text: "Connexion établie pour alice@example.com. Envoyez courrier modèles pour examiner les premières règles, ou courrier trier si vos règles sont prêtes.",
       buttons: undefined,
     });
 
@@ -263,13 +263,13 @@ describe('Connection Cards', () => {
     await cancelled.engine.handle(alice, { type: 'connection', connection: { id: 'c2', subject: 'google-alice', email: 'alice@example.com', encryptedTokens: 'sealed' } }, uid());
     const cancelId = (await store.load(alice)).drafts[0]!.id;
     await action(cancelled, 'cancel_draft', cancelId);
-    expect(cancelled.messages.at(-1)).toEqual({ actor: alice, text: 'Proposal cancelled.', buttons: undefined });
+    expect(cancelled.messages.at(-1)).toEqual({ actor: alice, text: "Proposition annulée.", buttons: undefined });
 
     await seed();
     const disconnect = harness();
     await disconnect.engine.handle(alice, { type: 'text', text: 'disconnect' }, uid());
     await action(disconnect, 'disconnect', 'connection-a');
-    expect(disconnect.messages.at(-1)).toEqual({ actor: alice, text: 'Gmail disconnected here. Your saved rules remain.', buttons: undefined });
+    expect(disconnect.messages.at(-1)).toEqual({ actor: alice, text: "Gmail est déconnecté de l’application. Vos règles sont conservées.", buttons: undefined });
   });
 });
 
@@ -278,14 +278,14 @@ describe('Rules Cards', () => {
     const empty = harness();
     await empty.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
     expect(empty.messages.at(-1)).toMatchObject({
-      kind: 'Your rules',
-      text: 'You have no approved rules. Send mail starters or describe your first rule after the mail prefix.',
+      kind: "Vos règles",
+      text: "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou décrivez votre première règle après le préfixe courrier.",
     });
 
     await seed();
     const listed = harness();
     await listed.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
-    expect(listed.messages.at(-1)!.kind).toBe('Your rules');
+    expect(listed.messages.at(-1)!.kind).toBe("Vos règles");
     expect(listed.messages.at(-1)!.text).toContain('Urgent');
     expect(listed.messages.at(-1)!.text).toContain('urgent');
   });
@@ -299,23 +299,23 @@ describe('Rules Cards', () => {
     const h = harness();
     await h.engine.handle(alice, { type: 'text', text: 'label mail from alex as Projects/Alpha', resolved: { intent: 'propose_rule', reply: '', rule: proposalRule, ruleId: null, runId: null, messageId: null, correction: null } }, uid());
     const message = h.messages.at(-1)!;
-    expect(message.kind).toBe('Rule proposal');
+    expect(message.kind).toBe("Proposition de règle");
     expect(message.text).toContain('Alpha');
-    expect(message.text).toMatch(/No rule changes until you approve/);
+    expect(message.text).toMatch(/Aucune règle ne change avant votre approbation/);
     expect(message.buttons).toEqual([
-      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
-      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+      { label: "Approuver les règles", action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: "Annuler", action: 'cancel_draft', value: expect.any(String) },
     ]);
     expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);
 
     await seed();
     const replace = harness();
     await replace.engine.handle(alice, { type: 'text', text: 'replace urgent', resolved: { intent: 'propose_rule', reply: '', rule: { ...starterRules()[0]!, name: 'Urgent mail' }, ruleId: 'urgent', runId: null, messageId: null, correction: null } }, uid());
-    expect(replace.messages.at(-1)!.kind).toBe('Rule proposal');
-    expect(replace.messages.at(-1)!.text).toMatch(/Replace existing rule/);
+    expect(replace.messages.at(-1)!.kind).toBe("Proposition de règle");
+    expect(replace.messages.at(-1)!.text).toMatch(/Remplacer la règle existante/);
     expect(replace.messages.at(-1)!.buttons).toEqual([
-      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
-      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+      { label: "Approuver les règles", action: 'approve_draft', value: expect.any(String), style: 'primary' },
+      { label: "Annuler", action: 'cancel_draft', value: expect.any(String) },
     ]);
   });
 
@@ -324,11 +324,11 @@ describe('Rules Cards', () => {
     const h = harness();
     await h.engine.handle(alice, { type: 'text', text: 'delete urgent', resolved: { intent: 'delete_rule', reply: '', rule: null, ruleId: 'urgent', runId: null, messageId: null, correction: null } }, uid());
     const message = h.messages.at(-1)!;
-    expect(message.kind).toBe('Remove rule');
+    expect(message.kind).toBe("Supprimer la règle");
     expect(message.text).toContain('Urgent');
     expect(message.buttons).toEqual([
-      { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'danger' },
-      { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+      { label: "Approuver les règles", action: 'approve_draft', value: expect.any(String), style: 'danger' },
+      { label: "Annuler", action: 'cancel_draft', value: expect.any(String) },
     ]);
     expect(message.buttons![0]!.value).toBe(message.buttons![1]!.value);
   });
@@ -338,16 +338,16 @@ describe('Rules Cards', () => {
     await h.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
     expect(h.messages).toHaveLength(2);
     expect(h.messages[0]).toMatchObject({
-      kind: 'Rule proposal',
-      text: expect.stringMatching(/No rule changes until you approve/),
+      kind: "Proposition de règle",
+      text: expect.stringMatching(/Aucune règle ne change avant votre approbation/),
       buttons: [
-        { label: 'Approve rule changes', action: 'approve_draft', value: expect.any(String), style: 'primary' },
-        { label: 'Cancel', action: 'cancel_draft', value: expect.any(String) },
+        { label: "Approuver les règles", action: 'approve_draft', value: expect.any(String), style: 'primary' },
+        { label: "Annuler", action: 'cancel_draft', value: expect.any(String) },
       ],
     });
     expect(h.messages[1]).toEqual({
       actor: alice,
-      text: 'Project template: when the sender matches an approved mapping, apply Projects/<project name> and keep it in the inbox. Start your reply with mail, then give the project name and sender email addresses to create your mapping.',
+      text: "Modèle de projet : lorsque l’expéditeur correspond à une association approuvée, appliquez un libellé de projet et conservez le message dans la boîte de réception. Commencez votre réponse par courrier, puis indiquez le nom du projet et les adresses e-mail des expéditeurs.",
       buttons: undefined,
     });
     expect(h.messages[1]!.kind).toBeUndefined();
@@ -400,12 +400,12 @@ describe('Rules Cards', () => {
     const cancelled = harness();
     await cancelled.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
     await action(cancelled, 'cancel_draft', (await store.load(alice)).drafts[0]!.id);
-    expect(cancelled.messages.at(-1)).toEqual({ actor: alice, text: 'Proposal cancelled.', buttons: undefined });
+    expect(cancelled.messages.at(-1)).toEqual({ actor: alice, text: "Proposition annulée.", buttons: undefined });
 
     const saved = harness();
     await saved.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
     await action(saved, 'approve_draft', (await store.load(alice)).drafts[0]!.id);
-    expect(saved.messages.at(-1)).toEqual({ actor: alice, text: 'Your rule changes are saved. Send mail sort to create a mailbox preview.', buttons: undefined });
+    expect(saved.messages.at(-1)).toEqual({ actor: alice, text: "Vos changements de règles sont enregistrés. Envoyez courrier trier pour créer un aperçu.", buttons: undefined });
   });
 });
 
@@ -415,21 +415,21 @@ describe('Run Cards', () => {
     const h = harness();
     const run = await scan(h);
     const message = h.messages.at(-1)!;
-    expect(message.kind).toBe('Preview');
+    expect(message.kind).toBe("Aperçu");
     expect(message.text).toContain(escapeCardValue(run.id));
     expect(message.text).toMatch(/^- /m);
-    expect(message.text).toMatch(/1 messages reviewed/);
-    expect(message.text).toMatch(/Labels proposed on 1/);
+    expect(message.text).toMatch(/1 messages examinés/);
+    expect(message.text).toMatch(/Libellés proposés sur 1/);
     expect(message.text).toMatch(/archive 0/);
-    expect(message.text).toMatch(/TRASH 0/);
-    expect(message.text).toMatch(/Needs your decision: 0/);
-    expect(message.text).toMatch(/excluded unless you explicitly include them/);
-    expect(message.text).toMatch(/New labels: none/);
-    expect(message.text).toMatch(/No changes yet/);
+    expect(message.text).toMatch(/Corbeille : 0/);
+    expect(message.text).toMatch(/Votre décision est nécessaire : 0/);
+    expect(message.text).toMatch(/exclus sauf inclusion explicite de votre part/);
+    expect(message.text).toMatch(/Nouveaux libellés : aucun/);
+    expect(message.text).toMatch(/Aucune modification n’a encore été effectuée/);
     expect(message.buttons).toEqual([
-      { label: 'Review messages', action: 'details', value: `${run.id}:0` },
-      { label: 'Confirm proposed changes', action: 'confirm_run', value: run.id, style: 'primary' },
-      { label: 'Cancel', action: 'cancel_run', value: run.id },
+      { label: "Examiner les messages", action: 'details', value: `${run.id}:0` },
+      { label: "Confirmer les modifications", action: 'confirm_run', value: run.id, style: 'primary' },
+      { label: "Annuler", action: 'cancel_run', value: run.id },
     ]);
   });
 
@@ -437,9 +437,9 @@ describe('Run Cards', () => {
     await seed();
     const h = harness();
     await h.engine.handle(alice, { type: 'text', text: 'sort' }, uid());
-    expect(h.messages[0]).toMatchObject({ text: expect.stringMatching(/^Checking 1 inbox messages/) });
+    expect(h.messages[0]).toMatchObject({ text: expect.stringMatching(/^Examen de 1 messages de la boîte de réception/) });
     expect(h.messages[0]!.kind).toBeUndefined();
-    expect(h.messages[1]!.kind).toBe('Preview');
+    expect(h.messages[1]!.kind).toBe("Aperçu");
   });
 
   it('sends Details as a Card titled Details with at most five numbered items and the existing include, skip, prev, next, and confirm buttons', async () => {
@@ -450,35 +450,35 @@ describe('Run Cards', () => {
     const run = await scan(h);
     await action(h, 'details', `${run.id}:0`);
     const first = h.messages.at(-1)!;
-    expect(first.kind).toBe('Details');
+    expect(first.kind).toBe("Détails");
     expect(first.text).toMatch(/^1\. /m);
     expect(first.text).toMatch(/^5\. /m);
     expect(first.text).not.toMatch(/^6\. /m);
     expect(first.buttons).toEqual([
-      { label: 'Include proposal 1', action: 'accept_item', value: `${run.id}:m1:0` },
-      { label: 'Leave 1 unchanged', action: 'skip_item', value: `${run.id}:m1:0` },
-      { label: 'Include proposal 2', action: 'accept_item', value: `${run.id}:m2:0` },
-      { label: 'Leave 2 unchanged', action: 'skip_item', value: `${run.id}:m2:0` },
-      { label: 'Include proposal 3', action: 'accept_item', value: `${run.id}:m3:0` },
-      { label: 'Leave 3 unchanged', action: 'skip_item', value: `${run.id}:m3:0` },
-      { label: 'Include proposal 4', action: 'accept_item', value: `${run.id}:m4:0` },
-      { label: 'Leave 4 unchanged', action: 'skip_item', value: `${run.id}:m4:0` },
-      { label: 'Include proposal 5', action: 'accept_item', value: `${run.id}:m5:0` },
-      { label: 'Leave 5 unchanged', action: 'skip_item', value: `${run.id}:m5:0` },
-      { label: 'Next', action: 'details', value: `${run.id}:1` },
-      { label: 'Confirm reviewed proposal', action: 'confirm_run', value: run.id, style: 'primary' },
+      { label: 'Inclure la proposition 1', action: 'accept_item', value: `${run.id}:m1:0` },
+      { label: 'Laisser 1 sans modification', action: 'skip_item', value: `${run.id}:m1:0` },
+      { label: 'Inclure la proposition 2', action: 'accept_item', value: `${run.id}:m2:0` },
+      { label: 'Laisser 2 sans modification', action: 'skip_item', value: `${run.id}:m2:0` },
+      { label: 'Inclure la proposition 3', action: 'accept_item', value: `${run.id}:m3:0` },
+      { label: 'Laisser 3 sans modification', action: 'skip_item', value: `${run.id}:m3:0` },
+      { label: 'Inclure la proposition 4', action: 'accept_item', value: `${run.id}:m4:0` },
+      { label: 'Laisser 4 sans modification', action: 'skip_item', value: `${run.id}:m4:0` },
+      { label: 'Inclure la proposition 5', action: 'accept_item', value: `${run.id}:m5:0` },
+      { label: 'Laisser 5 sans modification', action: 'skip_item', value: `${run.id}:m5:0` },
+      { label: "Suivant", action: 'details', value: `${run.id}:1` },
+      { label: "Confirmer la proposition examinée", action: 'confirm_run', value: run.id, style: 'primary' },
     ]);
 
     await action(h, 'details', `${run.id}:1`);
     const second = h.messages.at(-1)!;
-    expect(second.kind).toBe('Details');
+    expect(second.kind).toBe("Détails");
     expect(second.text).toMatch(/^1\. /m);
     expect(second.text).not.toMatch(/^2\. /m);
     expect(second.buttons).toEqual([
-      { label: 'Include proposal 1', action: 'accept_item', value: `${run.id}:m6:1` },
-      { label: 'Leave 1 unchanged', action: 'skip_item', value: `${run.id}:m6:1` },
-      { label: 'Previous', action: 'details', value: `${run.id}:0` },
-      { label: 'Confirm reviewed proposal', action: 'confirm_run', value: run.id, style: 'primary' },
+      { label: 'Inclure la proposition 1', action: 'accept_item', value: `${run.id}:m6:1` },
+      { label: 'Laisser 1 sans modification', action: 'skip_item', value: `${run.id}:m6:1` },
+      { label: "Précédent", action: 'details', value: `${run.id}:0` },
+      { label: "Confirmer la proposition examinée", action: 'confirm_run', value: run.id, style: 'primary' },
     ]);
   });
 
@@ -488,10 +488,10 @@ describe('Run Cards', () => {
     const run = await scan(h);
     await action(h, 'details', `${run.id}:0`);
     const message = h.messages.at(-1)!;
-    expect(message.kind).toBe('Details');
+    expect(message.kind).toBe("Détails");
     expect(message.text).toContain(escapeCardValue(run.id));
     expect(message.text).toMatch(/page 1\/1/i);
-    expect(message.text).toContain('From:');
+    expect(message.text).toContain("De :");
     expect(message.text).toContain('Please act today');
     expect(message.text).toContain('alex@example\\.com');
     expect(message.text).toContain('m1');
@@ -503,33 +503,33 @@ describe('Run Cards', () => {
     const run = await scan(h);
     await h.engine.handle(alice, { type: 'text', text: 'report' }, uid());
     const previewReport = h.messages.at(-1)!;
-    expect(previewReport.kind).toBe('Report');
+    expect(previewReport.kind).toBe("Rapport");
     expect(previewReport.text).toContain(escapeCardValue(run.id));
-    expect(previewReport.text).toContain('preview');
+    expect(previewReport.text).toContain('aperçu');
     expect(previewReport.text).toMatch(/^- /m);
-    expect(previewReport.text).toMatch(/pending: 1/);
+    expect(previewReport.text).toMatch(/en attente: 1/);
     expect(previewReport.buttons).toEqual([
-      { label: 'Details', action: 'details', value: `${run.id}:0` },
+      { label: "Détails", action: 'details', value: `${run.id}:0` },
     ]);
 
     await action(h, 'confirm_run', run.id);
     const done = h.messages.at(-1)!;
-    expect(done.kind).toBe('Report');
-    expect(done.text).toContain('done');
-    expect(done.text).toMatch(/applied: 1/);
-    expect(done.text).toMatch(/Unknown outcomes require inspecting Gmail/);
-    expect(done.text).toMatch(/Undo skips messages changed since the agent acted/);
+    expect(done.kind).toBe("Rapport");
+    expect(done.text).toContain('terminé');
+    expect(done.text).toMatch(/appliqué: 1/);
+    expect(done.text).toMatch(/Les résultats incertains nécessitent une vérification dans Gmail/);
+    expect(done.text).toMatch(/L’annulation ignore les messages modifiés depuis l’intervention de l’assistant/);
     expect(done.buttons).toEqual([
-      { label: 'Details', action: 'details', value: `${run.id}:0` },
-      { label: 'Undo this run', action: 'undo_run', value: run.id },
+      { label: "Détails", action: 'details', value: `${run.id}:0` },
+      { label: "Annuler ce traitement", action: 'undo_run', value: run.id },
     ]);
 
     await action(h, 'undo_run', run.id);
     const undone = h.messages.at(-1)!;
-    expect(undone.kind).toBe('Report');
-    expect(undone.text).toContain('undone');
+    expect(undone.kind).toBe("Rapport");
+    expect(undone.text).toContain('annulé');
     expect(undone.buttons).toEqual([
-      { label: 'Details', action: 'details', value: `${run.id}:0` },
+      { label: "Détails", action: 'details', value: `${run.id}:0` },
     ]);
   });
 
@@ -540,10 +540,10 @@ describe('Run Cards', () => {
     const before = h.messages.length;
     await h.engine.handle(alice, { type: 'text', text: 'keep this', resolved: { intent: 'correction', reply: '', rule: null, ruleId: null, runId: run.id, messageId: 'm1', correction: { addLabels: [], removeLabels: [], disposition: 'keep' } } }, uid());
     const sent = h.messages.slice(before);
-    expect(sent[0]!.kind).toBe('Preview');
+    expect(sent[0]!.kind).toBe("Aperçu");
     expect(sent[1]).toEqual({
       actor: alice,
-      text: 'This correction does not change future behavior. Start your reply with mail and describe how the rule should change; I will propose it separately for approval.',
+      text: "Cette correction ne change pas le comportement futur. Commencez votre réponse par courrier et décrivez le changement souhaité de la règle ; je le proposerai séparément pour approbation.",
       buttons: undefined,
     });
     expect(sent[1]!.kind).toBeUndefined();
@@ -563,7 +563,7 @@ describe('Run Cards', () => {
 
     const h = harness(mailbox);
     const run = await scan(h);
-    const preview = h.messages.find(m => m.kind === 'Preview')!.text;
+    const preview = h.messages.find(m => m.kind === "Aperçu")!.text;
     expect(preview).toContain('\\*\\*Promo\\*\\*');
     expect(preview).not.toContain('**Promo**');
 
@@ -572,12 +572,12 @@ describe('Run Cards', () => {
     expect(details).toMatch(/^1\. /m);
     expect(details).toContain('\\*\\*FREE\\*\\*');
     expect(details).not.toContain('**FREE**');
-    expect(details).toContain('From: \\[click\\]\\(http://evil\\)');
+    expect(details).toContain("De : \\[click\\]\\(http://evil\\)");
     expect(details).not.toContain('[click](http://evil)');
     expect(details).toContain('\\*\\*id\\*\\*');
     expect(details).not.toContain('**id**');
     expect(details).toContain('\\*\\*Promo\\*\\*');
-    expect(details).toMatch(/^From:/m);
+    expect(details).toMatch(/^De :/m);
   });
 });
 
@@ -591,32 +591,32 @@ describe('Agent Replies', () => {
   it('posts unlabeled engine messages as Replies, not Cards', async () => {
     const h = harness();
     await h.engine.handle(alice, { type: 'text', text: 'budget' }, uid());
-    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^Team AI usage this UTC calendar month:/) });
+    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^Utilisation de l’IA de l’équipe pour ce mois civil UTC :/) });
     expect(h.messages.at(-1)!.kind).toBeUndefined();
 
     await seed();
     await h.engine.handle(alice, { type: 'text', text: 'sort' }, uid());
-    expect(h.messages.find(m => m.text.startsWith('Checking '))!.kind).toBeUndefined();
+    expect(h.messages.find(m => m.text.startsWith("Examen de "))!.kind).toBeUndefined();
 
     await h.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
-    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringContaining('Project template:') });
+    expect(h.messages.at(-1)).toMatchObject({ text: expect.stringContaining("Modèle de projet :") });
     expect(h.messages.at(-1)!.kind).toBeUndefined();
     const draftId = (await store.load(alice)).drafts[0]!.id;
     await action(h, 'cancel_draft', draftId);
-    expect(h.messages.at(-1)).toEqual({ actor: alice, text: 'Proposal cancelled.', buttons: undefined });
+    expect(h.messages.at(-1)).toEqual({ actor: alice, text: "Proposition annulée.", buttons: undefined });
 
     const run = (await store.load(alice)).runs.at(-1)!;
     await action(h, 'not_a_real_action', run.id);
-    expect(h.messages.at(-1)).toEqual({ actor: alice, text: 'Unsupported action.', buttons: undefined });
+    expect(h.messages.at(-1)).toEqual({ actor: alice, text: "Action non prise en charge.", buttons: undefined });
 
     await h.engine.handle(alice, { type: 'text', text: 'keep this', resolved: { intent: 'correction', reply: '', rule: null, ruleId: null, runId: run.id, messageId: 'm1', correction: { addLabels: [], removeLabels: [], disposition: 'keep' } } }, uid());
-    expect(h.messages.at(-1)).toMatchObject({ text: 'This correction does not change future behavior. Start your reply with mail and describe how the rule should change; I will propose it separately for approval.' });
+    expect(h.messages.at(-1)).toMatchObject({ text: "Cette correction ne change pas le comportement futur. Commencez votre réponse par courrier et décrivez le changement souhaité de la règle ; je le proposerai séparément pour approbation." });
     expect(h.messages.at(-1)!.kind).toBeUndefined();
   });
   it('posts errors as unlabeled Replies', async () => {
     const failing = harness(undefined, 'yes', { converse: async () => { throw new Error('provider exploded'); } });
     await failing.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
-    expect(failing.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^This request could not finish/) });
+    expect(failing.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^Cette demande n’a pas pu aboutir/) });
     expect(failing.messages.at(-1)!.kind).toBeUndefined();
 
   });

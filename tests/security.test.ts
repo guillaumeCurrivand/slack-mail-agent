@@ -62,7 +62,7 @@ it('returns a safe Gmail callback reason without provider payloads', async () =>
   const app = server(oauth);
   const res = await app.inject({ method: 'GET', url: '/auth/google/callback?state=s&code=c', headers: { cookie: 'gmail_oauth=x' } });
   expect(res.statusCode).toBe(400);
-  expect(res.body).toBe('Authorization must finish in the browser where it started. Request a new connection link in Slack.');
+  expect(res.body).toBe('Terminez l’autorisation dans le navigateur où elle a commencé. Demandez un nouveau lien de connexion dans Slack.');
   expect(res.body).not.toMatch(/access_token|id_token|refresh_token/);
   await app.close();
 });

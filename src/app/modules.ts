@@ -7,6 +7,7 @@ import { createSlackModule } from '../modules/slack/index.js';
 import { createDocumentationModule } from '../modules/documentation/index.js';
 import { readDocumentationAIConfig } from '../modules/documentation/ai.js';
 import type { Config } from './config.js';
+import { frenchCommand } from './commands.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
@@ -16,6 +17,6 @@ export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv =
   };
   return new ModuleRegistry(config.enabledModules.map(id => {
     if (!Object.hasOwn(factories, id)) throw new Error(`Unknown enabled module: ${id}`);
-    return factories[id as keyof typeof factories]();
+    return { ...factories[id as keyof typeof factories](), ...(id === 'mail' ? { aliases: ['courrier'] } : {}), normalizeText: (text: string) => frenchCommand(id, text) };
   }));
 }

@@ -26,7 +26,7 @@ it('reviews literal cells and hyperlink display/links without silently resolving
   const review = reviewSnapshot(snapshot, config);
   expect(review.cells.find(cell => cell.cell === 'Projects!A2')).toMatchObject({ text: 'Alpha', link: 'https://example.com/alpha', raw: { formula: '=HYPERLINK("https://example.com/alpha","Alpha")' } });
   expect(review.records.filter(record => record.kind === 'host')).toHaveLength(2);
-  expect(review.cells.find(cell => cell.cell === 'Tools!B2')?.text).toBe('Alpha / Unknown project');
+  expect(review.cells.find(cell => cell.cell === 'Tools!B2')?.text).toBe("Alpha / Unknown project");
   expect(review.warnings.some(warning => warning.includes('Cloud'))).toBe(true);
   expect(() => approveReview(snapshot, review, config, 'User')).toThrow(/unresolved/i);
 });
@@ -92,7 +92,7 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
   try {
     await writeFile(source, importSnapshot);
     await runImportCommand(['review', source, mapping], env);
-    expect((await slackRead('documentation projects')).text).toContain('0 Projects');
+    expect((await slackRead('documentation projects')).text).toContain("0 projets");
     await expect(runImportCommand(['approve', source, mapping, approvalFile, 'Synthetic User'], env)).rejects.toThrow(/unresolved/i);
     await writeFile(mapping, JSON.stringify(resolvedImportReview()));
     await runImportCommand(['approve', source, mapping, approvalFile, 'Synthetic User'], env);
@@ -101,17 +101,17 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
       counts: { project: 1, technology: 2, host: 2, component: 1, hosting: 1, tool: 1 }, problems: [] });
     const project = await slackRead('documentation project Alpha');
     expect(project.table?.rows.flat().filter(cell => typeof cell !== 'string').flat().map(part => part.url)).toContain('https://example.com/alpha');
-    expect(project.text).toContain('Description: Unknown');
+    expect(project.text).toContain("Description: Inconnu");
     const hosts = await slackRead('documentation hosts');
-    expect(hosts.text).toContain('2 Hosts/services');
+    expect(hosts.text).toContain('2 Hébergeurs/services');
     const hostIds = hosts.selects!.flatMap(select => select.options.map(option => option.value.split('host_')[1]!));
     expect(hostIds).toHaveLength(2);
     for (const id of hostIds) {
-      expect((await slackRead(`documentation host ${id}`)).text).toContain('Name: Cloud');
-      expect((await slackRead(`documentation history host ${id}`)).text).toContain('Spreadsheet import');
+      expect((await slackRead(`documentation host ${id}`)).text).toContain("Nom: Cloud");
+      expect((await slackRead(`documentation history host ${id}`)).text).toContain("Import de feuille de calcul");
     }
-    expect((await slackRead('documentation tool Tracker')).text).toContain('Company-wide: Unknown');
-    expect((await slackRead('documentation tool Tracker')).text).toContain('Alpha / Unknown project');
+    expect((await slackRead('documentation tool Tracker')).text).toContain("Toute l’entreprise: Inconnu");
+    expect((await slackRead('documentation tool Tracker')).text).toContain("Alpha / Unknown project");
     expect((await slackRead('documentation components Alpha')).text).toContain('Web');
     const component = await slackRead('documentation component Web');
     expect(component.buttons?.some(button => button.label.includes('React'))).toBe(true);
@@ -119,17 +119,17 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     const hosting = await slackRead('documentation hosting Web');
     expect(hosting.text).toContain('production');
     const hostingId = hosting.selects![0]!.options[0]!.value.split('hosting_')[1]!;
-    expect((await slackRead(`documentation hosting-entry ${hostingId}`)).text).toContain('Component: Alpha / Web');
-    expect((await slackRead(`documentation history hosting-entry ${hostingId}`)).text).toContain('Spreadsheet import');
+    expect((await slackRead(`documentation hosting-entry ${hostingId}`)).text).toContain('Composant: Alpha / Web');
+    expect((await slackRead(`documentation history hosting-entry ${hostingId}`)).text).toContain("Import de feuille de calcul");
     for (const command of ['technology React', 'component Web', 'host Cloud', 'tool Tracker']) {
       const details = await slackRead(`documentation ${command}`);
-      if (command === 'host Cloud') { expect(details.kind).toBe('Choose a Host/service'); continue; }
+      if (command === 'host Cloud') { expect(details.kind).toBe("Choisir une fiche : Hébergeur/service"); continue; }
       const history = await slackRead(`documentation history ${command}`);
-      expect(history.text).toContain('Spreadsheet import');
+      expect(history.text).toContain("Import de feuille de calcul");
     }
     const history = await slackRead('documentation history Alpha');
-    expect(history.text).toContain('Synthetic User'); expect(history.text).toContain('Spreadsheet import'); expect(history.text).toContain('batch');
-    expect((await slackRead('documentation project Alpha', 'TOTHER')).kind).toBe('Project not found');
+    expect(history.text).toContain('Synthetic User'); expect(history.text).toContain("Import de feuille de calcul"); expect(history.text).toContain('lot');
+    expect((await slackRead('documentation project Alpha', 'TOTHER')).kind).toBe("Projet introuvable");
     expect(await runImportCommand(['apply', source, mapping, approvalFile], env, sql)).toMatchObject({ applied: 8, initialHistory: 8, relationships: 6 });
     await runImportCommand(['recover', join(directory, 'recovered')], env, sql);
     expect(await readFile(join(directory, 'recovered', 'snapshot.json'), 'utf8')).toBe(importSnapshot);
@@ -145,7 +145,7 @@ it('retains partial outcomes, rolls back failed record/history together, and res
   } };
   const partial = await new DocumentationImport(flaky, importConfig).apply(importSnapshot, review, approval);
   expect(partial).toMatchObject({ status: 'failed', authoritative: false, applied: 5, initialHistory: 5 });
-  expect((await slackRead('documentation components Alpha')).text).toContain('0 Components');
+  expect((await slackRead('documentation components Alpha')).text).toContain("0 Composants");
   const resumed = await new DocumentationImport(sql, importConfig).apply(importSnapshot, review, approval);
   expect(resumed).toMatchObject({ authoritative: true, applied: 8, initialHistory: 8, relationships: 6, problems: [] });
   expect((await slackRead('documentation technologies')).text).toContain('2 Technologies');
@@ -189,7 +189,7 @@ it('rejects altered approval/snapshot/mapping, unsupported fields, missing evide
   expect(() => approveReview(importSnapshot, noEvidence, importConfig, 'User')).toThrow();
   const invalidField = structuredClone(review); invalidField.records[0]!.fields.password = 'secret';
   expect(() => approveReview(importSnapshot, invalidField, importConfig, 'User')).toThrow();
-  expect((await slackRead('documentation projects')).text).toContain('0 Projects');
+  expect((await slackRead('documentation projects')).text).toContain("0 projets");
 });
 
 it('blocks existing-record name collisions, allows explicitly reviewed references and preserves their history', async () => {
@@ -203,7 +203,7 @@ it('blocks existing-record name collisions, allows explicitly reviewed reference
   const resolvedApproval = approveReview(importSnapshot, review, importConfig, 'Synthetic User');
   const result = await new DocumentationImport(sql, importConfig).apply(importSnapshot, review, resolvedApproval);
   expect(result).toMatchObject({ authoritative: true, applied: 7, existing: 1, initialHistory: 7, relationships: 6 });
-  expect((await slackRead('documentation history Alpha')).text).toContain('Slack structured creation');
+  expect((await slackRead('documentation history Alpha')).text).toContain("Commande structurée Slack — création");
 });
 
 it('does not evaluate arbitrary formulas and preserves literal escaped hyperlink labels', () => {

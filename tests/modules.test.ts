@@ -44,7 +44,7 @@ it('requires a fresh prefix for every request and isolates natural language rout
   await h.text('show me more');
   await h.text('unknown sort');
   expect(seen).toEqual([{ actor: alice, payload: { type: 'text', text: 'show my requests\nfrom yesterday' } }]);
-  expect(h.messages.slice(-3).every(m => m.kind === 'Help' && m.text.includes('not sent to a module'))).toBe(true);
+  expect(h.messages.slice(-3).every(m => m.kind === "Aide" && m.text.includes("transmise à aucun module"))).toBe(true);
   expect((await new Store(sql).load(alice)).drafts).toHaveLength(1);
   expect(h.modules.text('  MAIL   rules  ')).toEqual({ module: 'mail', payload: { type: 'text', text: 'rules' } });
   expect(h.modules.text('mail')).toEqual({ module: 'mail', payload: { type: 'text', text: 'help' } });
@@ -53,7 +53,7 @@ it('requires a fresh prefix for every request and isolates natural language rout
 it('namespaces real mail buttons and retains ownership and duplicate-approval safeguards', async () => {
   const h = harness();
   await h.text('mail starters');
-  const button = h.messages.find(m => m.kind === 'Rule proposal')!.buttons![0]!;
+  const button = h.messages.find(m => m.kind === "Proposition de règle")!.buttons![0]!;
   expect(button.action).toBe('mail:approve_draft');
   await h.run(h.modules.action(button.action, button.value), bob);
   expect((await new Store(sql).load(bob)).rules).toEqual([]);
@@ -74,7 +74,7 @@ it('accepts only the exact legacy mail button IDs and handles unavailable module
   expect(h.modules.action('invented_old_action', draft.id).module).toBe('core');
   const disabled = harness(new ModuleRegistry([]));
   await disabled.run(disabled.modules.action('mail:approve_draft', draft.id));
-  expect(disabled.messages[0]!.text).toContain('No modules are currently enabled');
+  expect(disabled.messages[0]!.text).toContain("Aucun module n’est actuellement activé");
   await expect(disabled.run({ module: 'mail', payload: { type: 'text', text: 'starters' } })).rejects.toThrow('not enabled');
   expect((await new Store(sql).load(alice)).drafts).toHaveLength(0);
 });
@@ -90,11 +90,11 @@ it('starts the core without Gmail, encryption or AI credentials and exposes no m
     expect((await app.inject('/auth/google/callback?code=test&state=test')).statusCode).toBe(404);
     const h = harness(modules);
     await h.text('budget'); await h.text('help'); await h.text('mail sort');
-    expect(h.messages[0]!.text).toContain('$0.0000');
-    expect(h.messages[1]!.text).toContain('No modules are currently enabled');
+    expect(h.messages[0]!.text).toContain("0,0000 USD");
+    expect(h.messages[1]!.text).toContain("Aucun module n’est actuellement activé");
   } finally { await app.close(); }
   expect(() => createModules(readConfig(env), sql, env)).toThrow();
-  expect(() => createModules(readConfig({ ...env, ENABLED_MODULES: 'missing' }), sql, env)).toThrow('Unknown enabled module');
+  expect(() => createModules(readConfig({ ...env, ENABLED_MODULES: 'missing' }), sql, env)).toThrow("Unknown enabled module");
   expect(() => readConfig({ ...env, ENABLED_MODULES: 'mail,mail' })).toThrow('Duplicate');
 });
 
@@ -161,11 +161,11 @@ it('keeps navigation and the other module responsive during a held mail scan whi
   const modules = createModules(config, sql, { ...mailEnv, ENABLED_MODULES: 'mail,slack' });
   for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
   const jobs = new JobStore(sql);
-  await jobs.enqueueOperation('a-sort-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox');
-  await jobs.enqueueOperation('duplicate-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', 'Sort inbox');
+  await jobs.enqueueOperation('a-sort-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', "Trier la boîte de réception");
+  await jobs.enqueueOperation('duplicate-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', "Trier la boîte de réception");
   await jobs.enqueue('z-mail-conflict', alice, { type: 'text', text: 'report' }, 'mail');
   await jobs.enqueue('navigate', alice, { type: 'text', text: 'menu' });
-  await jobs.enqueueOperation('search-other', alice, { type: 'text', text: 'unanswered' }, 'slack', 'unanswered', 'Find unanswered');
+  await jobs.enqueueOperation('search-other', alice, { type: 'text', text: 'unanswered' }, 'slack', 'unanswered', "Chercher les messages sans réponse");
   const held = new Set<string>();
   const query = (text: string, values?: any[]) => text.includes('pg_try_advisory_lock')
     ? Promise.resolve({ rows: [{ locked: !held.has(values![0]) && Boolean(held.add(values![0])) }] })
@@ -179,11 +179,11 @@ it('keeps navigation and the other module responsive during a held mail scan whi
   try {
     await started;
     const deadline = Date.now() + 3000;
-    while ((!messages.some(message => message.kind === 'Menu') || !messages.some(message => message.kind === 'Unanswered for you') || !messages.some(message => message.kind === 'Work in progress')) && Date.now() < deadline)
+    while ((!messages.some(message => message.kind === 'Menu') || !messages.some(message => message.kind === "Messages sans réponse") || !messages.some(message => message.kind === "Traitement en cours")) && Date.now() < deadline)
       await new Promise(resolve => setTimeout(resolve, 20));
     expect(messages.some(message => message.kind === 'Menu')).toBe(true);
-    expect(messages.some(message => message.kind === 'Unanswered for you')).toBe(true);
-    expect(messages.some(message => message.kind === 'Work in progress')).toBe(true);
+    expect(messages.some(message => message.kind === "Messages sans réponse")).toBe(true);
+    expect(messages.some(message => message.kind === "Traitement en cours")).toBe(true);
     expect((await sql.query("SELECT status FROM jobs WHERE id='z-mail-conflict'")).rows[0].status).toBe('queued');
     expect(listCalls).toBe(1);
   } finally { release(); await stop(); vi.unstubAllGlobals(); }
@@ -194,6 +194,8 @@ it('rejects ambiguous registrations before accepting work', () => {
   const module: AssistantModule = { id: 'probe', description: 'Test', legacyActions: ['old_action'], async handle() {} };
   expect(() => new ModuleRegistry([module, module])).toThrow('duplicate');
   expect(() => new ModuleRegistry([{ ...module, id: 'budget' }])).toThrow('Invalid');
+  expect(() => new ModuleRegistry([{ ...module, aliases: ['aide'] }])).toThrow('Invalid');
+  expect(() => new ModuleRegistry([{ ...module, aliases: ['courrier'] }, { ...module, id: 'courrier', legacyActions: [] }])).toThrow('duplicate module prefix');
   expect(() => new ModuleRegistry([module, { ...module, id: 'other' }])).toThrow('legacy action');
 });
 
@@ -236,8 +238,8 @@ it('enforces shared and per-user budgets across modules and reports module attri
   expect(await mail.usage()).toEqual({ charged: 5, reserved: 4 });
   expect(await mail.byModule()).toEqual([{ module: 'mail', charged: 5, reserved: 0 }, { module: 'probe', charged: 0, reserved: 4 }]);
   const h = harness(new ModuleRegistry([])); await h.text('budget');
-  expect(h.messages[0]!.text).toContain('mail: $5.0000 recorded');
-  expect(h.messages[0]!.text).toContain('probe: $0.0000 recorded, $4.0000 reserved');
+  expect(h.messages[0]!.text).toContain("Tri des e-mails : 5,0000 USD enregistrés");
+  expect(h.messages[0]!.text).toContain("probe : 0,0000 USD enregistrés, 4,0000 USD réservés");
 });
 
 it('attributes actual module calls and sends the shared spending alert once from the core', async () => {
@@ -245,7 +247,7 @@ it('attributes actual module calls and sends the shared spending alert once from
   const h = harness(new ModuleRegistry([module]), { ...options, AI_ALERT_USD: 0, SLACK_ADMIN_USER_ID: 'UADMIN' });
   await h.text('probe run'); await h.text('probe run');
   expect(h.messages).toHaveLength(1);
-  expect(h.messages[0]).toMatchObject({ actor: { user: 'UADMIN', channel: 'UADMIN' }, text: expect.stringContaining('The team AI allowance has reached its alert threshold') });
+  expect(h.messages[0]).toMatchObject({ actor: { user: 'UADMIN', channel: 'UADMIN' }, text: expect.stringContaining("Le budget d’IA de l’équipe a atteint le seuil d’alerte") });
   expect(h.messages[0]!.kind).toBeUndefined();
   expect((await sql.query('SELECT DISTINCT module FROM ai_calls')).rows).toEqual([{ module: 'probe' }]);
 });
@@ -261,8 +263,8 @@ it('reports the same shared budget and module attribution through current and le
   await h.run({ module: 'mail', payload: { type: 'text', text: 'budget' } });
   expect(h.messages).toHaveLength(3);
   expect(new Set(h.messages.map(message => message.text)).size).toBe(1);
-  expect(h.messages[0]!.text).toContain('mail: $1.0000 recorded, $0.0000 reserved');
-  expect(h.messages[0]!.text).toContain('probe: $0.0000 recorded, $3.0000 reserved');
+  expect(h.messages[0]!.text).toContain("Tri des e-mails : 1,0000 USD enregistrés, 0,0000 USD réservés");
+  expect(h.messages[0]!.text).toContain("probe : 0,0000 USD enregistrés, 3,0000 USD réservés");
   expect(h.messages.every(message => message.kind === undefined)).toBe(true);
 });
 

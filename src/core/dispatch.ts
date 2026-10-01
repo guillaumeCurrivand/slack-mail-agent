@@ -15,7 +15,7 @@ export async function dispatchJob(sql: Sql, options: RuntimeOptions, modules: Mo
   await modules.dispatch(job, job.actor, job.id, { sql, budget, messenger, requestedAt });
   if (await budget.claimAlert(Math.round(options.AI_ALERT_USD * 1e6))) {
     const recipient = options.SLACK_ADMIN_USER_ID ? { ...job.actor, user: options.SLACK_ADMIN_USER_ID, channel: options.SLACK_ADMIN_USER_ID } : job.actor;
-    try { await messenger.send(recipient, { text: 'The team AI allowance has reached its alert threshold, including pending or uncertain requests. Use budget for current totals. New paid work will stop at the configured limit.' }); }
+    try { await messenger.send(recipient, { text: "Le budget d’IA de l’équipe a atteint le seuil d’alerte, y compris les demandes en attente ou incertaines. Utilisez budget pour consulter les totaux. Les nouveaux traitements payants s’arrêteront à la limite configurée." }); }
     catch { await budget.releaseAlert(); }
   }
 }

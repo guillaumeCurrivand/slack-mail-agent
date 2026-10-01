@@ -27,7 +27,7 @@ export const slackResultsSchema = `CREATE TABLE IF NOT EXISTS slack_unanswered_r
   created_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(owner,event_id)
 );`;
 
-type SavedPage = { text: string; channels: string[]; selected: string[] };
+type SavedPage = { text: string; channels: string[]; selected: string[]; language?: 'fr' };
 
 export class SlackUnansweredResults {
   constructor(private sql: Sql) {}

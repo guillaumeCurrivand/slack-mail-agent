@@ -34,13 +34,17 @@ The user approved a clickable interface for both existing modules, entirely with
 
 ### Interactive message presentation
 
+The User approved the [French-interface contract](../.scratch/french-interface/spec.md): all application-owned screens, help, errors, tables, confirmations, reports, generated explanations and Gmail connection responses use French. Original content and approved values are preserved. French command aliases coexist with English commands; structured JSON keys, stable machine identifiers, operator tools and technical documentation remain unchanged. Dates display as `DD/MM/YYYY HH:mm` in `Europe/Paris`, and numbers use French formatting without changing currencies or deadlines. Retained English generated text is labeled in French; it is not translated through paid work or used to renew approval. Previously posted messages are not bulk edited. This behavior is implemented locally; live integrations and production deployment remain unverified.
+
+Action buttons appear side by side in their existing order, with the record dropdown on its own row. Slack controls responsive wrapping. Presentation-specific action IDs distinguish buttons within a group and resolve to the same authenticated logical actions; old controls remain compatible. All actions remain available across continuation groups.
+
 Menus, channel selection, approval Cards, previews, reports, and Slack Unanswered results use Slack-native grouped panels with a clear kind header and actions kept with their content. Each screen gives one primary button visual emphasis only when it has an unambiguous main action; equally important choices and navigation remain neutral, while destructive actions use Slack's danger style. Presentation must not alter what a button does or weaken the existing approval and ownership checks.
 
 Grouped panels fill the available message space using Slack's container `width: "full"`, including continuation panels. Slack determines the available space for each client and window size.
 
 Documentation's [presentation contract](documentation.md#presentation-redesign) uses native top-level tables with grouped kind/context and actions around them, plus private record-opening dropdowns. Its record fields and comparisons show human-readable relationship names and clickable saved resource links.
 
-Keep the current result density and pagination: five mail details and eight Slack Unanswered entries per page. Unanswered entries retain clearly labeled **Open message** links rather than gaining a button for every entry. Conversational Replies remain simple messages. Slack controls message backgrounds and the available button colors; no custom message background is required.
+Keep the current result density and pagination: five mail details and eight Slack Unanswered entries per page. Unanswered entries retain clearly labeled **Ouvrir le message** links (older retained text may say **Open message**) rather than gaining a button for every entry. Conversational Replies remain simple messages. Slack controls message backgrounds and the available button colors; no custom message background is required.
 
 Existing ownership, approval, recovery, undo, module enablement and shared spending safeguards continue to apply. This redesign adds navigation to existing capabilities; it does not authorize deployment or add new mail or Slack processing behavior.
 

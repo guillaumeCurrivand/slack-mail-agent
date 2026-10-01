@@ -1,5 +1,7 @@
 # Documentation module
 
+The [shared presentation contract](product-spec.md#interactive-message-presentation) now uses French throughout application-owned screens. The English technical command examples below remain compatible. Recommended French commands are `documentation aide`, `documentation projets`, `documentation projet <cible>`, `documentation historique [cible]`, `documentation archives`, `documentation rechercher <JSON>` and `documentation compter <JSON>`. Use `créer`, `modifier`, `archiver` or `restaurer` with `projet`, `technologie`, `composant`, `hébergeur`, `hébergement` or `outil`; browse with `technologies`, `composants`, `hébergeurs`, `hébergements` and `outils`. JSON keys/enums retain their technical English syntax. Selectors, saved values and URLs are preserved. Displayed field/source/status labels are French; stored history attribution remains unchanged. Dates display Paris local time and amounts use French formatting without changing their value or currency.
+
 Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–10 are implemented locally. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
 
 ## Delivered locally — ticket 01

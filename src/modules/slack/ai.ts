@@ -4,6 +4,7 @@ import { Budget, BudgetExceeded, costMicro, PRICE_CARD } from '../../core/budget
 import type { Actor } from '../../core/identity.js';
 import { isAddressed, type UnansweredCandidate } from './unanswered.js';
 import type { SlackAiAttempts } from './store.js';
+import { retainedTextNotice } from '../../core/presentation.js';
 
 const responseSchema = z.object({ results: z.array(z.object({
   id: z.string(), decision: z.enum(['clear', 'possible', 'none']),
@@ -20,7 +21,7 @@ export class SlackAI {
     if (!(model in PRICE_CARD)) throw new Error('Unknown model price card.');
   }
 
-  private interpret(result: z.infer<typeof responseSchema>, actor: Actor, names: string[], candidates: UnansweredCandidate[]) {
+  private interpret(result: z.infer<typeof responseSchema>, actor: Actor, names: string[], candidates: UnansweredCandidate[], retained = false) {
     const expected = new Map(candidates.map(candidate => [`${candidate.channel.id}:${candidate.message.ts}`, candidate]));
     if (result.results.length !== expected.size || new Set(result.results.map(item => item.id)).size !== expected.size ||
       result.results.some(item => !expected.has(item.id))) throw new Error('AI classification IDs did not match the input.');
@@ -35,7 +36,7 @@ export class SlackAI {
         Number(evidence.ts) > lastUserReply && Number(evidence.ts) < Number(candidate.message.ts);
       if (!evidence || !item.reason.trim() ||
         !(evidence.user === actor.user || isAddressed(evidence.text, actor.user, names) || sameAuthorFollowup)) return [];
-      return [{ candidate, decision: item.decision, reason: item.reason.trim() }];
+      return [{ candidate, decision: item.decision, reason: `${retained ? `${retainedTextNotice} ` : ''}${item.reason.trim()}` }];
     });
   }
 
@@ -45,21 +46,25 @@ export class SlackAI {
       text: message.text, followup, direct,
       thread: thread.map(item => ({ ts: item.ts, user: item.user, text: item.text })),
     })) };
-    const body = { model: this.model, instructions, input: JSON.stringify(input),
+    const body = { model: this.model, instructions: `${instructions} Write every reason in French; preserve quoted Slack content and schema values.`, input: JSON.stringify(input),
       text: { format: { type: 'json_schema', name: 'slack_unanswered', strict: true, schema: z.toJSONSchema(responseSchema, { target: 'draft-7' }) } } };
     if (Buffer.byteLength(body.input, 'utf8') > 100_000) throw new Error('Slack thread context is too large to classify.');
-    const hash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const currentHash = createHash('sha256').update(JSON.stringify(body)).digest('hex');
+    const legacyHash = createHash('sha256').update(JSON.stringify({ ...body, instructions })).digest('hex');
+    const prior = await this.attempts.load(actor, eventId, batch);
+    // The old instructions are accepted only for an existing, identical input.
+    // Uncertain attempts retain their checkpoint and cannot dispatch again.
+    const hash = prior?.input_hash === legacyHash ? legacyHash : currentHash;
     if (replayOnly) {
-      const prior = await this.attempts.load(actor, eventId, batch);
       if (prior?.status !== 'complete' || prior.input_hash !== hash) throw new Error('Saved classification unavailable.');
-      return this.interpret(responseSchema.parse(prior.result), actor, names, candidates);
+      return this.interpret(responseSchema.parse(prior.result), actor, names, candidates, hash === legacyHash);
     }
     // This execution checkpoint is written before any paid generation. A
     // started attempt with an unknown outcome must never be issued again.
     const checkpoint = await this.attempts.start(actor, eventId, batch, hash);
     if (checkpoint.hash !== hash) throw new Error('Slack AI input changed during retry.');
     if (checkpoint.status === 'budget') throw new BudgetExceeded();
-    if (checkpoint.status === 'complete') return this.interpret(responseSchema.parse(checkpoint.result), actor, names, candidates);
+    if (checkpoint.status === 'complete') return this.interpret(responseSchema.parse(checkpoint.result), actor, names, candidates, hash === legacyHash);
     if (!checkpoint.created) throw new Error('Slack AI attempt outcome is uncertain.');
     const headers = { Authorization: `Bearer ${this.key}`, 'Content-Type': 'application/json' };
     const countedResponse = await this.fetcher('https://api.openai.com/v1/responses/input_tokens', {
