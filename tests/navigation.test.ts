@@ -78,6 +78,7 @@ it('discovers enabled modules and shared commands in a private main menu without
     for (const command of ['menu', 'help', 'hello']) {
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
+      expect(menu.body.blocks[0].width).toBe('full');
       expect(buttons(menu).map((item: any) => item.text.text)).toEqual(['Slack Unanswered', 'Budget', 'Help']);
       expect(buttons(menu).every((item: any) => item.style === undefined)).toBe(true);
     }
@@ -223,6 +224,7 @@ it('updates only the clicked menu, checks ownership and keeps module selection o
     const first = await h.dm('menu'), second = await h.dm('menu');
     const module = await h.click(first, 'Slack Unanswered');
     expect(module.method).toBe('chat.update');
+    expect(module.body.blocks[0].width).toBe('full');
     expect(module.ts).toBe(first.ts);
     expect(module.body.text).toContain('slack channels');
     const main = await h.click(module, 'Back to menu');

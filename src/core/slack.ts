@@ -124,7 +124,7 @@ export class Slack implements Messenger {
       // action IDs must live in separate actions blocks. Keep every control.
       for (let index = 0; index < Math.max(1, cardBlocks.length); index += 10) {
         blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'More actions' : message.kind.slice(0, 150) },
-          has_header_divider: true, child_blocks: cardBlocks.slice(index, index + 10) });
+          width: 'full', has_header_divider: true, child_blocks: cardBlocks.slice(index, index + 10) });
       }
     }
     const response = await this.fetcher(`https://slack.com/api/${timestamp ? 'chat.update' : 'chat.postMessage'}`, {

@@ -36,6 +36,8 @@ The user approved a clickable interface for both existing modules, entirely with
 
 Menus, channel selection, approval Cards, previews, reports, and Slack Unanswered results use Slack-native grouped panels with a clear kind header and actions kept with their content. Each screen gives one primary button visual emphasis only when it has an unambiguous main action; equally important choices and navigation remain neutral, while destructive actions use Slack's danger style. Presentation must not alter what a button does or weaken the existing approval and ownership checks.
 
+Grouped panels fill the available message space using Slack's container `width: "full"`, including continuation panels. Slack determines the available space for each client and window size.
+
 Keep the current result density and pagination: five mail details and eight Slack Unanswered entries per page. Unanswered entries retain clearly labeled **Open message** links rather than gaining a button for every entry. Conversational Replies remain simple messages. Slack controls message backgrounds and the available button colors; no custom message background is required.
 
 Existing ownership, approval, recovery, undo, module enablement and shared spending safeguards continue to apply. This redesign adds navigation to existing capabilities; it does not authorize deployment or add new mail or Slack processing behavior.

@@ -6,6 +6,12 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Full-width Slack panels
+
+The shared Slack renderer requests `width: "full"` for every grouped panel, including continuation panels, as specified in [interactive message presentation](product-spec.md#interactive-message-presentation). This runtime change requires the existing [update-and-restart procedure](#update-and-restart) after its `main` commit is pushed. There are no environment, permission, or database migration changes.
+
+After `/ready` succeeds, send `menu` and open a Module to check both newly posted and updated panels fill Slack's available message space. Check a long result or Help Card at different window sizes; Slack controls the actual client layout. Existing messages acquire the new width only when updated or posted again. Live Slack rendering and production deployment require separate verification.
+
 ## Documentation review corrections
 
 Components now accept up to 50 existing Technology references, allowing a Project's combined stack to remain on one Component during import. The same limit applies to structured creation/editing, conversational mutations and reviewed import. This requires a runtime rebuild/restart using the existing update procedure, with no additional environment or database migration changes. After deployment, check that Documentation Component help says 50 and that the reviewed import validates its complete Technology selection before approval/apply. This change does not authorize importing real data.

@@ -88,7 +88,7 @@ const cardParts = (body: any) => card(body).child_blocks.find((block: any) => bl
 
 it('groups a Card title, rich text and actions in a Slack container', async () => {
   const body = await post({ kind: 'Help', text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' });
-  expect(card(body)).toMatchObject({ type: 'container', title: { type: 'plain_text', text: 'Help' }, has_header_divider: true });
+  expect(card(body)).toMatchObject({ type: 'container', title: { type: 'plain_text', text: 'Help' }, width: 'full', has_header_divider: true });
   expect(cardParts(body)).toEqual([{ type: 'text', text: 'Commands: connect, starters, rules, sort, report, budget, disconnect.' }]);
   expect(card(body).child_blocks).toHaveLength(1);
 });
@@ -157,6 +157,6 @@ it('keeps all controls when repeated action IDs exceed one container', async () 
   const buttons = Array.from({ length: 11 }, (_, index) => ({ label: `Add ${index}`, action: 'channel_select', value: `C${index}` }));
   const body = await post({ kind: 'Slack channels', text: 'Choose channels.', buttons });
   expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'container']);
-  expect(body.blocks.every((block: any) => block.child_blocks.length <= 10)).toBe(true);
+  expect(body.blocks.every((block: any) => block.width === 'full' && block.child_blocks.length <= 10)).toBe(true);
   expect(body.blocks.flatMap((block: any) => block.child_blocks).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements)).toHaveLength(11);
 });
