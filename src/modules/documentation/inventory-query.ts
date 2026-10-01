@@ -5,6 +5,8 @@ import type { Sql } from '../../core/store.js';
 import { escapeCardValue } from '../../core/slack.js';
 import { recordTitle, type InventoryValues } from './domain.js';
 import { referenceLabel } from './lifecycle.js';
+import { InventoryPresentation } from './presentation.js';
+import { DocumentationStore } from './store.js';
 
 const kind = z.enum(['project', 'component', 'technology', 'host', 'hosting', 'tool']);
 type Kind = z.infer<typeof kind>;
@@ -135,27 +137,18 @@ export class InventoryQueries {
     const unavailable = selectors.find(filter => !references.some(record => record.id === filter.selector
       && record.kind === filter.kind && (query.includeArchived || !record.archived)));
     if (unavailable) return { fingerprint: row.fingerprint, page: 0, pages: 1,
-      content: { kind: 'Filter not found', text: `${recordTitle(unavailable.kind)} selector ${escapeCardValue(unavailable.selector)} does not match an eligible saved record. Unknown or archived references have not been counted as zero matches; check the identifier or explicitly includeArchived.` } };
+      content: { kind: 'Filter not found', text: `${recordTitle(unavailable.kind)} reference does not match an eligible saved record. Unknown or archived references have not been counted as zero matches; inspect the reference or explicitly includeArchived.` } };
     const name = (record: Node) => String(record.fields.name ?? record.fields.environment ?? 'Unknown environment');
-    const criteria = [references.map(record => `${recordTitle(record.kind)}: ${referenceLabel(name(record), record)} (${record.id})`).join('; '),
+    const criteria = [references.map(record => `${recordTitle(record.kind)}: ${referenceLabel(name(record), record)}`).join('; '),
       ...query.fields.map(filter => `${filter.field} = ${String(filter.value ?? 'Unknown')}`),
       ...(query.scope ? [`Scope: ${query.scope === 'project' ? 'across Project Components' : 'one Component'}`] : []),
       ...(query.environment ? [`Environment: ${query.environment}`] : []), `Archived records: ${query.includeArchived ? 'included' : 'excluded'}`].filter(Boolean).join('\n');
-    const links = [...records, ...references].map(record => ({ label: referenceLabel(name(record), record), page: `${record.kind}_${record.id}` }));
-    const resources = records.flatMap(record => ['repositories', 'documentationLinks', 'urls'].flatMap(field => Array.isArray(record.fields[field]) ? (record.fields[field] as string[]).map(url => ({ label: 'Saved record link', url })) : []));
-    const identity = (record: Node) => `${recordTitle(record.kind)}: ${escapeCardValue(referenceLabel(name(record), record))} (${record.id})`;
+    const links = references.map(record => ({ label: referenceLabel(name(record), record), page: `${record.kind}_${record.id}` }));
     const header = `Sources: current inventory records at ${new Date(row.read_at).toISOString()}. Saved links have not been read.\nFilters:\n${escapeCardValue(criteria)}\n${changed ? 'Inventory changed since the previous page. Coverage restarted at page 1; earlier pages are not part of this read.\n' : ''}Total matching ${recordTitle(query.target)} records: ${row.total}\nCounts cover all distinct saved matches, not only this page. Unknown relationships are not evidence of a match; missing inventory is not evidence of real-world absence.\n`;
     const coverage = `Results page ${row.page + 1}/${row.pages}; records ${row.total ? row.page * 8 + 1 : 0}–${Math.min(row.total, row.page * 8 + 8)} of ${row.total}. Each page rereads current data.\n`;
-    let summaries = records.map(record => `${identity(record)}\n${Object.entries(record.fields).filter(([field]) => allowedFields[record.kind].includes(field)).map(([field, value]) => {
-      const text = String(value ?? 'Unknown');
-      return `${field}: ${escapeCardValue(text.length > 180 ? `${text.slice(0, 180)}… [abbreviated; open record details]` : text)}`;
-    }).join('\n')}`).join('\n\n') || 'No saved matches.';
-    // Bound the complete escaped message, since literal markup doubles in size.
-    // Identities and controls always fit; large field summaries move to details.
-    if (header.length + coverage.length + summaries.length > 9500)
-      summaries = records.map(record => `${identity(record)}\nSummary abbreviated; open record details for complete saved fields.`).join('\n\n');
     return { fingerprint: row.fingerprint, page: row.page, pages: query.result === 'count' ? 1 : row.pages,
-      content: { kind: 'Inventory answer', text: header + (query.result === 'count' ? 'Count only. Source controls cover up to the first 8 matches; use search for all matches.' : coverage + summaries),
-        links, resourceLinks: resources } };
+      content: { kind: 'Inventory answer',
+        ...await new InventoryPresentation(new DocumentationStore(this.sql), actor).list(records), text: header + (query.result === 'count' ? 'Count only. Source controls cover up to the first 8 matches; use search for all matches.' : coverage + (records.length ? '' : 'No saved matches.')),
+        links } };
   }
 }

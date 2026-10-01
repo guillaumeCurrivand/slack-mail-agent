@@ -3,13 +3,13 @@ import { ownerKey, uid, type Actor } from '../../core/identity.js';
 import type { JobPayload, ModuleContext } from '../../core/modules.js';
 import type { MenuPage } from '../../core/navigation.js';
 import type { Sql } from '../../core/store.js';
-import { escapeCardValue } from '../../core/slack.js';
+import { escapeCardValue, type MessageTable } from '../../core/slack.js';
 import { interpretQuestion, questionPlan, type QuestionAIConfig, type QuestionPlan } from './ai.js';
-import { inventoryText, hostingEntryText } from './catalog.js';
 import { referenceLabel, statusText } from './lifecycle.js';
 import { DocumentationStore } from './store.js';
 import { InventoryQueries, inventoryQuery, inventoryQueryHelp, type InventoryQuery } from './inventory-query.js';
 import { resolveMutation, type ResolvedMutation } from './mutations.js';
+import { InventoryPresentation } from './presentation.js';
 
 export const questionSchema = `
 CREATE TABLE IF NOT EXISTS documentation_project_context (
@@ -136,6 +136,12 @@ export class DocumentationQuestions {
     return `question_${saved.id}_0`;
   }
   async page(actor: Actor, destination: string): Promise<MenuPage | undefined> {
+    const choice = /^questionchoice_([^_]+)_([^_]+)$/.exec(destination);
+    if (choice) {
+      const selected = await this.choose(actor, { value: `${choice[1]}|${choice[2]}` });
+      return typeof selected === 'string' ? this.page(actor, selected) : selected;
+    }
+    const presentation = new InventoryPresentation(this.store, actor);
     const match = /^question_([^_]+)_(?:([a-f0-9]{32})_)?(\d{1,6})$/.exec(destination);
     if (!match) return;
     const saved = await this.saved(actor, match[1]!);
@@ -149,42 +155,33 @@ export class DocumentationQuestions {
       if (new Date(saved.created_at).getTime() <= Date.now() - 30 * 60_000) return { kind: 'Choice expired', text: 'Repeat the documentation question to get fresh choices.' };
       const ids = saved.candidates ?? [], pages = Math.max(1, Math.ceil(ids.length / 8)), page = Math.min(Number(match[3]), pages - 1);
       const projects = (await Promise.all(ids.slice(page * 8, page * 8 + 8).map(id => this.store.project(actor, id)))).filter(p => p !== undefined);
-      return { kind: 'Choose a Project', text: `Ambiguous Project. Choose by identifier. No Project context has been established.\nChoices page ${page + 1}/${pages}\n${projects.map(p => `${literal(referenceLabel(p.fields.name, p))} (${p.id})`).join('\n')}`,
-        buttons: projects.map(p => ({ label: referenceLabel(p.fields.name, p), action: 'choose_question_project', value: `${saved.id}|${p.id}` })), links: this.pagination(saved.id, page, pages) };
+      return { kind: 'Choose a Project', text: `Ambiguous Project. Choose a record. No Project context has been established.\nChoices page ${page + 1}/${pages}`,
+        ...await presentation.list(projects.map(project => ({ ...project, kind: 'project' as const })), projects.map(project => `questionchoice_${saved.id}_${project.id}`)), links: this.pagination(saved.id, page, pages) };
     }
     const project = await this.store.project(actor, saved.project_id);
     if (!project) return { kind: 'Project unavailable', text: 'That Project was not found. Use documentation projects.' };
     const plan = questionPlan.parse(saved.plan);
     const links = [{ label: 'Project details', page: `project_${project.id}` }];
     const resources = [...(project.fields.repositories ?? []).map(url => ({ label: 'Saved repository', url })), ...(project.fields.documentationLinks ?? []).map(url => ({ label: 'Saved documentation', url }))];
-    let text = '', page = 0, pages = 1;
+    let text = '', page = 0, pages = 1, table: MessageTable | undefined, recordChoices: MenuPage['recordChoices'];
     if (plan.operation === 'hosting') {
       const result = await this.store.projectHosting(actor, project.id, Number(match[3]));
+      const view = await presentation.list(result.entries.filter(entry => entry.fields && entry.hosting_id).map(entry => ({ id: entry.hosting_id!, kind: 'hosting' as const, fields: entry.fields!, archived: !!entry.hosting_archived })));
+      table = view.table; recordChoices = view.recordChoices;
       page = result.page; pages = result.pages;
-      text = result.entries.map(entry => {
-        links.push({ label: `Component: ${entry.component_name}`, page: `component_${entry.component_id}` });
-        if (entry.hosting_id) links.push({ label: `Hosting: ${entry.fields?.environment ?? 'Unknown'}`, page: `hosting_${entry.hosting_id}` });
-        if (typeof entry.fields?.serviceId === 'string') links.push({ label: `Host/service: ${entry.service_name ?? 'Unknown'}`, page: `host_${entry.fields.serviceId}` });
-        for (const url of Array.isArray(entry.fields?.urls) ? entry.fields.urls : []) resources.push({ label: 'Saved hosting URL', url });
-        return hostingEntryText(entry);
-      }).join('\n\n') || 'Components: Unknown\nHosting entries: Unknown';
+      text = result.entries.filter(entry => !entry.hosting_id).map(entry => {
+        if (!entry.hosting_id) links.push({ label: `Component: ${entry.component_name}`, page: `component_${entry.component_id}` });
+        return entry.hosting_id ? '' : `Component: ${literal(entry.component_name)}\nHosting entries: Unknown\nEnvironment: Unknown\nHost/service: Unknown`;
+      }).join('\n\n');
+      if (!result.entries.length) text = 'Components: Unknown\nHosting entries: Unknown';
     } else if (plan.operation === 'technologies') {
       const result = await this.sql.query(`SELECT id,fields,archived FROM documentation_records WHERE team=$1 AND kind='component' AND parent_id=$2 ORDER BY lower(fields->>'name'),id`, [actor.team, project.id]);
       pages = Math.max(1, Math.ceil(result.rows.length / 8)); page = Math.min(Number(match[3]), pages - 1);
-      const chunks: string[] = [];
-      for (const component of result.rows.slice(page * 8, page * 8 + 8)) {
-        links.push({ label: `Component: ${component.fields.name}`, page: `component_${component.id}` });
-        const technologies: string[] = [];
-        for (const id of component.fields.technologies ?? []) {
-          const technology = await this.store.record(actor, 'technology', id);
-          technologies.push(technology ? `${literal(referenceLabel(String(technology.fields.name), technology))} (${id})\n${inventoryText(technology.fields)}` : `Unknown (${id})`);
-          links.push({ label: `Technology: ${technology?.fields.name ?? 'Unknown'}`, page: `technology_${id}` });
-        }
-        chunks.push(`Component: ${literal(referenceLabel(component.fields.name, component))} (${component.id})\nType: ${literal(component.fields.type ?? 'Unknown')}\nTechnologies: ${component.fields.technologies === null ? 'Unknown' : technologies.length ? technologies.join('\n') : 'None recorded'}`);
-      }
-      text = chunks.join('\n\n') || 'Components: Unknown\nTechnologies: Unknown';
+      const view = await presentation.list(result.rows.slice(page * 8, page * 8 + 8).map(component => ({ ...component, kind: 'component' as const })));
+      table = view.table; recordChoices = view.recordChoices;
+      text = result.rows.length ? '' : 'Components: Unknown\nTechnologies: Unknown';
     }
-    return { kind: 'Project answer', text: `Project: ${literal(project.fields.name)} (${project.id})\n${statusText(project)}\nSources: current inventory records. Saved links have not been read.\nAnswer page ${page + 1}/${pages} (this page only)\n${text}\nEvery typed follow-up needs the documentation prefix.`, resourceLinks: resources, links: [...this.pagination(saved.id, page, pages), ...links] };
+    return { kind: 'Project answer', table, recordChoices, text: `Project: ${literal(project.fields.name)}\n${statusText(project)}\nSources: current inventory records. Saved links have not been read.\nAnswer page ${page + 1}/${pages} (this page only)\n${text}\nEvery typed follow-up needs the documentation prefix.`, resourceLinks: resources, links: [...this.pagination(saved.id, page, pages), ...links] };
   }
   private pagination(id: string, page: number, pages: number) {
     return [...(page > 0 ? [{ label: 'Previous', page: `question_${id}_${page - 1}` }] : []), ...(page + 1 < pages ? [{ label: 'Next', page: `question_${id}_${page + 1}` }] : [])];

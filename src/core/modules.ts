@@ -108,6 +108,7 @@ export class ModuleRegistry {
     if (!module) return { kind: 'Module unavailable', text: 'That module is not currently enabled. No work was started.', links: back };
     const page = module.menu ? await module.menu(actor, section, context) : { kind: module.name ?? module.id, text: `${module.description}. Send ${module.id} help.` };
     return { ...page, buttons: page.buttons?.map(button => ({ ...button, action: `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })),
+      recordChoices: page.recordChoices?.map(link => ({ ...link, page: `${module.id}:${link.page}` })),
       links: [...(page.links ?? []).map(link => ({ ...link, page: `${module.id}:${link.page}` })), ...back] };
   }
 }

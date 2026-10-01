@@ -1,7 +1,15 @@
 import type { Actor } from './identity.js';
 
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core'; bound?: boolean };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; resourceLinks?: Array<{ label: string; url: string }> };
+export type TableCell = string | Array<{ text: string; url?: string }>;
+export type MessageTable = { columns: string[]; rows: TableCell[][] };
+export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; selects?: MessageSelect[] };
+export const validResourceUrl = (value: string) => {
+  try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>]/.test(value); }
+  catch { return false; }
+};
+export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
 export interface Messenger {
   send(actor: Actor, message: AgentMessage): Promise<void>;
   post?(actor: Actor, message: AgentMessage): Promise<string>;
@@ -97,10 +105,7 @@ export class Slack implements Messenger {
     const cardBlocks: any[] = [];
     if (message.kind) cardBlocks.push(cardBody(message.kind, text || ' '));
     if (message.kind && message.resourceLinks?.length) {
-      const links = message.resourceLinks.filter(link => {
-        try { const url = new URL(link.url); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>]/.test(link.url); }
-        catch { return false; }
-      });
+      const links = message.resourceLinks.filter(link => validResourceUrl(link.url));
       if (links.length) cardBlocks.push({ type: 'rich_text', elements: links.map(link => ({ type: 'rich_text_section', elements: [{ type: 'link', text: link.label, url: link.url }] })) });
     }
     if (message.kind && buttons.length) cardBlocks.push({ type: 'divider' });
@@ -119,6 +124,12 @@ export class Slack implements Messenger {
       actionIds.add(button.action);
     }
     flushActions();
+    for (const select of message.selects ?? []) {
+      if (!select.options.length) continue;
+      cardBlocks.push({ type: 'actions', elements: [{ type: 'static_select', action_id: select.action,
+        placeholder: { type: 'plain_text', text: select.label.slice(0, 150) },
+        options: select.options.map(option => ({ text: { type: 'plain_text', text: option.label.slice(0, 75) }, value: option.value })) }] });
+    }
     if (message.kind) {
       // A channel list can need more than ten action rows because repeated
       // action IDs must live in separate actions blocks. Keep every control.
@@ -127,9 +138,27 @@ export class Slack implements Messenger {
           width: 'full', has_header_divider: true, child_blocks: cardBlocks.slice(index, index + 10) });
       }
     }
+    if (message.table) {
+      const table = message.table;
+      if (!table.columns.length || table.columns.length > 20 || table.rows.length > 99 || table.rows.some(row => row.length !== table.columns.length))
+        throw new SlackDeliveryRejected('Invalid message table.');
+      const rows: TableCell[][] = [table.columns, ...table.rows];
+      const size = rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0);
+      if (size > 10_000) throw new SlackDeliveryRejected('Message table exceeds Slack limits.');
+      // Native tables are top-level blocks, between the kind header and controls.
+      const selectors = cardBlocks.filter(block => block.type === 'actions' && block.elements.some((element: any) => element.type === 'static_select'));
+      const controls = [...selectors, ...cardBlocks.filter(block => ['actions', 'divider'].includes(block.type) && !selectors.includes(block))];
+      const body = cardBlocks.filter(block => !['actions', 'divider'].includes(block.type));
+      blocks.splice(0);
+      if (message.kind) blocks.push({ type: 'container', title: { type: 'plain_text', text: message.kind.slice(0, 150) }, width: 'full', has_header_divider: true, child_blocks: body });
+      blocks.push({ type: 'table', column_settings: table.columns.map(() => ({ is_wrapped: true })), rows: rows.map(row => row.map(cell =>
+        typeof cell === 'string' ? { type: 'raw_text', text: cell || ' ' } : { type: 'rich_text', elements: [{ type: 'rich_text_section', elements:
+          cell.length ? cell.map(part => part.url && validResourceUrl(part.url) ? { type: 'link', text: part.text, url: part.url } : { type: 'text', text: part.text || ' ' }) : [{ type: 'text', text: ' ' }] }] })) });
+      for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'More actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
+    }
     const response = await this.fetcher(`https://slack.com/api/${timestamp ? 'chat.update' : 'chat.postMessage'}`, {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}), text: escapeSlack(plainReading(text).slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({ channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}), text: escapeSlack([plainReading(text), ...(message.table ? [message.table.columns.join(' | '), ...message.table.rows.map(row => row.map(cellText).join(' | '))] : [])].join('\n').slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
     });
     const result = await response.json() as { ok?: boolean; error?: string; ts?: string };
     if (!response.ok || !result.ok) {

@@ -3,6 +3,18 @@ import { Slack, type AgentMessage } from '../src/core/slack.js';
 
 const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 
+it('keeps native tables outside containers, links only validated destinations and rejects oversized tables before delivery', async () => {
+  const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ['Name', 'Links'], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: 'Back', action: 'core:navigate', value: 'bound|main' }] });
+  expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'table', 'container']);
+  expect(body.blocks[0].child_blocks.every((block: any) => block.type !== 'actions')).toBe(true);
+  expect(body.blocks[1].rows[1][0]).toEqual({ type: 'raw_text', text: 'Literal <@UBOB>' });
+  expect(body.blocks[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
+  const sent: unknown[] = [];
+  const slack = new Slack('token', (async () => { sent.push(true); return Response.json({ ok: true }); }) as typeof fetch);
+  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ['Name'], rows: [['x'.repeat(10_000)]] } })).rejects.toThrow('exceeds Slack limits');
+  expect(sent).toHaveLength(0);
+});
+
 async function post(message: AgentMessage) {
   const posts: any[] = [];
   const slack = new Slack('token', (async (_url, options: any) => {

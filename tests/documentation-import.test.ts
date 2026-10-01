@@ -12,7 +12,7 @@ import { ModuleRegistry } from '../src/core/modules.js';
 import { dispatchJob } from '../src/core/dispatch.js';
 import { createDocumentationModule } from '../src/modules/documentation/index.js';
 import { runImportCommand } from '../src/modules/documentation/import-cli.js';
-import type { AgentMessage, Messenger } from '../src/core/slack.js';
+import { cellText, type AgentMessage, type Messenger } from '../src/core/slack.js';
 import { importSnapshot, importConfig, resolvedImportReview } from './fixtures/documentation-import-review.js';
 
 const snapshot = JSON.stringify({ version: 1, source: 'Synthetic workbook', sheets: [
@@ -50,8 +50,10 @@ async function slackRead(command: string, team = 'TTEAM') {
   const messenger: Messenger = { async send(_actor, message) { messages.push(message); }, async post(_actor, message) { messages.push(message); return `1.${messages.length}`; }, async update(_actor, _ts, message) { messages.push(message); } };
   await dispatchJob(sql, { AI_MONTHLY_LIMIT_USD: 0, AI_USER_MONTHLY_LIMIT_USD: 0, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' }, modules, messenger,
     { ...modules.text(command), actor: { team, user: 'UALICE', channel: 'DALICE' }, id: randomUUID() });
-  return messages.at(-1)!;
+  const message = messages.at(-1)!;
+  return { ...message, text: [message.text, ...(message.table?.rows.map(row => row.map(cellText).join(': ')) ?? [])].join('\n') };
 }
+const identity = (message: AgentMessage) => message.buttons!.find(button => /request_(archive|restore)$/.test(button.action))!.value.split('|')[1]!.split(':')[1]!;
 
 it('imports and reconciles a single Component with 26 reviewed Technologies without dropping references', async () => {
   const workbook = JSON.parse(importSnapshot);
@@ -98,17 +100,17 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     expect(result).toMatchObject({ status: 'reconciled', authoritative: true, reconciled: true, expected: 8, applied: 8, existing: 0, initialHistory: 8, relationships: 6,
       counts: { project: 1, technology: 2, host: 2, component: 1, hosting: 1, tool: 1 }, problems: [] });
     const project = await slackRead('documentation project Alpha');
-    expect(project.resourceLinks).toContainEqual({ label: 'Documentation: https://example.com/alpha', url: 'https://example.com/alpha' });
-    expect(project.text).toContain('description: Unknown');
+    expect(project.table?.rows.flat().filter(cell => typeof cell !== 'string').flat().map(part => part.url)).toContain('https://example.com/alpha');
+    expect(project.text).toContain('Description: Unknown');
     const hosts = await slackRead('documentation hosts');
     expect(hosts.text).toContain('2 Hosts/services');
-    const hostIds = [...hosts.text.matchAll(/Cloud — ([\w-]+)/g)].map(match => match[1]!);
+    const hostIds = hosts.selects!.flatMap(select => select.options.map(option => option.value.split('host_')[1]!));
     expect(hostIds).toHaveLength(2);
     for (const id of hostIds) {
-      expect((await slackRead(`documentation host ${id}`)).text).toContain('name: Cloud');
+      expect((await slackRead(`documentation host ${id}`)).text).toContain('Name: Cloud');
       expect((await slackRead(`documentation history host ${id}`)).text).toContain('Spreadsheet import');
     }
-    expect((await slackRead('documentation tool Tracker')).text).toContain('companyWide: Unknown');
+    expect((await slackRead('documentation tool Tracker')).text).toContain('Company-wide: Unknown');
     expect((await slackRead('documentation tool Tracker')).text).toContain('Alpha / Unknown project');
     expect((await slackRead('documentation components Alpha')).text).toContain('Web');
     const component = await slackRead('documentation component Web');
@@ -116,8 +118,8 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     expect(component.buttons?.some(button => button.label.includes('Node'))).toBe(true);
     const hosting = await slackRead('documentation hosting Web');
     expect(hosting.text).toContain('production');
-    const hostingId = hosting.text.match(/production — ([\w-]+)/)![1]!;
-    expect((await slackRead(`documentation hosting-entry ${hostingId}`)).text).toContain('Component: Web');
+    const hostingId = hosting.selects![0]!.options[0]!.value.split('hosting_')[1]!;
+    expect((await slackRead(`documentation hosting-entry ${hostingId}`)).text).toContain('Component: Alpha / Web');
     expect((await slackRead(`documentation history hosting-entry ${hostingId}`)).text).toContain('Spreadsheet import');
     for (const command of ['technology React', 'component Web', 'host Cloud', 'tool Tracker']) {
       const details = await slackRead(`documentation ${command}`);
@@ -197,7 +199,7 @@ it('blocks existing-record name collisions, allows explicitly reviewed reference
   expect(collision).toMatchObject({ authoritative: false, applied: 0 });
   expect(collision.problems.join('\n')).toContain('collision');
   const project = await slackRead('documentation project Alpha');
-  review.records[0]!.existingId = project.text.match(/Identifier: ([\w-]+)/)![1]!;
+  review.records[0]!.existingId = identity(project);
   const resolvedApproval = approveReview(importSnapshot, review, importConfig, 'Synthetic User');
   const result = await new DocumentationImport(sql, importConfig).apply(importSnapshot, review, resolvedApproval);
   expect(result).toMatchObject({ authoritative: true, applied: 7, existing: 1, initialHistory: 7, relationships: 6 });
@@ -235,7 +237,7 @@ it('refuses fresh mappings after partial progress and requires reconciliation be
 it('requires complete expected existing fields and refuses missing/cross-workspace existing identities', async () => {
   await confirmSlack(await slackRead('documentation create project {"name":"Alpha","notes":"Existing value"}'));
   const existing = await slackRead('documentation project Alpha');
-  const review = resolvedImportReview(); review.records[0]!.existingId = existing.text.match(/Identifier: ([\w-]+)/)![1]!;
+  const review = resolvedImportReview(); review.records[0]!.existingId = identity(existing);
   const report = await new DocumentationImport(sql, importConfig).apply(importSnapshot, review, approveReview(importSnapshot, review, importConfig, 'Synthetic User'));
   expect(report).toMatchObject({ authoritative: false, applied: 0 });
   expect(report.problems.join('\n')).toContain('no overwrite');
@@ -245,7 +247,7 @@ it('requires complete expected existing fields and refuses missing/cross-workspa
   expect(missing).toMatchObject({ authoritative: false, applied: 0 });
   await confirmSlack(await slackRead('documentation create project {"name":"Other workspace Project"}', 'TOTHER'), 'TOTHER');
   const other = await slackRead('documentation project Other workspace Project', 'TOTHER');
-  review.records[0]!.existingId = other.text.match(/Identifier: ([\w-]+)/)![1]!;
+  review.records[0]!.existingId = identity(other);
   const crossWorkspace = await new DocumentationImport(sql, importConfig).apply(importSnapshot, review, approveReview(importSnapshot, review, importConfig, 'Synthetic User'));
   expect(crossWorkspace).toMatchObject({ authoritative: false, applied: 0 });
 });

@@ -38,6 +38,8 @@ Menus, channel selection, approval Cards, previews, reports, and Slack Unanswere
 
 Grouped panels fill the available message space using Slack's container `width: "full"`, including continuation panels. Slack determines the available space for each client and window size.
 
+Documentation's [presentation contract](documentation.md#presentation-redesign) uses native top-level tables with grouped kind/context and actions around them, plus private record-opening dropdowns. Its record fields and comparisons show human-readable relationship names and clickable saved resource links.
+
 Keep the current result density and pagination: five mail details and eight Slack Unanswered entries per page. Unanswered entries retain clearly labeled **Open message** links rather than gaining a button for every entry. Conversational Replies remain simple messages. Slack controls message backgrounds and the available button colors; no custom message background is required.
 
 Existing ownership, approval, recovery, undo, module enablement and shared spending safeguards continue to apply. This redesign adds navigation to existing capabilities; it does not authorize deployment or add new mail or Slack processing behavior.

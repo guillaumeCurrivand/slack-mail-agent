@@ -3,6 +3,7 @@ import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
 import { recordTitle, type RecordKind } from './domain.js';
 import type { DocumentationStore } from './store.js';
+import { InventoryPresentation } from './presentation.js';
 
 export const lifecycleHelp = 'Browse documentation archived [page] for archived records. Request documentation archive <project|technology|component|host|hosting|tool> <identifier or exact name>, or documentation restore <kind> <identifier or exact name>. Project aliases also work; Hosting entries require identifiers. Each operation affects one record and requires your own saved confirmation in this DM within 24 hours. Archiving retains all relationships and history; restoration keeps the same identifier. Archived targets require restoration before editing. No permanent deletion or earlier-field-value restoration is available. No AI is used.';
 export const statusText = (record: { archived: boolean }) => `Status: ${record.archived ? 'Archived' : 'Active'}`;
@@ -21,13 +22,16 @@ export class Lifecycle {
     const match = /^archived_(\d{1,6})$/.exec(destination);
     if (!match) return;
     const result = await this.store.archived(actor, Number(match[1]));
-    return { kind: 'Archived inventory', text: `page ${result.page + 1}/${result.pages} · ${result.total} archived records\n${result.records.map(record => `${recordTitle(record.kind)}: ${escapeCardValue(String(record.fields.name ?? record.fields.environment ?? 'Unknown environment'))} [Archived] — ${record.id}`).join('\n') || 'No archived records.'}`,
-      links: [...result.records.map(record => ({ label: `${recordTitle(record.kind)}: ${String(record.fields.name ?? record.fields.environment ?? 'Unknown environment')}`, page: `${record.kind}_${record.id}` })),
+    const presentation = new InventoryPresentation(this.store, actor);
+    return { kind: 'Archived inventory', text: `page ${result.page + 1}/${result.pages} · ${result.total} archived records\n${result.records.length ? '' : 'No archived records.'}`,
+      ...await presentation.list(result.records.map(record => ({ ...record, archived: true })), undefined, true),
+      links: [
         ...(result.page > 0 ? [{ label: 'Previous', page: `archived_${result.page - 1}` }] : []),
         ...(result.page + 1 < result.pages ? [{ label: 'Next', page: `archived_${result.page + 1}` }] : []), { label: 'Back', page: 'main' }] };
   }
   async handle(actor: Actor, payload: Record<string, unknown>, eventId: string, navigation: Navigation,
     deliver: (message: AgentMessage) => Promise<void>, show: (destination: string) => Promise<void>, source = 'Slack structured'): Promise<boolean> {
+    const presentation = new InventoryPresentation(this.store, actor);
     const confirm = /^confirm_(archive|restore)_(project|technology|component|host|hosting|tool)$/.exec(String(payload.action));
     if (payload.type === 'action' && confirm) {
       const operation = confirm[1] as 'archive' | 'restore', kind = confirm[2] as 'project' | RecordKind;
@@ -36,7 +40,7 @@ export class Lifecycle {
       else if (!saved.applied_at) await deliver({ kind: 'Confirmation expired', text: `Submit a fresh documentation ${operation} ${kind} request.` });
       else await deliver({ kind: saved.outcome === 'missing' ? 'Lifecycle change failed' : saved.outcome === 'satisfied' ? 'Lifecycle already satisfied' : `${recordTitle(kind)} ${operation === 'archive' ? 'archived' : 'restored'}`,
         buttons: outcomeButtons(saved.id),
-        text: `Saved outcome for ${recordTitle(kind)}: ${saved.target_id}\n${saved.outcome === 'missing' ? 'The target was unavailable. Nothing changed.' : saved.outcome === 'satisfied' ? 'The requested lifecycle state already matched; no change or history entry was added.' : 'The approved lifecycle change was saved once. Later changes may have changed the current state.'}\nUse documentation ${kind === 'hosting' ? 'hosting-entry' : kind} ${saved.target_id} to inspect current state.` });
+        text: `${recordTitle(kind)}: ${escapeCardValue(await presentation.name(kind, saved.target_id))}\n${saved.outcome === 'missing' ? 'The target was unavailable. Nothing changed.' : saved.outcome === 'satisfied' ? 'The requested lifecycle state already matched; no change or history entry was added.' : 'The approved lifecycle change was saved once. Later changes may have changed the current state.'}\nOpen Record details to inspect current state.` });
       return true;
     }
     let request: { operation: 'archive' | 'restore'; kind: 'project' | RecordKind; selector: string } | undefined;
@@ -65,7 +69,7 @@ export class Lifecycle {
     }
     const operation = proposal.operation === 'archive' ? 'archive' : 'restore';
     await deliver({ kind: `${operation === 'archive' ? 'Archive' : 'Restore'} ${recordTitle(proposal.record_kind)} confirmation`,
-      text: `${operation === 'archive' ? 'Archive' : 'Restore'} shared ${recordTitle(proposal.record_kind)}: ${proposal.target_id}\nRelationships, identifier and complete history are retained. Only this record changes. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`,
+      text: `${operation === 'archive' ? 'Archive' : 'Restore'} shared ${recordTitle(proposal.record_kind)}: ${escapeCardValue(await presentation.name(proposal.record_kind, proposal.target_id))}\nRelationships, identifier and complete history are retained. Only this record changes. Only you can confirm in this DM. Expires: ${new Date(new Date(proposal.created_at).getTime() + 24 * 3600_000).toISOString()}. Nothing is saved until you confirm.`,
       buttons: [{ label: `Confirm ${operation}`, action: `confirm_${operation}_${proposal.record_kind}`, value: proposal.id, style: operation === 'archive' ? 'danger' : 'primary' }] });
     return true;
   }

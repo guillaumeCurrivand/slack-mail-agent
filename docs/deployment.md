@@ -20,6 +20,25 @@ The review fixes on `main` add saved edit before-values, private **Review values
 
 After deployment, check `/ready`, then propose an edit and inspect its before/after comparison without confirming unintended changes. Verify **Review values** opens a separate private Card and large comparisons paginate. In an approved test inventory, open a relationship query, archive its referenced record with separate confirmation, and reopen the saved query: expect guidance instead of a zero count; explicit `includeArchived` should remain usable. Use existing confirmation/history checks to verify intervening edits still overwrite selected fields and record actual replaced values. These checks do not authorize real import or paid model evaluation. Local automated verification does not establish successful production deployment or live Slack behavior.
 
+## Documentation presentation release candidate
+
+The presentation redesign on `main` uses native Slack tables, private record dropdowns, clickable saved URLs and human-readable relationship values. See the [presentation contract](documentation.md#presentation-redesign). This is a local release candidate until a deployment and live Slack rendering are observed. Deploy only after the reviewed changes are committed and pushed; use the handoff's target commit to check the server revision.
+
+No environment changes, new secrets, Slack scopes or database migrations are required. Preserve the existing `.env`, Compose project and database volume. Old navigation buttons and confirmations remain supported; the redesign does not change inventory authority or authorize a real import.
+
+Use the confirmed server checkout and existing update procedure:
+
+```bash
+cd /opt/slack-mail-agent &&
+git fetch origin main &&
+git pull --ff-only origin main &&
+bash scripts/deploy.sh &&
+git rev-parse HEAD &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+Compare the printed revision with the handoff's target commit. After readiness succeeds, privately browse Projects, Technologies, Hosts/services, Tools, Archived and History. Confirm tables render on desktop and mobile, eight-record pagination works, and **Open record…** updates the clicked message. Inspect Components and **Hosting entries** from a Project, click saved repository/documentation/hosting links, and check that ordinary screens show names/context rather than record identifiers. In a consented test record, propose a selected-field edit and inspect the complete before/after review without applying unintended changes. Confirm unavailable historical before-values and current reference names are labeled, value pages stay complete, and a different User/DM cannot use private dropdowns or review controls. Verify existing Mail Sorter and Slack Unanswered navigation remains usable when enabled. These browsing checks use no AI or Gmail.
+
 ## Documentation import release candidate
 
 Ticket 10 on `main` adds the [offline operator import workflow](documentation-import.md). Keep the existing `ENABLED_MODULES` with `documentation` enabled for inventory access/import. No new environment variables, credentials, Slack/Google scopes or manual migrations are required. Startup idempotently adds `documentation_import_batches` and `documentation_import_effects`; existing records/history, environment and database volume remain. Deploying the code does not review/apply real source data or change inventory authority. Real source review, User approval, import and rollout remain separately authorized operator actions.

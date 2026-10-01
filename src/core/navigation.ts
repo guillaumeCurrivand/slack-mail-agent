@@ -2,7 +2,7 @@ import { ownerKey, uid, type Actor } from './identity.js';
 import { SlackDeliveryRejected, type AgentMessage, type Messenger } from './slack.js';
 import type { Sql } from './store.js';
 
-export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; bindButtons?: boolean };
+export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
 export type MenuTarget = { id: string; timestamp: string };
 
 export async function boundMenuTarget(sql: Sql, actor: Actor, value: unknown, timestamp: unknown): Promise<{ target: MenuTarget; value: string } | undefined> {
@@ -31,8 +31,8 @@ export class Navigation {
 
   async show(actor: Actor, eventId: string, page: MenuPage, target?: MenuTarget) {
     const id = target?.id ?? uid();
-    const { links = [], bindButtons = false, ...content } = page;
-    const message: AgentMessage = { ...content, buttons: [...(content.buttons ?? []).map(button => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button),
+    const { links = [], recordChoices = [], bindButtons = false, ...content } = page;
+    const message: AgentMessage = { ...content, selects: [...(content.selects ?? []), ...(recordChoices.length ? [{ label: 'Open record…', action: 'core:navigate', options: recordChoices.map(link => ({ label: link.label, value: `${id}|${link.page}` })) }] : [])], buttons: [...(content.buttons ?? []).map(button => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button),
       ...links.map(link => ({ label: link.label, action: 'core:navigate', value: `${id}|${link.page}` }))] };
     // Record intent before contacting Slack: an uncertain response must not be resent.
     const claimed = await this.sql.query('INSERT INTO core_navigation_deliveries(event_id,owner) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING event_id', [eventId, ownerKey(actor)]);
