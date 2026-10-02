@@ -1,5 +1,5 @@
 import type { Pool, PoolClient } from 'pg';
-import { ownerKey, type Actor } from './identity.js';
+import { ownerKey, workOwnerKey, type Actor, type IntegrationActor, type WorkIdentity } from './identity.js';
 
 export interface Sql { query(text: string, values?: any[]): Promise<{ rows: any[]; rowCount?: number | null }> }
 export const coreSchema = `
@@ -36,6 +36,13 @@ export class JobStore {
   constructor(readonly sql: Sql) {}
   async enqueue(id: string, actor: Actor, payload: Record<string, unknown>, module = 'core') {
     await this.sql.query('INSERT INTO jobs(id,owner,actor,payload,module) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [id, ownerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module]);
+  }
+  async enqueueIntegration(id: string, actor: IntegrationActor, payload: Record<string, unknown>, module: string) {
+    await this.sql.query('INSERT INTO jobs(id,owner,actor,payload,module) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING',
+      [id, workOwnerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module]);
+  }
+  async defer(id: string, until: Date) {
+    await this.sql.query("UPDATE jobs SET status='queued',available_at=$2 WHERE id=$1 AND status IN ('queued','running')", [id, until]);
   }
   /** Preserve active work at receipt even when intent is resolved later. */
   async enqueueWithOperationSnapshot(id: string, actor: Actor, payload: Record<string, unknown>, module: string, operation: string) {
@@ -92,9 +99,13 @@ export class JobStore {
 }
 
 export async function withOwner<T>(pool: Pool, actor: Actor, work: (client: PoolClient) => Promise<T>, scope = ''): Promise<T | undefined> {
+  return withWorkOwner(pool, actor, work, scope);
+}
+
+export async function withWorkOwner<T>(pool: Pool, actor: WorkIdentity, work: (client: PoolClient) => Promise<T>, scope = ''): Promise<T | undefined> {
   const client = await pool.connect();
   let locked = false;
-  const key = scope ? `${ownerKey(actor)}:${scope}` : ownerKey(actor);
+  const key = scope ? `${workOwnerKey(actor)}:${scope}` : workOwnerKey(actor);
   try {
     locked = (await client.query('SELECT pg_try_advisory_lock(hashtextextended($1,0)) AS locked', [key])).rows[0].locked;
     if (!locked) return undefined;

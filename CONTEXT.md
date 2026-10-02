@@ -20,6 +20,18 @@ The Module that sorts a person's connected Gmail using their approved rules.
 **Slack Unanswered**:
 A Module that privately lists unanswered messages from a person's selected Slack channels.
 
+**Yousign**:
+The Module for receiving the company's Yousign events and posting notifications to selected Slack channels.
+
+**Yousign integration**:
+The company's shared Yousign event source connected to the Agent through its existing webhook.
+
+**Yousign destination**:
+A Slack channel in the shared list that receives notifications from the Yousign integration.
+
+**Yousign notification**:
+A channel message from the Agent describing an event received from the Yousign integration.
+
 **ClickUp**:
 The Module for privately consulting a person's assigned ClickUp tasks through the Agent.
 

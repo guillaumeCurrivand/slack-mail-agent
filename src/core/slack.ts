@@ -15,10 +15,13 @@ export interface Messenger {
   send(actor: Actor, message: AgentMessage): Promise<void>;
   post?(actor: Actor, message: AgentMessage): Promise<string>;
   update?(actor: Actor, timestamp: string, message: AgentMessage): Promise<void>;
+  postChannel?(destination: { team: string; channel: string }, message: AgentMessage): Promise<string>;
 }
 export const menuButton: Button = { label: 'Menu', action: 'menu', value: '', scope: 'core' };
 /** Slack explicitly rejected the message, so delivery can be retried. */
-export class SlackDeliveryRejected extends Error {}
+export class SlackDeliveryRejected extends Error {
+  constructor(message = 'Slack delivery was rejected.', readonly code?: string, readonly retryAfter?: number) { super(message); }
+}
 export const escapeSlack = (text: string) => text.replaceAll('&', '&amp;').replaceAll('<', '&lt;').replaceAll('>', '&gt;');
 const CARD_MARKUP = /[\\`*_{}[\]()#+.!&~>-]/g;
 export const escapeCardValue = (value: string) => value.replace(CARD_MARKUP, '\\$&');
@@ -94,10 +97,17 @@ export class Slack implements Messenger {
     if (typeof result.ts !== 'string' || !/^\d+\.\d+$/.test(result.ts)) throw new Error('Slack message identity unavailable.');
     return result.ts;
   }
+  async postChannel(destination: { team: string; channel: string }, message: AgentMessage) {
+    if (!/^[CG][A-Z0-9]+$/.test(destination.channel) || message.buttons?.length || message.selects?.length)
+      throw new SlackDeliveryRejected('Invalid channel notification.');
+    const result = await this.deliver(destination, message);
+    if (typeof result.ts !== 'string' || !/^\d+\.\d+$/.test(result.ts)) throw new Error('Slack message identity unavailable.');
+    return result.ts;
+  }
   async update(actor: Actor, timestamp: string, message: AgentMessage) {
     await this.deliver(actor, message, timestamp);
   }
-  private async deliver(actor: Actor, message: AgentMessage, timestamp?: string) {
+  private async deliver(actor: { channel: string }, message: AgentMessage, timestamp?: string) {
     const text = ['Connect', 'Connexion'].includes(message.kind ?? '') ? withMintedConnectUrl(message.text) : message.kind ? message.text : sanitizeReply(message.text);
     const buttons = message.buttons ?? [];
     const blocks: any[] = [];
@@ -157,11 +167,15 @@ export class Slack implements Messenger {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({ channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}), text: escapeSlack([plainReading(text), ...(message.table ? [message.table.columns.join(' | '), ...message.table.rows.map(row => row.map(cellText).join(' | '))] : [])].join('\n').slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
     });
+    if (response.status === 429) {
+      const seconds = Number(response.headers.get('retry-after'));
+      throw new SlackDeliveryRejected('Slack rate limit.', 'rate_limited', Number.isFinite(seconds) && seconds > 0 ? seconds : 60);
+    }
     const result = await response.json() as { ok?: boolean; error?: string; ts?: string };
     if (!response.ok || !result.ok) {
       // Transient internal errors can occur after Slack accepted a message.
       const rejected = new Set(['access_denied', 'channel_not_found', 'ekm_access_denied', 'invalid_auth', 'invalid_blocks', 'is_archived', 'missing_scope', 'no_permission', 'not_in_channel', 'rate_limited', 'ratelimited', 'token_expired', 'token_revoked', 'message_not_found', 'cant_update_message']);
-      if (result.ok === false && result.error && rejected.has(result.error)) throw new SlackDeliveryRejected('Slack delivery was rejected.');
+      if (result.ok === false && result.error && rejected.has(result.error)) throw new SlackDeliveryRejected('Slack delivery was rejected.', result.error);
       throw new Error('Slack delivery failed.');
     }
     return result;

@@ -1,9 +1,9 @@
 import type { Pool } from 'pg';
 import { dispatchJob, type RuntimeOptions } from './dispatch.js';
-import { ownerKey, type Actor } from './identity.js';
+import { isIntegration, workOwnerKey, type WorkIdentity } from './identity.js';
 import type { ModuleRegistry } from './modules.js';
 import type { Messenger } from './slack.js';
-import { JobStore, withOwner } from './store.js';
+import { JobStore, withWorkOwner } from './store.js';
 
 export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY: number }, modules: ModuleRegistry, messenger: Messenger) {
   const globalStore = new JobStore(pool), enabled = modules.enabledIds();
@@ -12,21 +12,24 @@ export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY
     const jobs = await pool.query(`SELECT * FROM (
       SELECT DISTINCT ON (owner,module) id,actor,module,created_at,available_at FROM jobs
       WHERE module=ANY($1::text[]) AND status IN ('queued','running')
+        AND (actor->>'kind' IS DISTINCT FROM 'integration' OR available_at<=now())
       ORDER BY owner,module,created_at,id
     ) ready WHERE available_at<=now() ORDER BY created_at,id LIMIT 30`, [enabled]);
     for (const candidate of jobs.rows) {
       if (stopping) return;
-      const worked = await withOwner(pool, candidate.actor as Actor, async client => {
+      const worked = await withWorkOwner(pool, candidate.actor as WorkIdentity, async client => {
         // Fetch again after the module lock: another worker may have completed the candidate.
-        const job = (await client.query("SELECT * FROM jobs WHERE owner=$1 AND module=$2 AND status IN ('queued','running') ORDER BY created_at,id LIMIT 1", [ownerKey(candidate.actor), candidate.module])).rows[0];
+        const job = (await client.query("SELECT * FROM jobs WHERE owner=$1 AND module=$2 AND status IN ('queued','running') AND (actor->>'kind' IS DISTINCT FROM 'integration' OR available_at<=now()) ORDER BY created_at,id LIMIT 1", [workOwnerKey(candidate.actor), candidate.module])).rows[0];
         if (!job || new Date(job.available_at).getTime() > Date.now()) return false;
         await client.query("UPDATE jobs SET status='running',attempts=attempts+1 WHERE id=$1", [job.id]);
         try {
-          await dispatchJob(client, config, modules, messenger, job);
-          await new JobStore(client).complete(job.id);
+          const retryAt = await dispatchJob(client, config, modules, messenger, job);
+          if (retryAt) await new JobStore(client).defer(job.id, retryAt);
+          else await new JobStore(client).complete(job.id);
         } catch {
           // Usually a DB/Slack delivery failure. AI interpretations and message checkpoints are already durable.
-          await new JobStore(client).retryOrFail(job.id);
+          if (isIntegration(job.actor)) await new JobStore(client).defer(job.id, new Date(Date.now() + 30_000));
+          else await new JobStore(client).retryOrFail(job.id);
           console.error(JSON.stringify({ event: 'job_failed', job: job.id }));
         }
         return true;

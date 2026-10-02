@@ -60,6 +60,14 @@ Optional lifecycle methods are:
 
 Only enabled modules are constructed, initialized, and registered. Disabled modules' queued jobs are left untouched and excluded from worker selection, including selection after taking the owner lock. Shared jobs and other modules can still run for that user. A module's cleanup is also paused while disabled; account for that when planning retention and decommissioning.
 
+### Integration-owned background work
+
+An approved company integration can enqueue `IntegrationActor` work with `JobStore.enqueueIntegration`, supplying the Module ID and an explicit workspace/integration identity. Implement `handleIntegration` to receive that identity, SQL, messenger and request time. This dispatch has no User budget or fabricated Slack User; existing User dispatch and ownership remain unchanged. A handler may return a future `Date` to defer durable known-undelivered work. Integration failures remain queued instead of reaching the User job's five-attempt terminal limit. Keep provider checkpoints and retry classifications inside the Module.
+
+The worker uses `team:integration:<id>:module` advisory locks for this work. It can select later ready integration jobs while an earlier job is deferred; ordinary User jobs preserve their previous order. These locks serialize background attempts, but shared configuration changes from different Users still need database coordination. Use `src/core/transactions.ts` for a checked-out transaction and a Module-owned guard row; keep receipt/snapshots/enqueue and confirmation/effect changes atomic. Do not hold that transaction across provider requests. [Yousign](yousign.md) demonstrates separate destination activations, pending cancellation and per-delivery markers; see [its ownership ADR](adr/0005-shared-yousign-notifications.md).
+
+`Messenger.postChannel` sends a fresh notification to a validated channel and returns its message timestamp. It does not accept interactive controls. The Module must establish standing posting authorization, current bot access and a durable sending marker before using it. Private User menus continue through ordinary namespaced dispatch and owner/DM/message binding. The shared Slack transport reports definite rejection (including rate-limit delay) separately from uncertain outcomes; the Module decides which failures can safely retry.
+
 ## Configuration and paid AI work
 
 For module-specific configuration, write a module-local reader and call it inside the factory in `src/app/modules.ts`. This ensures missing credentials for a disabled module cannot prevent startup. Modules may use already-validated shared configuration, such as the Slack bot token, directly. Register the factory and add its ID to the deployment's comma-separated `ENABLED_MODULES`, then restart. Do not instantiate Gmail, Google OAuth, or a mail store for another module.

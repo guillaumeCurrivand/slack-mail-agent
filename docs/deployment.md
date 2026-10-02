@@ -6,6 +6,26 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Yousign release candidate
+
+The opt-in [Yousign Module](yousign.md) receives the existing company subscription at `/webhooks/yousign`. Pull the reviewed release containing `src/modules/yousign/index.ts` before enabling it: older releases reject `ENABLED_MODULES` containing `yousign` and fail startup. Preserve `.env`, the existing encryption key, database volume and Compose project. Add `YOUSIGN_WEBHOOK_SECRET`, `YOUSIGN_SUBSCRIPTION_ID`, `YOUSIGN_SANDBOX` (`false` for production, `true` for sandbox), and the existing operational recipient `SLACK_ADMIN_USER_ID`; append `yousign` to `ENABLED_MODULES`. No Yousign API key, new subscription, Gmail or AI credentials are needed. Invite the bot into approved destinations; verify `channels:read`, `groups:read` and `chat:write` on the installed token.
+
+Enabled startup creates `yousign_*` tables idempotently; no manual migration command is required. New background jobs use an explicit integration identity. Stop old workers through the deployment script before the new image starts; do not run mixed old/new app versions. Existing User jobs keep their ownership and ordering.
+
+After the reviewed `main` change is committed and pushed, run on the confirmed server:
+
+```bash
+cd /opt/slack-mail-agent &&
+git pull --ff-only origin main &&
+git rev-parse HEAD &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+Check the printed revision against the handoff's target commit. Update the existing Yousign webhook URL to the configured HTTPS public origin plus `/webhooks/yousign`, with its original secret/subscription/environment. Preserve the raw body and signature header through the proxy and omit sensitive body logging. Observe acknowledgement latency against the provider's one-second initial deadline; local tests do not establish production latency.
+
+Post-deploy, open **Yousign** in a private DM. Confirm the initial empty list, then explicitly activate a consented test channel. Send an approved test event through the existing provider subscription; check the French notification and `yousign statut`. Check actual private/Slack Connect access and hidden-channel privacy with eligible test Users. Verify duplicate suppression, queued removal and restart recovery; inspect an uncertain delivery through its separately saved confirmation before authorizing any resend. Check generic private operational alerts and continued operation of other enabled Modules. Disabled Yousign should expose no webhook route and preserve pending work. Live provider compatibility, actual PostgreSQL concurrency and successful production deployment require separate observation.
+
 ## ClickUp release candidate
 
 The `clickup` Module is implemented locally and opt-in. Before enabling it, preserve the existing `.env` and `ENCRYPTION_KEY`; add `CLICKUP_CLIENT_ID`, `CLICKUP_CLIENT_SECRET` and the confirmed numeric `CLICKUP_WORKSPACE_ID` for Mayasquad, then append `clickup` to the existing `ENABLED_MODULES`. ClickUp-only deployments still need the shared Slack/database/public-origin configuration and encryption key, but no Gmail or AI credentials. Disabled ClickUp requires no ClickUp secrets and exposes no OAuth routes.

@@ -22,7 +22,7 @@ The user approved a clickable interface for both existing modules, entirely with
 
 **Implemented locally (ticket 04):** Sort inbox and Find unanswered start the existing workflows from owner-bound menu controls. Typed starts and menu clicks share durable, atomic admission by User, Module and operation; natural-language mail requests capture active work at receipt and claim the operation after intent resolution. Overlapping requests keep the original request identity even when their status Card is delivered later. Slack result pages use the original saved result without reclassifying or paying again, and recheck selected-channel access before showing cached excerpts. Worker locks now serialize work within each User and Module, allowing navigation and the other Module to proceed during a provider call with at least two worker lanes. Terminal completion releases admission. See [the locking decision](adr/0003-operation-admission-and-module-locks.md). Live Slack verification and deployment have not been observed; real PostgreSQL concurrency tests were skipped without `TEST_DATABASE_URL`.
 
-- The main menu offers Mail Sorter, Slack Unanswered, Budget and Help, hiding disabled modules. `menu`, `help` and plain greetings such as `hello` show the main menu. Unrecognized commands and workflow results provide a Menu button.
+- The main menu offers every enabled Module, Budget and Help, hiding disabled modules. `menu`, `help` and plain greetings such as `hello` show the main menu. Unrecognized commands and workflow results provide a Menu button.
 - Navigation updates the menu message being used. Module menus include Back to menu. Results and approval requests remain separate messages so navigation does not erase them. The `menu` command posts a fresh menu.
 - Mail Sorter offers Sort inbox, Manage rules, Latest report and Gmail connection, plus Pending approvals when needed. Starter rules live under Manage rules. Details and undo remain attached to previews and reports. Pending approvals reopens existing rule proposals and sorting previews without starting new work, preserving existing expiry and invalidation safeguards.
 - Add rule and Edit buttons post instructions in the DM. The user supplies a description with the explicit `mail` prefix, then separately approves the proposal. Existing commands remain shortcuts; opening a module menu never changes the routing of later typed messages.
@@ -62,10 +62,14 @@ Documentation extends ownership to workspace-shared inventory and lifetime histo
 
 The User approved [ClickUp's feature contract](clickup.md) on 01/10/2026 after the design interview. The `clickup` Module is implemented locally and opt-in: it connects each User's personal ClickUp account through OAuth and privately lists their directly assigned tasks in the configured Mayasquad Workspace. It is read-only and requires neither Gmail nor AI. The contract owns assignment/archive rules, the linked table, date-only due-date presentation, account confirmation, result expiry and access/recovery safeguards. Live connection, provider completeness and deployment remain unverified.
 
+## Yousign module
+
+The User approved [Yousign's complete contract](yousign.md) on 02/10/2026 and authorized implementation. One company webhook drives identical French notifications in a workspace-shared destination list managed by everyone through private menus. This explicitly extends the DM-only contract for automatic notifications in selected public/private/externally shared channels; configuration, status, confirmations and operational alerts remain private. Adding authorizes future posts immediately, removal cancels waiting posts and empty selections skip events without backfill. Integration-owned durable work preserves deduplication, partial recovery and uncertainty safeguards without impersonating a Slack User or invoking AI. See [the ownership ADR](adr/0005-shared-yousign-notifications.md). The Module is implemented and tested locally; live release work remains unverified.
+
 ## Audience and access
 
 - One Slack workspace, serving the user's team of 10.
-- Interaction exclusively in private messages with the bot.
+- User interactions are in private messages with the bot. Yousign's explicitly approved automatic notifications post to selected channels under [its own contract](yousign.md); other Modules retain their existing private boundaries.
 - Each Mail Sorter user connects at most one personal-to-them Google Workspace Gmail account; connecting Gmail is not required to use the assistant's shared commands or future independent modules.
 - Each user has separate Gmail authorization, rules, project mappings, conversation history, previews, and action records.
 - No shared team rules in version one. Team administrators may manage availability and connection health through the product but cannot browse other users' mail, rules, or conversations through it.

@@ -1,7 +1,7 @@
 import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { budgetReport, type Budget } from './budget.js';
-import type { Actor } from './identity.js';
+import type { Actor, IntegrationActor } from './identity.js';
 import type { Messenger } from './slack.js';
 import { Navigation, type MenuPage } from './navigation.js';
 import type { Sql } from './store.js';
@@ -10,6 +10,7 @@ import { logicalAction } from './presentation.js';
 export type JobPayload = Record<string, unknown>;
 export type RoutedJob = { module: string; payload: JobPayload };
 export type ModuleContext = { sql: Sql; budget: Budget; messenger: Messenger; requestedAt: Date };
+export type IntegrationContext = Pick<ModuleContext, 'sql' | 'messenger' | 'requestedAt'>;
 export interface AssistantModule {
   id: string;
   description: string;
@@ -24,6 +25,7 @@ export interface AssistantModule {
   registerRoutes?(app: FastifyInstance): void;
   cleanup?(pool: Pool): Promise<void>;
   handle(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext): Promise<void>;
+  handleIntegration?(actor: IntegrationActor, payload: JobPayload, eventId: string, context: IntegrationContext): Promise<Date | void>;
 }
 
 /** Built-in trusted modules. Only enabled modules are constructed and registered. */
@@ -47,6 +49,11 @@ export class ModuleRegistry {
   }
   all() { return [...this.modules.values()]; }
   enabledIds() { return ['core', ...this.modules.keys()]; }
+  async dispatchIntegration(job: RoutedJob, actor: IntegrationActor, eventId: string, context: IntegrationContext) {
+    const module = this.modules.get(job.module);
+    if (!module?.handleIntegration) throw new Error('Integration module is not enabled.');
+    return module.handleIntegration(actor, job.payload, eventId, context);
+  }
   operation(job: RoutedJob): NonNullable<AssistantModule['workOperations']>[number] | undefined {
     const module = this.modules.get(job.module);
     return module?.workOperations?.find(operation => job.payload.type === 'text'

@@ -10,6 +10,8 @@ import type { Config } from './config.js';
 import { frenchCommand } from './commands.js';
 import { readClickupConfig } from '../modules/clickup/config.js';
 import { createClickupModule } from '../modules/clickup/index.js';
+import { readYousignConfig } from '../modules/yousign/config.js';
+import { createYousignModule } from '../modules/yousign/index.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
@@ -17,6 +19,7 @@ export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv =
     slack: () => createSlackModule(config.SLACK_BOT_TOKEN, sql, readSlackConfig(env)),
     documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env)),
     clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
+    yousign: () => createYousignModule({ ...readYousignConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),
   };
   return new ModuleRegistry(config.enabledModules.map(id => {
     if (!Object.hasOwn(factories, id)) throw new Error(`Unknown enabled module: ${id}`);
