@@ -2,15 +2,15 @@ import type { Actor } from '../../core/identity.js';
 import { formatDate, formatNumber } from '../../core/presentation.js';
 import type { MenuPage } from '../../core/navigation.js';
 import type { Button } from '../../core/slack.js';
-import { escapeCardValue } from '../../core/slack.js';
 import { ClickupAPI, ClickupError } from './api.js';
 import type { Connection, Scan, StatusFilter, Task } from './domain.js';
 import { ClickupStore } from './store.js';
+import { filterSummary, matchesStatus } from './status-filter.js';
 
 const day = (value: number) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 const date = (value: number) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 const shorten = (value: string, length = 90) => value.length > length ? `${value.slice(0, length - 1)}…` : value;
-const eligible = (task: Task, subject: string, filter: StatusFilter) => !task.archived && task.assignees.includes(subject) && (filter.mode === 'default' ? !['done', 'closed'].includes(task.statusType) : filter.names.includes(task.status));
+const eligible = (task: Task, subject: string, filter: StatusFilter) => !task.archived && task.assignees.includes(subject) && matchesStatus(filter, task.status, !['done', 'closed'].includes(task.statusType));
 const sort = (a: Task, b: Task) => (a.due === null ? '9999-99-99' : day(a.due)).localeCompare(b.due === null ? '9999-99-99' : day(b.due)) || a.name.localeCompare(b.name, 'fr') || a.id.localeCompare(b.id);
 
 export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor: Actor, connection: Connection, workspaceId: string, eventId: string, filter: StatusFilter = { mode: 'default' }): Promise<Scan> {
@@ -28,7 +28,7 @@ export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor:
     const seen = new Set(scan.seen);
     while (!scan.finished) {
       // Local name matching preserves unavailable selections without provider-side invalid-name errors.
-      const page = await api.tasks(workspaceId, connection.identity.id, scan.page, scan.filter.mode === 'custom');
+      const page = await api.tasks(workspaceId, connection.identity.id, scan.page, scan.filter.mode === 'custom' || !!scan.filter.includeNames?.length);
       if (!page.length) { scan.finished = true; scan.complete = !scan.notice; break; }
       let newIds = 0;
       for (let value of page) {
@@ -74,14 +74,10 @@ export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connecti
   if (page + 1 < count) buttons.push({ label: 'Suivant', action: 'page', value: `${sourceId}|${page + 1}` });
   buttons.push({ label: 'Actualiser', action: 'tasks', value: 'tasks' });
   if (!scan.complete) buttons.push({ label: 'Réessayer', action: 'tasks', value: 'tasks' });
-  const selectedNames = scan.filter?.mode === 'custom' ? scan.filter.names.map(escapeCardValue).join(', ') : '';
-  const filterSummary = selectedNames.length > 1500
-    ? `${formatNumber(scan.filter?.mode === 'custom' ? scan.filter.names.length : 0)} statuts : ${shorten(selectedNames, 1500)} Consultez clickup statuts pour la sélection complète.`
-    : `${selectedNames}.`;
   const text = [
     scan.complete ? `${formatNumber(scan.tasks.length)} tâches · Page ${formatNumber(page + 1)}/${formatNumber(count)}.` : `Résultats incomplets : ${formatNumber(scan.tasks.length)} tâches récupérées · Page ${formatNumber(page + 1)}/${formatNumber(count)}.`,
     `Récupération : ${formatDate(scan.retrievedAt)}. Les pages conservent cet instantané ; les accès sont revérifiés.`,
-    scan.filter?.mode === 'custom' ? `Filtre appliqué : ${filterSummary}` : 'Filtre appliqué : tous les statuts non terminés.',
+    `Filtre appliqué : ${filterSummary(scan.filter ?? { mode: 'default' })}.`,
     scan.complete && !scan.tasks.length ? 'Aucune tâche assignée correspondant à ce filtre dans Mayasquad.' : '',
     scan.notice, accessNotice,
   ].filter(Boolean).join('\n');

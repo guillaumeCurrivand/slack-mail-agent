@@ -7,17 +7,18 @@ import { ClickupAPI, ClickupError } from './api.js';
 import { formatDate, formatNumber } from '../../core/presentation.js';
 import { ClickupStatusStore } from './status-store.js';
 import { discoverStatuses } from './statuses.js';
+import { changeStatus, filterNames, filterSummary, matchesStatus } from './status-filter.js';
 
 const choiceKey = (name: string) => createHash('sha256').update(name).digest('hex');
 const editorChoices = (editor: StatusEditor) => {
   const { catalogue, filter } = editor.data;
-  return [...catalogue.choices.map(choice => ({ ...choice, available: true })), ...(filter.mode === 'custom' ? filter.names : []).filter(name => !catalogue.choices.some(choice => choice.name === name)).map(name => ({ name, unfinished: false, available: false }))];
+  return [...catalogue.choices.map(choice => ({ ...choice, available: true })), ...filterNames(filter).filter(name => !catalogue.choices.some(choice => choice.name === name)).map(name => ({ name, unfinished: false, available: false }))];
 };
 
 export function statusPage(editor: StatusEditor, requestedPage = 0, notice = ''): MenuPage {
   const { catalogue, filter } = editor.data;
-  const names = filter.mode === 'custom' ? filter.names : catalogue.choices.filter(choice => choice.unfinished).map(choice => choice.name);
   const choices = editorChoices(editor);
+  const names = choices.filter(choice => matchesStatus(filter, choice.name, choice.unfinished)).map(choice => choice.name);
   const pages = Math.max(1, Math.ceil(choices.length / 10)), page = Math.min(requestedPage, pages - 1);
   const selected = new Set(names), visible = choices.slice(page * 10, (page + 1) * 10);
   const buttons: Button[] = visible.filter(choice => choice.available || selected.has(choice.name)).map(choice => ({
@@ -26,14 +27,13 @@ export function statusPage(editor: StatusEditor, requestedPage = 0, notice = '')
   }));
   if (page > 0) buttons.push({ label: 'Précédent', action: 'status_page', value: `${editor.id}|${page - 1}` });
   if (page + 1 < pages) buttons.push({ label: 'Suivant', action: 'status_page', value: `${editor.id}|${page + 1}` });
-  if (catalogue.complete) buttons.push({ label: 'Enregistrer', action: 'status_save', value: `${editor.id}|${page}`, style: 'primary' });
-  else buttons.push({ label: 'Réessayer', action: 'status_retry', value: `${editor.id}|${page}` });
+  if (!catalogue.complete) buttons.push({ label: 'Réessayer', action: 'status_retry', value: `${editor.id}|${page}` });
   if (catalogue.complete) buttons.push({ label: 'Actualiser les statuts', action: 'status_retry', value: `${editor.id}|${page}` });
-  buttons.push({ label: 'Réinitialiser le filtre', action: 'status_reset', value: `${editor.id}|${page}` }, { label: 'Annuler', action: 'status_cancel', value: `${editor.id}|${page}` });
+  buttons.push({ label: 'Réinitialiser le filtre', action: 'status_reset', value: `${editor.id}|${page}` }, { label: 'Fermer', action: 'status_cancel', value: `${editor.id}|${page}` });
   return { kind: 'Statuts ClickUp', bindButtons: true, buttons, text: [
-    notice, filter.mode === 'default' ? 'Filtre par défaut : tous les statuts non terminés.' : `Sélection personnelle : ${formatNumber(names.length)} statuts.`,
-    'Les modifications prennent effet après Enregistrer. Ce sélecteur expire après 30 minutes.',
-    catalogue.complete ? `Statuts disponibles · Page ${formatNumber(page + 1)}/${formatNumber(pages)}.` : 'Liste des statuts incomplète. Enregistrement bloqué ; votre filtre enregistré est conservé.',
+    notice, filter.mode === 'default' ? `Filtre par défaut : ${filterSummary(filter)}.` : `Sélection personnelle : ${formatNumber(names.length)} statuts.`,
+    'Chaque ajout, retrait ou réinitialisation est enregistré automatiquement. Ce sélecteur expire après 30 minutes.',
+    catalogue.complete ? `Statuts disponibles · Page ${formatNumber(page + 1)}/${formatNumber(pages)}.` : 'Liste des statuts incomplète. Les modifications sont enregistrées ; Réessayer poursuit la découverte.',
     catalogue.checkedAt ? `Catalogue vérifié : ${formatDate(catalogue.checkedAt)}. Réutilisé pendant 5 minutes ; Actualiser les statuts relance la découverte.` : '',
     ...visible.map(choice => `${selected.has(choice.name) ? '✓' : '○'} ${escapeCardValue(choice.name)}${catalogue.complete && !catalogue.choices.some(available => available.name === choice.name) ? ' · indisponible' : ''}`),
     'Les noms identiques s’appliquent à toutes les listes de Mayasquad. La découverte des statuts de Personal List est différée.',
@@ -50,7 +50,7 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
   if ((command !== 'statuses' && !editor) || (editor && editor.connectionId !== context.connectionId)) return unavailable();
   const page = Number(parsed?.[2] ?? 0);
   if (editor && editor.state !== 'editing') return show({ kind: 'Statuts ClickUp', bindButtons: true, text: 'Cette action a déjà été traitée ou ce sélecteur est fermé. Votre filtre actuel est conservé.', buttons: [{ label: 'Choisir les statuts', action: 'statuses', value: 'statuses' }] });
-  // Editing a previously delivered draft needs only local ownership/connection checks.
+  // Local changes need only ownership/connection checks, including during cooldowns.
   if (['statuses', 'status_save', 'status_retry'].includes(command)) {
     try {
       const options = { waitForRateLimit: false, signal: AbortSignal.timeout(5000) };
@@ -81,17 +81,25 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
     await context.store.edit(actor, editor, eventId, data);
   } else if (command === 'status_cancel') {
     await context.store.edit(actor, editor, eventId, data, 'cancelled');
-    return show({ kind: 'Statuts ClickUp', text: 'Modification annulée. Votre filtre enregistré est conservé.' });
+    return show({ kind: 'Statuts ClickUp', text: 'Sélecteur fermé. Vos modifications enregistrées sont conservées.' });
   } else if (command === 'status_reset') {
     data.filter = { mode: 'default' };
-    await context.store.edit(actor, editor, eventId, data);
+    await context.store.apply(actor, editor, eventId, data);
+    notice = 'Filtre par défaut enregistré.';
   } else if (command === 'status_add' || command === 'status_remove') {
     const choice = editorChoices(editor).find(choice => choiceKey(choice.name) === parsed[3]);
     if (!choice || (command === 'status_add' && !choice.available)) return unavailable();
-    const names = new Set(data.filter.mode === 'custom' ? data.filter.names : data.catalogue.choices.filter(choice => choice.unfinished).map(choice => choice.name));
-    if (command === 'status_add') names.add(choice.name); else names.delete(choice.name);
-    data.filter = { mode: 'custom', names: [...names] };
-    await context.store.edit(actor, editor, eventId, data);
+    // Old posted editors may contain unsaved drafts; apply only this explicit change.
+    const preference = await context.store.preference(actor);
+    data.filter = changeStatus(preference.filter, data.catalogue, choice, command === 'status_add');
+    if (data.filter.mode === 'custom' && !data.filter.names.length && preference.version === editor.version) {
+      data.filter = preference.filter;
+      notice = 'Gardez au moins un statut sélectionné ou réinitialisez le filtre. Ce retrait n’a pas été enregistré.';
+      await context.store.edit(actor, editor, eventId, data);
+    } else {
+      await context.store.apply(actor, editor, eventId, data);
+      notice = 'Modification enregistrée. Elle s’appliquera à la prochaine commande clickup tâches ou à Actualiser.';
+    }
   } else if (command === 'status_save') {
     if (!data.catalogue.complete) notice = 'La liste des statuts est incomplète. Réessayez avant d’enregistrer.';
     else if (data.filter.mode === 'custom' && !data.filter.names.length) notice = 'Sélectionnez au moins un statut ou réinitialisez le filtre.';
@@ -103,5 +111,6 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
     await context.store.edit(actor, editor, eventId, data);
   } else return unavailable();
   editor = await context.store.editor(actor, editor.id);
+  if (editor?.state === 'conflict') return show({ kind: 'Statuts ClickUp', bindButtons: true, text: 'Ce sélecteur est périmé après une autre sauvegarde. Votre filtre actuel est conservé ; rouvrez le sélecteur.', buttons: [{ label: 'Choisir les statuts', action: 'statuses', value: 'statuses' }] });
   return editor ? show(statusPage(editor, page, notice)) : unavailable();
 }

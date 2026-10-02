@@ -69,6 +69,21 @@ export class ClickupStatusStore {
     ) UPDATE clickup_status_editors SET state=CASE WHEN EXISTS(SELECT 1 FROM changed) THEN 'saved' ELSE 'conflict' END WHERE id IN(SELECT editor_id FROM claimed)`,
     [editor.id, ownerKey(actor), actor.channel, this.workspace, editor.connectionId, eventId, uid()]);
   }
+  async apply(actor: Actor, editor: StatusEditor, eventId: string, data: StatusEditor['data']): Promise<void> {
+    await this.sql.query(`WITH target AS (
+      SELECT * FROM clickup_status_editors WHERE id=$1 AND owner=$2 AND channel=$3 AND workspace=$4 AND connection_id=$5 AND state='editing' AND expires_at>now()
+      AND EXISTS(SELECT 1 FROM clickup_connections WHERE owner=$2 AND connection_id=$5) FOR UPDATE
+    ), claimed AS (
+      INSERT INTO clickup_status_events(owner,event_id,editor_id) SELECT $2,$6,id FROM target ON CONFLICT DO NOTHING RETURNING editor_id
+    ), changed AS (
+      UPDATE clickup_status_preferences SET filter=$7::jsonb->'filter',version=$8 FROM target,claimed
+      WHERE clickup_status_preferences.owner=$2 AND clickup_status_preferences.workspace=$4 AND clickup_status_preferences.version=$9 AND target.version=$9 AND claimed.editor_id=target.id
+      RETURNING clickup_status_preferences.version
+    ) UPDATE clickup_status_editors SET data=CASE WHEN EXISTS(SELECT 1 FROM changed) THEN $7::jsonb ELSE data END,
+      version=COALESCE((SELECT version FROM changed),version),state=CASE WHEN EXISTS(SELECT 1 FROM changed) THEN 'editing' ELSE 'conflict' END
+      WHERE id IN(SELECT editor_id FROM claimed)`,
+    [editor.id, ownerKey(actor), actor.channel, this.workspace, editor.connectionId, eventId, JSON.stringify(data), uid(), editor.version]);
+  }
   async cleanup(actor: Actor) {
     await this.sql.query(`DELETE FROM clickup_status_editors e WHERE owner=$1 AND expires_at<=now()
       AND NOT EXISTS(SELECT 1 FROM jobs WHERE id=e.source_id AND status IN('queued','running'))

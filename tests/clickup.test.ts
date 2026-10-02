@@ -143,8 +143,8 @@ it('opens the private French status picker with unused configured statuses and c
   expect(picker.text).toContain('Unused');
   expect(picker.text).toContain('Finished');
   expect(picker.text).toContain('Personal List');
-  expect(picker.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Enregistrer', 'Annuler', 'Réinitialiser le filtre']));
-  await h.click('status_save', picker, { ...alice, user: 'UBOB', channel: 'DBOB' });
+  expect(picker.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Fermer', 'Réinitialiser le filtre']));
+  await h.click('status_reset', picker, { ...alice, user: 'UBOB', channel: 'DBOB' });
   expect(h.messages.at(-1)!.text).toContain('indisponible');
 });
 
@@ -166,14 +166,14 @@ it('loads a twelve-page catalogue without serializing independent List reads', a
   const h = harness(fetcher), proposal = await connect(h); await h.click('confirm', proposal);
   await h.text('clickup statuts');
   expect(h.messages.at(-1)!.text).toContain('Page 1/12');
-  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Fermer')).toBe(true);
   expect(reads).toBe(120); expect(peak).toBeGreaterThan(1); expect(peak).toBeLessThanOrEqual(4);
   const calls = p.calls.length;
   await h.click('status_page'); await chooseStatus(h, 'Status 010', false); await h.click('status_reset');
   expect(h.messages.at(-1)!.text).toContain('Filtre par défaut'); expect(p.calls).toHaveLength(calls);
 });
 
-it('lets Retirer change a saved editor draft during a ClickUp cooldown without provider calls', async () => {
+it('lets Retirer save immediately during a ClickUp cooldown without provider calls', async () => {
   const p = provider([]), h = await connected(p);
   await h.text('clickup statuts'); const picker = h.messages.at(-1)!, calls = p.calls.length;
   await sql.query("INSERT INTO clickup_limits(owner,connection_id,retry_at) SELECT owner,connection_id,now()+interval '2 minutes' FROM clickup_connections");
@@ -181,10 +181,11 @@ it('lets Retirer change a saved editor draft during a ClickUp cooldown without p
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
   expect(h.messages.at(-1)!.text).toContain('Sélection personnelle');
   expect(p.calls).toHaveLength(calls);
-  await h.click('status_save');
-  expect(h.messages.at(-1)!.text).toContain('temporairement');
+  await h.click('status_cancel'); expect(h.messages.at(-1)!.text).toContain('enregistrées');
+  expect(p.calls).toHaveLength(calls);
+  await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
+  await h.text('clickup statuts');
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
-  await h.click('status_cancel'); expect(h.messages.at(-1)!.text).toContain('annulée');
 });
 
 it('reuses a recent complete catalogue across restart and explicitly refreshes or expires it', async () => {
@@ -235,7 +236,7 @@ it('checkpoints a stalled discovery at its time limit and resumes it with Retry'
     expect(partial.text).toContain('incomplète'); expect(partial.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
     vi.useRealTimers();
     await base.click('status_retry', partial, alice, 'resume-stalled');
-    expect(base.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+    expect(base.messages.at(-1)!.text).toContain('Statuts disponibles');
   } finally { vi.useRealTimers(); }
 });
 
@@ -260,19 +261,21 @@ it('keeps the longest cooldown when concurrent catalogue reads receive different
   await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
   for (const id of ['13', '14']) p.locations.set(`/api/v2/list/${id}`, { id, statuses: [{ status: `New ${id}`, type: 'custom' }] });
   await base.click('status_retry', limited.messages.at(-1)!, alice, 'cooldowns-ended');
-  expect(base.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(base.messages.at(-1)!.text).toContain('Statuts disponibles');
 });
 
-it('does not apply a Save rejected during cooldown when its delivery is retried after later draft edits', async () => {
+it('does not repeat an autosaved Remove during cooldown after a later Add', async () => {
   const p = provider([]), h = await connected(p);
-  await h.text('clickup statuts'); await chooseStatus(h, 'Unused', false); const draft = h.messages.at(-1)!;
+  await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
   await sql.query("INSERT INTO clickup_limits(owner,connection_id,retry_at) SELECT owner,connection_id,now()+interval '2 minutes' FROM clickup_connections");
   const update = h.messenger.update; h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
-  await expect(h.click('status_save', draft, alice, 'cooldown-save')).rejects.toThrow('rejected');
-  h.messenger.update = update; await chooseStatus(h, 'Closed', true, draft);
+  await expect(chooseStatus(h, 'Unused', false, picker, 'cooldown-remove')).rejects.toThrow('rejected');
+  h.messenger.update = update;
+  await chooseStatus(h, 'Unused', false, picker, 'cooldown-remove');
+  await chooseStatus(h, 'Unused', true);
   await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
-  await h.click('status_save', draft, alice, 'cooldown-save');
-  await h.text('clickup statuts'); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
+  await chooseStatus(h, 'Unused', false, picker, 'cooldown-remove');
+  await h.text('clickup statuts'); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Unused');
 });
 
 async function chooseStatus(h: ReturnType<typeof harness>, name: string, selected: boolean, message = h.messages.at(-1)!, eventId?: string) {
@@ -283,15 +286,68 @@ async function chooseStatus(h: ReturnType<typeof harness>, name: string, selecte
   await h.run({ ...route, payload: { ...route.payload, timestamp: message.timestamp } }, alice, eventId);
 }
 
+it('automatically persists Add and Remove across closing and process restart', async () => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuts');
+  await chooseStatus(h, 'Unused', false);
+  await h.click('status_cancel');
+  const restarted = harness(p.fetcher);
+  await restarted.text('clickup statuts', alice, 'autosave-reopen');
+  expect(restarted.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  await chooseStatus(restarted, 'Closed', true);
+  await restarted.text('clickup statuts', alice, 'autosave-reopen-added');
+  expect(restarted.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  expect(restarted.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+});
+
+it('autosaves partial-catalogue changes without dropping undiscovered unfinished statuses', async () => {
+  const p = provider([[task('removed', { status: { status: 'Unused', type: 'open' } }), task('unloaded', { status: { status: 'Unloaded', type: 'custom' } }), task('closed', { status: { status: 'Closed', type: 'closed' } })]]), h = await connected(p);
+  p.failures.set('/api/v2/list/12', 403);
+  await h.text('clickup statuts'); const partial = h.messages.at(-1)!;
+  expect(partial.text).toContain('incomplète');
+  await chooseStatus(h, 'Unused', false);
+  await chooseStatus(h, 'Closed', true);
+  await h.click('status_cancel');
+  await h.text('clickup statuts');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Unused', 'Retirer Closed']));
+  await h.text('clickup tâches');
+  expect(h.messages.at(-1)!.table!.rows.map(row => row[0])).toEqual([[{ text: 'Task closed', url: 'https://app.clickup.com/t/closed' }], [{ text: 'Task unloaded', url: 'https://app.clickup.com/t/unloaded' }]]);
+  p.failures.clear(); p.locations.set('/api/v2/list/12', { id: '12', statuses: [{ status: 'Unloaded', type: 'custom' }] });
+  await h.click('status_retry', partial);
+  await h.text('clickup statuts');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Unused', 'Retirer Closed', 'Retirer Unloaded']));
+});
+
+it('does not implicitly save other choices from a legacy unsaved editor', async () => {
+  const h = await connected(provider([]));
+  await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
+  // Persisted editor fixture from the pre-autosave release, with an unsaved draft.
+  await sql.query(`UPDATE clickup_status_editors SET data=jsonb_set(data,'{filter}',$1::jsonb)`, [JSON.stringify({ mode: 'custom', names: ['Finished'] })]);
+  await chooseStatus(h, 'Closed', true, picker);
+  await h.text('clickup statuts');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Closed', 'Retirer In progress', 'Retirer Unused', 'Ajouter Finished']));
+});
+
+it('retains explicit saving through a legacy Enregistrer control', async () => {
+  const h = await connected(provider([]));
+  await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
+  await sql.query(`UPDATE clickup_status_editors SET data=jsonb_set(data,'{filter}',$1::jsonb)`, [JSON.stringify({ mode: 'custom', names: ['Finished'] })]);
+  const boundValue = picker.buttons!.find(button => button.action === 'clickup:status_reset')!.value;
+  const legacy = h.modules.action('clickup:status_save', boundValue);
+  await h.run({ ...legacy, payload: { ...legacy.payload, timestamp: picker.timestamp } });
+  expect(h.messages.at(-1)!.text).toContain('Votre filtre est enregistré');
+  await h.text('clickup statuts');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Ajouter In progress']));
+});
+
 it('saves a personal completed-status filter without changing an earlier task snapshot', async () => {
   const p = provider([[...Array.from({ length: 9 }, (_, index) => task(`active${index}`)), task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Closed', type: 'closed' } })]]), h = await connected(p);
   await h.text('clickup tasks'); const original = h.messages.at(-1)!;
   await h.text('clickup statuts');
-  await chooseStatus(h, 'In progress', false);
-  await chooseStatus(h, 'Unused', false);
   await chooseStatus(h, 'Finished', true);
   await chooseStatus(h, 'Closed', true);
-  await h.click('status_save');
+  await chooseStatus(h, 'In progress', false);
+  await chooseStatus(h, 'Unused', false);
   expect(h.messages.at(-1)!.text).toContain('enregistré');
   await h.click('page', original);
   expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
@@ -306,30 +362,27 @@ it('saves a personal completed-status filter without changing an earlier task sn
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Retirer Closed', 'Ajouter In progress']));
 });
 
-it('does not turn a rejected empty save into a later successful save when delivery is retried', async () => {
+it('does not apply a rejected last-status Remove when delivery is retried after a later Add', async () => {
   const h = await connected(provider([]));
   await h.text('clickup statuses');
-  await chooseStatus(h, 'In progress', false); await chooseStatus(h, 'Unused', false);
+  await chooseStatus(h, 'In progress', false);
   const empty = h.messages.at(-1)!, update = h.messenger.update;
   h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
-  await expect(h.click('status_save', empty, alice, 'empty-save')).rejects.toThrow('rejected');
+  await expect(chooseStatus(h, 'Unused', false, empty, 'empty-remove')).rejects.toThrow('rejected');
   h.messenger.update = update;
   await chooseStatus(h, 'Finished', true, empty);
-  await h.click('status_save', empty, alice, 'empty-save');
+  await chooseStatus(h, 'Unused', false, empty, 'empty-remove');
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Unused', 'Retirer Finished']));
 });
 
-it('cancels draft edits and applies a reset only after Enregistrer', async () => {
+it('keeps autosaved changes after closing and applies Reset immediately', async () => {
   const h = await connected(provider([[task('active'), task('unused', { status: { status: 'Unused', type: 'open' } })]]));
-  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false); await h.click('status_save');
+  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false);
   await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true); await h.click('status_cancel');
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Closed');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
   await h.click('status_reset');
-  const reset = h.messages.at(-1)!;
-  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('1 tâches');
-  await h.click('status_save', reset);
   await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('2 tâches');
   expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
 });
@@ -337,54 +390,50 @@ it('cancels draft edits and applies a reset only after Enregistrer', async () =>
 it('rejects an outdated editor instead of overwriting a newer saved filter', async () => {
   const h = await connected(provider([]));
   await h.text('clickup statuses'); const older = h.messages.at(-1)!;
-  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false); await h.click('status_save');
-  await chooseStatus(h, 'Finished', true, older); await h.click('status_save');
+  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false);
+  await chooseStatus(h, 'Finished', true, older);
   expect(h.messages.at(-1)!.text).toContain('autre sauvegarde');
   await h.text('clickup statuses');
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
 });
 
-it('resumes incomplete status discovery without saving from a partial catalogue', async () => {
+it('resumes incomplete status discovery while preserving autosaved choices', async () => {
   const p = provider([]), h = await connected(p);
   p.failures.set('/api/v2/list/12', 403);
   await h.text('clickup statuses'); const incomplete = h.messages.at(-1)!;
   expect(incomplete.text).toContain('incomplète');
   expect(incomplete.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
   await chooseStatus(h, 'Closed', true);
-  const retry = h.messages.at(-1)!.buttons!.find(button => button.action === 'clickup:status_retry')!;
-  const forgedSave = h.modules.action('clickup:status_save', retry.value);
-  await h.run({ ...forgedSave, payload: { ...forgedSave.payload, timestamp: incomplete.timestamp } });
-  expect(h.messages.at(-1)!.text).toContain('incomplète');
-  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('inclus explicitement : Closed');
   const successfulReads = p.calls.filter(path => path.startsWith('/api/v2/team/42/space')).length;
   p.failures.delete('/api/v2/list/12'); await h.click('status_retry', incomplete);
-  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(h.messages.at(-1)!.text).toContain('Statuts disponibles');
   expect(p.calls.filter(path => path.startsWith('/api/v2/team/42/space'))).toHaveLength(successfulReads);
-  await h.click('status_save'); await h.text('clickup statuses');
+  await h.text('clickup statuses');
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
 });
 
 it('does not repeat a saved effect after delivery rejection and a later reset', async () => {
   const h = await connected(provider([]));
-  await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true);
+  await h.text('clickup statuses');
   const picker = h.messages.at(-1)!, update = h.messenger.update;
   h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
-  await expect(h.click('status_save', picker, alice, 'saved-retry')).rejects.toThrow('rejected');
+  await expect(chooseStatus(h, 'Closed', true, picker, 'saved-retry')).rejects.toThrow('rejected');
   h.messenger.update = update;
-  await h.text('clickup statuses'); await h.click('status_reset'); await h.click('status_save');
-  await h.click('status_save', picker, alice, 'saved-retry');
+  await h.text('clickup statuses'); await h.click('status_reset');
+  await chooseStatus(h, 'Closed', true, picker, 'saved-retry');
   await h.text('clickup statuses'); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
 });
 
 it('keeps preferences across disconnect, replacement and disabled-module startup while rejecting old editors', async () => {
   const p = provider([]), h = await connected(p);
-  await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true); await h.click('status_save');
+  await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true);
   await h.text('clickup statuses'); const oldEditor = h.messages.at(-1)!;
   await h.text('clickup disconnect'); await h.click('confirm');
   const off = createModules(readConfig({ ...env, ENABLED_MODULES: '' }), sql, {});
   expect(off.text('clickup statuts').module).toBe('core');
   const proposal = await connect(h); await h.click('confirm', proposal);
-  await h.click('status_save', oldEditor); expect(h.messages.at(-1)!.text).toContain('indisponible');
+  await h.click('status_reset', oldEditor); expect(h.messages.at(-1)!.text).toContain('indisponible');
   p.changeIdentity(8); const replacement = await connect(h); await h.click('confirm', replacement);
   await h.text('clickup statuses');
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
@@ -392,7 +441,7 @@ it('keeps preferences across disconnect, replacement and disabled-module startup
 
 it('retains unavailable names without falling back to unfinished tasks', async () => {
   const p = provider([[task('active'), task('done', { status: { status: 'Finished', type: 'done' } })]]), h = await connected(p);
-  await h.text('clickup statuses'); await chooseStatus(h, 'In progress', false); await chooseStatus(h, 'Unused', false); await chooseStatus(h, 'Finished', true); await h.click('status_save');
+  await h.text('clickup statuses'); await chooseStatus(h, 'Finished', true); await chooseStatus(h, 'In progress', false); await chooseStatus(h, 'Unused', false);
   for (const [path, value] of p.locations) {
     const container = value as { statuses?: Array<{ status: string; type: string }>; spaces?: Array<{ statuses: Array<{ status: string; type: string }> }> };
     const rename = (statuses: Array<{ status: string; type: string }>) => statuses.map(status => status.status === 'Finished' ? { ...status, status: 'Renamed' } : status);
@@ -429,7 +478,7 @@ it('discovers archived, nested, folderless and shared-only definitions with one 
   const picker = h.messages.at(-1)!;
   for (const name of ['Archived', 'Inherited', 'Nested', 'Folderless', 'Shared list', 'Shared task home']) expect(picker.text).toContain(name);
   expect(picker.buttons!.filter(button => button.label === 'Retirer In progress')).toHaveLength(1);
-  expect(picker.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(picker.text).toContain('Statuts disponibles');
 });
 
 it('keeps more than 100 status choices reachable and preserves a saved filter after uncertain delivery', async () => {
@@ -444,12 +493,11 @@ it('keeps more than 100 status choices reachable and preserves a saved filter af
   }
   expect(h.messages.at(-1)!.text).toContain('Status 149');
   expect(h.messages.at(-1)!.text).toContain('Page 15/15');
-  await chooseStatus(h, statuses[149]!.status, false);
   const picker = h.messages.at(-1)!, update = h.messenger.update;
   h.messenger.update = async () => { throw new Error('uncertain'); };
-  await expect(h.click('status_save', picker, alice, 'uncertain-filter-save')).rejects.toThrow('uncertain');
+  await expect(chooseStatus(h, statuses[149]!.status, false, picker, 'uncertain-filter-save')).rejects.toThrow('uncertain');
   h.messenger.update = update;
-  await h.click('status_save', picker, alice, 'uncertain-filter-save');
+  await chooseStatus(h, statuses[149]!.status, false, picker, 'uncertain-filter-save');
   await h.text('clickup statuses');
   expect(h.messages.at(-1)!.text).toContain('149 statuts');
   p.failures.set('/api/v2/team/42/task', 400);
@@ -472,15 +520,14 @@ it('keeps an editor recoverable during a catalogue rate-limit cooldown without a
   // Simulate the provider's cooldown ending, then reconstruct the process.
   await sql.query('UPDATE clickup_limits SET retry_at=now()-interval \'1 second\'');
   await base.click('status_retry', incomplete, alice, 'catalogue-recovered');
-  expect(base.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(base.messages.at(-1)!.text).toContain('Statuts disponibles');
 });
 
 it('keeps each User’s saved filter independent and rejects another DM or message and expired editors', async () => {
   const p = provider([]), h = await connected(p), bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
-  await h.text('clickup statuts'); await chooseStatus(h, 'Closed', true); await h.click('status_save');
+  await h.text('clickup statuts'); await chooseStatus(h, 'Closed', true);
   p.changeIdentity(8); const proposal = await connect(h, bob); await h.click('confirm', proposal, bob);
   await h.text('clickup statuses', bob); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
-  await h.click('status_save', h.messages.at(-1)!, bob);
   p.changeIdentity(7); await h.text('clickup statuses'); const picker = h.messages.at(-1)!;
   expect(picker.buttons!.map(button => button.label)).toContain('Retirer Closed');
   await h.click('status_reset', picker, { ...alice, channel: 'DOTHER' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
@@ -502,7 +549,7 @@ it('blocks an unresolved shared task’s home List and hides a cached catalogue 
   expect(h.messages.at(-1)!.text).toContain('Reconnectez'); expect(h.messages.at(-1)!.text).not.toContain('Unused');
   p.failures.clear(); p.locations.set('/api/v2/list/33', { id: '33', statuses: [{ status: 'Shared unused', type: 'custom' }] });
   await h.click('status_retry', picker);
-  expect(h.messages.at(-1)!.text).toContain('Shared unused'); expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(h.messages.at(-1)!.text).toContain('Shared unused'); expect(h.messages.at(-1)!.text).toContain('Statuts disponibles');
 });
 
 it('routes signed French status commands and editor controls through Slack ingress and dispatch', async () => {
@@ -520,7 +567,7 @@ it('routes signed French status commands and editor controls through Slack ingre
     const click = (await sql.query("SELECT * FROM jobs WHERE id LIKE 'action:%'")).rows[0];
     expect(click.payload.action).toBe('status_add');
     await h.run(click, click.actor, click.id); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
-    await h.click('status_save'); await h.text('clickup statuses');
+    await h.text('clickup statuses');
     expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
   } finally { await app.close(); }
 });

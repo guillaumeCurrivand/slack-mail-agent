@@ -72,10 +72,8 @@ describe.skipIf(!url)('real PostgreSQL ClickUp account ownership', () => {
         const route = modules.action(button.action, button.value);
         return dispatchJob(pool, options, modules, messenger, { ...route, payload: { ...route.payload, timestamp: message.timestamp }, actor: active, id: uid() });
       };
-      await click(older, 'Ajouter Closed'); const firstSave = messages.at(-1)!;
-      await click(newer, 'Ajouter Closed'); await click(messages.at(-1)!, 'Retirer In progress'); const secondSave = messages.at(-1)!;
-      await Promise.all([click(firstSave, 'Enregistrer'), click(secondSave, 'Enregistrer')]);
-      expect(messages.slice(-2).filter(message => message.text.includes('Votre filtre est enregistré'))).toHaveLength(1);
+      await Promise.all([click(older, 'Ajouter Closed'), click(newer, 'Ajouter Closed')]);
+      expect(messages.slice(-2).filter(message => message.text.includes('Modification enregistrée'))).toHaveLength(1);
       expect(messages.slice(-2).filter(message => message.text.includes('autre sauvegarde'))).toHaveLength(1);
       await text(active, 'clickup statuses');
       expect(messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');

@@ -46,7 +46,7 @@ A ClickUp task or subtask that directly lists the connected ClickUp account amon
 _Avoid_: Team-assigned task (when no direct personal assignment exists)
 
 **ClickUp status filter**:
-The personal selection of ClickUp task status names a User wants included in their Assigned task results. A selected name applies across Lists in the ClickUp Workspace.
+The personal selection of ClickUp task status names a User wants included in their Assigned task results. A selected name applies across Lists in the ClickUp Workspace. During incomplete discovery, default mode can retain all unfinished statuses with explicit name inclusions/exclusions; those exceptions remain until the User changes or resets them.
 
 **Unanswered message**:
 A channel message containing a mention, request, or question for which the listed person has not yet replied in the same thread.

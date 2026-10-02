@@ -54,3 +54,7 @@ Local verification on 02/10/2026: Node v25.8.1 satisfies the required >=24 engin
 ## Subsequent performance correction
 
 The User reported slow opening and failed Retirer with twelve pages of production statuses. [Issue 01](issues/01-picker-performance.md) records the reproducible failure, bounded parallel/progressive discovery, recent-catalogue reuse and local draft controls. Its verification record supersedes the original implementation's test counts for this correction. The authoritative contract and deployment checks describe the new cache/request budgets and retained safeguards; production latency and rollout require observation.
+
+## Subsequent automatic-saving request
+
+The User reported that removed choices returned after leaving the picker, could not see Enregistrer, and requested automatic Add/Remove saving. [Issue 02](issues/02-auto-save.md) supersedes the historical draft/Save/Cancel interaction and partial-catalogue saving restriction above. The authoritative contract defines immediate local persistence, safe default-mode exceptions during partial discovery, closing/reset behavior and retained snapshot/conflict/replay safeguards.

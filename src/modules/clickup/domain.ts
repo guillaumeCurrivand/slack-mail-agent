@@ -1,6 +1,6 @@
 export type Identity = { id: string; name: string; email: string };
 export type Connection = { id: string; identity: Identity; tokens: string };
-export type StatusFilter = { mode: 'default' } | { mode: 'custom'; names: string[] };
+export type StatusFilter = { mode: 'default'; includeNames?: string[]; excludeNames?: string[] } | { mode: 'custom'; names: string[] };
 export type StatusChoice = { name: string; unfinished: boolean };
 export type DiscoveryStep = { kind: 'spaces' | 'folders' | 'folderless' | 'folder' | 'lists' | 'list' | 'shared' | 'task'; id: string; archived?: boolean };
 export type StatusCatalogue = { choices: StatusChoice[]; pending: DiscoveryStep[]; seen: string[]; complete: boolean; checkedAt?: string };

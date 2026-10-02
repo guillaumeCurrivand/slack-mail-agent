@@ -14,7 +14,7 @@ The [ClickUp feature contract](docs/clickup.md) records its approved behavior an
 
 The [Yousign feature contract](docs/yousign.md) describes company webhook notifications to shared selected channels, with private configuration and delivery status.
 
-ClickUp's [personal status filters](docs/clickup.md#personal-status-filters) are implemented locally. Send `clickup statuts` / `clickup statuses`, or choose **Choisir les statuts** in its menu, then **Enregistrer** your selection. Each User keeps their own filter; new task requests and Refresh apply it. The default still excludes Done/Closed, which a custom selection can explicitly include. Incomplete discovery blocks saving and offers Retry; Personal List-specific discovery is deferred. See [deployment checks](docs/deployment.md#clickup-release-candidate) for live verification.
+ClickUp's [personal status filters](docs/clickup.md#personal-status-filters) are implemented locally. Send `clickup statuts` / `clickup statuses`, or choose **Choisir les statuts** in its menu. **Ajouter/Retirer** and **Réinitialiser le filtre** save automatically; **Fermer** preserves changes. Each User keeps their own filter; new task requests and Refresh apply it. The default excludes Done/Closed, which explicit choices can include. During incomplete discovery, default-mode changes preserve undiscovered unfinished statuses and offer Retry; Personal List-specific discovery is deferred. See [deployment checks](docs/deployment.md#clickup-release-candidate) for live verification.
 
 ## What is included
 
