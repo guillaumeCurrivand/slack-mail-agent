@@ -1,5 +1,10 @@
 export type Identity = { id: string; name: string; email: string };
 export type Connection = { id: string; identity: Identity; tokens: string };
+export type StatusFilter = { mode: 'default' } | { mode: 'custom'; names: string[] };
+export type StatusChoice = { name: string; unfinished: boolean };
+export type DiscoveryStep = { kind: 'spaces' | 'folders' | 'folderless' | 'folder' | 'lists' | 'list' | 'shared' | 'task'; id: string; archived?: boolean };
+export type StatusCatalogue = { choices: StatusChoice[]; pending: DiscoveryStep[]; seen: string[]; complete: boolean };
+export type StatusEditor = { id: string; connectionId: string; version: string; state: 'editing' | 'saved' | 'cancelled' | 'conflict'; data: { filter: StatusFilter; catalogue: StatusCatalogue } };
 export type Task = { id: string; name: string; status: string; statusType: string; archived: boolean; assignees: string[]; due: number | null; priority: string; workspace: string; list: string; url: string };
-export type Scan = { connectionId: string; page: number; tasks: Task[]; seen: string[]; complete: boolean; finished: boolean; notice: string; retrievedAt: string };
+export type Scan = { connectionId: string; filter?: StatusFilter; page: number; tasks: Task[]; seen: string[]; complete: boolean; finished: boolean; notice: string; retrievedAt: string };
 export type Confirmation = { id: string; kind: 'connect' | 'disconnect'; data: Connection | { id: string }; expected: string | null; status: string; resultId: string | null };

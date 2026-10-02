@@ -3,7 +3,7 @@ export function frenchCommand(module: string, text: string): string {
   const exact: Record<string, Record<string, string>> = {
     mail: { aide: 'help', bonjour: 'hello', salut: 'hi', trier: 'sort', 'trier ma boîte': 'sort', 'trier ma boite': 'sort', règles: 'rules', regles: 'rules', modèles: 'starters', modeles: 'starters', rapport: 'report', connecter: 'connect', 'connecter gmail': 'connect gmail', déconnecter: 'disconnect', deconnecter: 'disconnect' },
     slack: { aide: 'help', canaux: 'channels', 'sans réponse': 'unanswered', 'sans reponse': 'unanswered', 'sans-réponse': 'unanswered', 'sans-reponse': 'unanswered' },
-    clickup: { aide: 'help', tâches: 'tasks', taches: 'tasks', connecter: 'connect', déconnecter: 'disconnect', deconnecter: 'disconnect' },
+    clickup: { aide: 'help', tâches: 'tasks', taches: 'tasks', statuts: 'statuses', connecter: 'connect', déconnecter: 'disconnect', deconnecter: 'disconnect' },
     yousign: { aide: 'help', canaux: 'channels', statut: 'status' },
     documentation: { aide: 'help', historique: 'history', archives: 'archived', archivés: 'archived' },
   };

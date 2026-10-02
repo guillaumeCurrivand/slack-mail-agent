@@ -49,8 +49,8 @@ export class ClickupAPI {
     if (!workspace) throw new ClickupError(403);
     return workspace.name;
   }
-  async tasks(workspaceId: string, userId: string, page: number): Promise<unknown[]> {
-    const query = new URLSearchParams({ 'assignees[]': userId, subtasks: 'true', include_closed: 'false', page: String(page), order_by: 'id' });
+  async tasks(workspaceId: string, userId: string, page: number, includeClosed = false): Promise<unknown[]> {
+    const query = new URLSearchParams({ 'assignees[]': userId, subtasks: 'true', include_closed: String(includeClosed), page: String(page), order_by: 'id' });
     return z.object({ tasks: z.array(z.unknown()) }).parse(await this.get(`team/${workspaceId}/task?${query}`)).tasks;
   }
   async task(id: string): Promise<unknown> {

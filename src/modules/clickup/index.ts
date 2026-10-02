@@ -1,7 +1,7 @@
 import { Vault } from '../../core/crypto.js';
 import { ownerKey } from '../../core/identity.js';
 import type { AssistantModule } from '../../core/modules.js';
-import { Navigation, type MenuPage } from '../../core/navigation.js';
+import { Navigation, type MenuPage, type MenuTarget } from '../../core/navigation.js';
 import { escapeCardValue, menuButton } from '../../core/slack.js';
 import { withOwner, type Sql } from '../../core/store.js';
 import type { ClickupConfig } from './config.js';
@@ -11,6 +11,8 @@ import { ClickupOAuth } from './oauth.js';
 import { registerClickupRoutes } from './routes.js';
 import { clickupSchema, ClickupStore } from './store.js';
 import { retrieveTasks, taskPage } from './tasks.js';
+import { ClickupStatusStore, statusSchema } from './status-store.js';
+import { handleStatusMenu } from './status-menu.js';
 
 export function createClickupModule(config: ClickupConfig, sql: Sql, dependencies: { fetcher?: typeof fetch } = {}): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
@@ -22,22 +24,22 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
   const connectionPage = (connection?: Connection): MenuPage => ({
     kind: 'ClickUp', bindButtons: true,
     text: connection ? `Compte connecté : ${escapeCardValue(connection.identity.name)} (${escapeCardValue(connection.identity.email)}). Workspace : Mayasquad.` : 'Connectez votre compte ClickUp pour consulter vos tâches dans Mayasquad.',
-    buttons: connection ? [{ label: 'Mes tâches', action: 'tasks', value: 'tasks', style: 'primary' }, { label: 'Changer de compte', action: 'connect', value: 'connect' }, { label: 'Déconnecter ClickUp', action: 'disconnect', value: connection.id }]
+    buttons: connection ? [{ label: 'Mes tâches', action: 'tasks', value: 'tasks', style: 'primary' }, { label: 'Choisir les statuts', action: 'statuses', value: 'statuses' }, { label: 'Changer de compte', action: 'connect', value: 'connect' }, { label: 'Déconnecter ClickUp', action: 'disconnect', value: connection.id }]
       : [{ label: 'Connecter ClickUp', action: 'connect', value: 'connect', style: 'primary' }],
   });
   return {
     id: 'clickup', name: 'ClickUp', description: 'Consulter vos tâches assignées dans Mayasquad',
-    menuActions: ['connect', 'disconnect', 'confirm', 'cancel', 'tasks', 'page'],
+    menuActions: ['connect', 'disconnect', 'confirm', 'cancel', 'tasks', 'page', 'statuses', 'status_save', 'status_cancel', 'status_reset', 'status_add', 'status_remove', 'status_page', 'status_retry'],
     workOperations: [{ key: 'tasks', label: 'Consulter mes tâches ClickUp', commands: ['tasks'], action: 'tasks' }],
-    async initialize(database) { for (const statement of clickupSchema.split(';').filter(part => part.trim())) await database.query(statement); },
+    async initialize(database) { for (const statement of (clickupSchema + statusSchema).split(';').filter(part => part.trim())) await database.query(statement); },
     registerRoutes(app) { registerClickupRoutes(app, config.PUBLIC_URL, oauth); },
     async menu(actor, _page, context) { return connectionPage(await new ClickupStore(context.sql).connection(actor)); },
     async cleanup(pool) {
-      const owners = await pool.query('SELECT DISTINCT owner FROM clickup_connections UNION SELECT DISTINCT owner FROM clickup_confirmations UNION SELECT DISTINCT owner FROM clickup_scans UNION SELECT DISTINCT owner FROM clickup_oauth_states UNION SELECT DISTINCT owner FROM clickup_limits');
+      const owners = await pool.query('SELECT DISTINCT owner FROM clickup_connections UNION SELECT DISTINCT owner FROM clickup_confirmations UNION SELECT DISTINCT owner FROM clickup_scans UNION SELECT DISTINCT owner FROM clickup_oauth_states UNION SELECT DISTINCT owner FROM clickup_limits UNION SELECT DISTINCT owner FROM clickup_status_editors UNION SELECT DISTINCT owner FROM clickup_status_events');
       for (const row of owners.rows) {
         const [team, user] = String(row.owner).split(':');
         const actor = { team: team!, user: user!, channel: '' };
-        await withOwner(pool, actor, async client => new ClickupStore(client).cleanup(actor), 'clickup');
+        await withOwner(pool, actor, async client => { await new ClickupStore(client).cleanup(actor); await new ClickupStatusStore(client, config.CLICKUP_WORKSPACE_ID).cleanup(actor); }, 'clickup');
       }
     },
     async handle(actor, payload, eventId, context) {
@@ -46,10 +48,11 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
       const show = (page: MenuPage) => navigation.show(actor, eventId, { ...page, buttons: [...(page.buttons ?? []), menuButton] });
       let command = payload.type === 'text' ? String(payload.text).trim().toLowerCase() : '';
       let value = '';
+      let target: MenuTarget | undefined;
       if (payload.type === 'menu_action') {
         const bound = await navigation.boundTarget(actor, payload.value, payload.timestamp);
         if (!bound) return show({ kind: 'ClickUp indisponible', text: 'Ce bouton est indisponible. Envoyez menu pour continuer.' });
-        command = String(payload.action); value = bound.value;
+        command = String(payload.action); value = bound.value; target = bound.target;
       } else if (payload.type !== 'text' && payload.type !== 'connection') {
         return show({ kind: 'ClickUp indisponible', text: 'Cette demande est indisponible. Envoyez clickup aide.' });
       }
@@ -95,6 +98,10 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
         }
       }
       const connection = await store.connection(actor);
+      if (command === 'statuses' || command.startsWith('status_')) {
+        if (!connection) return show(connectionPage());
+        return handleStatusMenu(actor, command, value, eventId, { api: api(actor, connection, store), store: new ClickupStatusStore(context.sql, config.CLICKUP_WORKSPACE_ID), navigation, connectionId: connection.id, subject: connection.identity.id, workspace: config.CLICKUP_WORKSPACE_ID, target });
+      }
       if (command === 'tasks' || command === 'page') {
         if (!connection) return show(connectionPage());
         if (command === 'tasks' && value && value !== 'tasks') return show({ kind: 'ClickUp indisponible', text: 'Ce bouton de lancement est indisponible.' });
@@ -102,7 +109,7 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
         if (command === 'page' && !parsed) return show({ kind: 'Résultats indisponibles', text: 'Ces résultats sont indisponibles. Envoyez clickup tâches.' });
         const sourceId = parsed?.[1] ?? eventId;
         const provider = api(actor, connection, store);
-        const scan = command === 'tasks' ? await retrieveTasks(store, provider, actor, connection, config.CLICKUP_WORKSPACE_ID, sourceId) : await store.scan(actor, sourceId);
+        const scan = command === 'tasks' ? await retrieveTasks(store, provider, actor, connection, config.CLICKUP_WORKSPACE_ID, sourceId, (await new ClickupStatusStore(context.sql, config.CLICKUP_WORKSPACE_ID).preference(actor)).filter) : await store.scan(actor, sourceId);
         if (!scan || scan.connectionId !== connection.id || Date.now() - Date.parse(scan.retrievedAt) >= 86400_000) return show({ kind: 'Résultats indisponibles', text: 'Ces résultats sont expirés ou liés à une ancienne connexion. Envoyez clickup tâches.' });
         return show(await taskPage(provider, scan, connection, config.CLICKUP_WORKSPACE_ID, sourceId, Number(parsed?.[2] ?? 0)));
       }
@@ -112,7 +119,7 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
         return show({ kind: 'Déconnexion ClickUp', bindButtons: true, text: 'Confirmez la suppression des identifiants, tentatives de connexion et résultats enregistrés de votre compte ClickUp.', buttons: [{ label: 'Confirmer la déconnexion', action: 'confirm', value: id, style: 'danger' }, { label: 'Annuler', action: 'cancel', value: id }] });
       }
       const page = connectionPage(connection);
-      return show({ ...page, text: `${page.text}\nCommandes : clickup tâches, clickup connecter, clickup déconnecter, clickup aide. Aucun appel d’IA ni modification de tâche.` });
+      return show({ ...page, text: `${page.text}\nCommandes : clickup tâches, clickup statuts, clickup connecter, clickup déconnecter, clickup aide. Aucun appel d’IA ni modification de tâche.` });
     },
   };
 }

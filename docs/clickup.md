@@ -1,15 +1,44 @@
 # ClickUp module — approved feature contract
 
-Status: target behavior approved by the User on 01/10/2026 after the design interview. Implemented locally and opt-in; live integration/provider completeness and deployment remain unverified. Approval of this contract does not authorize provisioning or deployment.
+Status: original connection/task-listing behavior approved on 01/10/2026 and implemented. Personal status filters approved on 02/10/2026 and implemented locally. Automated checks use fake providers; live status-catalogue completeness, Slack behavior and production deployment remain unverified. Approval of this contract does not authorize provisioning or deployment.
 
 This document is authoritative for ClickUp's approved target behavior. The [product specification](product-spec.md) owns assistant-wide safeguards; [Adding a module](adding-a-module.md) and [ADR 0002](adr/0002-private-assistant-modules.md) govern extension and routing. The [tracker spec](../.scratch/clickup/spec.md) defines the implementation work; the [interview record](../.scratch/clickup/interview.md) preserves the design history.
+
+## Personal status filters
+
+Status: approved by the User on 02/10/2026 and implemented locally. The [feature tracker](../.scratch/clickup-status-filters/spec.md) records implementation scope and checks; the [interview](../.scratch/clickup-status-filters/interview.md) preserves the agreed decisions. Live provider and Slack checks remain release work.
+
+### Preferences and selection
+
+- Each Slack User owns one personal filter in the configured Mayasquad Workspace. Another User cannot read or change it. Preferences survive disconnect/reconnect, account replacement and temporary Module disablement; credentials and task snapshots retain their separate deletion/invalidation rules.
+- Before configuration, or after Réinitialiser le filtre, preserve today's default: all directly assigned, individually unarchived tasks except Done/Closed status types. Default mode includes newly introduced unfinished statuses without requiring another save.
+- A custom filter selects at least one status name. Identical names form one selectable choice and match across Lists. New names are not automatically added to a custom selection. Explicitly selecting a Done/Closed name includes matching completed tasks; direct-assignment, subtask, multiple-assignee and individual-task archive rules remain applicable.
+- `clickup statuts` / `clickup statuses` and Menu → ClickUp → Choisir les statuts open the same private picker, using the active personal connection. Reopening shows saved choices or clearly labels default mode. Missing/revoked access gives connection guidance without replacing preferences.
+- Show original status names, including configured names unused by the User's current tasks and selectable completed names. All supported choices must remain reachable through pagination or another complete selector; do not silently cap the catalogue.
+- Choice changes edit a draft. Enregistrer applies it; Annuler preserves the saved filter. An empty custom selection cannot be saved. Réinitialiser le filtre selects default mode in the editor and takes effect through Enregistrer. The paginated editor expires after 30 minutes; reopening creates a new draft from saved preferences. Browsing, selection, save and reset do not start task retrieval or invoke AI.
+
+### Discovery and unavailable statuses
+
+- Discover configured status definitions from the connected User's accessible Workspace Spaces, Folders/Subfolders and Lists, including shared locations and reachable archived locations. Respect inherited definitions and List overrides, and deduplicate by name. Do not substitute only statuses observed on current tasks for a complete catalogue, or borrow another account's credentials for wider access.
+- Personal List-specific status discovery is deferred: ClickUp's special Personal List is outside the normal Hierarchy and no documented discovery route was established. State this catalogue boundary in the picker. This adds no task exclusion: a provider-returned assigned task with a selected name still follows normal eligibility.
+- A failed traversal, unresolved required status definitions or task-only access without the home List's complete definitions produces an incomplete/unavailable catalogue. Show discovered choices with a warning and Réessayer; preserve the saved filter and block Enregistrer until supported discovery completes. Retry preserves successful reads and resumes pending work within the editor's original expiry, including after a rate-limit cooldown. Absence from a partial response does not establish deletion.
+- Names absent from a successfully refreshed supported catalogue remain selected and visibly labelled unavailable. Allow explicit removal/replacement; do not infer successors for renamed statuses or automatically reset/broaden the filter. New selection of an unavailable name is unsupported. If no retrieved tasks match the saved names, explain that the filter has no matching tasks.
+- Existing task retrieval remains available with its saved/default filter during catalogue failure, subject to existing connection/access checks.
+
+### Saving and task snapshots
+
+- An editor opened before a newer successful save/reset cannot overwrite current preferences. Reject an outdated save and offer reopening the latest state. Controls remain bound to the initiating User, DM, message and active connection; disconnect/replacement invalidates an old editor even though preferences survive.
+- Save/reset/cancel must be durable and replay-safe. Replaying an old save cannot restore preferences after a later change; preserve existing Slack-delivery recovery safeguards.
+- Saved changes affect new `clickup tâches` requests and Actualiser only. Each scan captures its applied filter at start and retains it through pages, restart and retries. Show that filter with its results. Long filter summaries are visibly abbreviated with the selection count and guidance to reopen the complete picker; the saved selection remains complete. Existing pages preserve their filter, task snapshot and retrieval time, subject to access rechecks and 24-hour expiry. Pre-extension scans retain their original default filter.
+- Preserve ordering, eight-row tables, complete raw-provider pagination, active-operation admission and incomplete-result notices. Provider requests and local eligibility must both allow selected completed names; `include_closed=false` cannot remain unconditional for a custom filter.
+- Preferences and draft state are ClickUp-owned data. Keep durable preferences separate from expiring editor metadata and task snapshots, within the existing [module ownership contract](adding-a-module.md).
 
 ## Approved behavior
 
 - Add an independently enabled ClickUp Module with per-User OAuth connection, similar to Gmail's connection experience but independent of Gmail.
 - First release provides connection management and read-only assigned-task listing. No task mutations, AI calls, scheduled scans or notifications.
 - The canonical typed request is `clickup tasks`; the existing French-interface contract requires a French alias and French application-owned presentation.
-- Include currently assigned tasks without creation-date or due-date cutoff; exclude completed tasks (both Done and Closed status types) and tasks individually marked archived.
+- Include currently assigned tasks without creation-date or due-date cutoff. Default mode excludes completed tasks (both Done and Closed status types); [personal status filters](#personal-status-filters) can explicitly include completed names. Individually archived tasks remain excluded.
 - Include directly assigned subtasks even when their parent belongs to someone else, and tasks with multiple assignees when the User is among them.
 - Search only the Mayasquad ClickUp Workspace, identified by one configured stable Workspace ID. Connection requires access to that ID. Ignore additional OAuth-authorized Workspaces, with no fallback or matching by name. Include only direct personal assignments, not assignment solely through ClickUp Teams.
 - Check the task's own archive state only. An archived parent task, List, Folder or Space is not itself grounds for excluding an unarchived assigned task. Additional Lists do not affect this rule.
@@ -27,12 +56,19 @@ This document is authoritative for ClickUp's approved target behavior. The [prod
 - OAuth lets the User authorize one or more ClickUp Workspaces; the token cannot bypass their task access. The documented token currently does not expire, and the public flow does not document granular read-only scopes, PKCE or Gmail-style refresh tokens. Application read-only scope does not imply a provider-enforced read-only token. [ClickUp authentication](https://developer.clickup.com/docs/authentication)
 - Use the [authenticated ClickUp user](https://developer.clickup.com/reference/getauthorizeduser) to identify the assignee, and discover [authorized Workspaces](https://developer.clickup.com/reference/getauthorizedteams). Do not infer identity from matching Slack and ClickUp email addresses.
 - [Filtered Workspace tasks](https://developer.clickup.com/reference/getfilteredteamtasks) support assignee filters, subtasks and zero-based pagination of at most 100 tasks per page. Their official response schema does not document a terminal-page flag. Completion detection must use raw provider pages, not pages after module filtering, and must be validated live.
-- ClickUp distinguishes Done from Closed; completed-task exclusion must check both `done` and `closed` status types rather than customizable status names. [Task statuses](https://help.clickup.com/hc/en-us/articles/6309452618647-Manage-task-statuses)
+- ClickUp distinguishes Done from Closed; default completed-task exclusion must check both `done` and `closed` status types rather than customizable status names. Custom name-based filtering uses the explicitly selected names and must request closed tasks when applicable. [Task statuses](https://help.clickup.com/hc/en-us/articles/6309452618647-Manage-task-statuses)
 - The [official OpenAPI specification](https://developer.clickup.com/openapi/clickup-api-v2-reference.json) shows task archive flags in examples, but the Workspace response schema omits that flag. It does not establish whether all active tasks in archived locations are returned. The task-only archive policy is settled; provider completeness still needs live validation. Never treat unknown task archive state as verified active state.
 - Task reads supply Unix-millisecond due dates but do not reliably distinguish explicit deadline times from ClickUp's date-only encoding at 04:00 in the original setter's timezone. The approved design displays the Paris calendar date only; it does not promise recovery of the original setter's date-only timezone semantics. [Date formatting](https://developer.clickup.com/docs/general-time)
 - Respect token-specific [rate limits](https://developer.clickup.com/docs/rate-limits). Inaccessible Workspaces, revoked authorization and incomplete retrieval must not be represented as a complete empty list.
 
-Provider facts verified against official documentation on 01/10/2026; no live ClickUp account was exercised.
+Original provider facts were verified against official documentation on 01/10/2026; no live ClickUp account was exercised in that verification.
+
+Additional status-discovery documentation was reviewed on 02/10/2026, without live API calls:
+
+- Statuses can differ by Space, Folder, Subfolder and List. Names can repeat across Lists; multi-List tasks use their primary home List's statuses. [Statuses FAQ](https://help.clickup.com/hc/en-us/articles/6309465975063-Statuses-FAQ)
+- Discovery uses location APIs, effective inherited definitions and shared locations; list-collection metadata alone does not document each List's complete task-status definitions. Get Folders returns Subfolders in a flat response. [Get Spaces](https://developer.clickup.com/reference/getspaces), [Get Folders](https://developer.clickup.com/reference/getfolders), [Get Folderless Lists](https://developer.clickup.com/reference/getfolderlesslists), [Get Folder](https://developer.clickup.com/reference/getfolder), [Get List](https://developer.clickup.com/reference/getlist), [Shared Hierarchy](https://developer.clickup.com/reference/sharedhierarchy), [OpenAPI](https://developer.clickup.com/openapi/clickup-api-v2-reference.json)
+- No documented Workspace-wide status catalogue or dedicated Personal List discovery route was found. Personal List exists outside the normal Hierarchy. This is a documentation gap, not a claim of observed API impossibility. [Use Personal List](https://help.clickup.com/hc/en-us/articles/18377842006167-Use-Personal-List), [API index](https://developer.clickup.com/llms.txt)
+- Names may be renamed/deleted, and stable status-ID behavior across those changes was not established. Archive collection semantics and complete inherited-status access for shared-only/task-only Users require provider validation before claiming completeness. [Edit task statuses](https://help.clickup.com/hc/en-us/articles/32580791275927-Edit-task-statuses), [OpenAPI](https://developer.clickup.com/openapi/clickup-api-v2-reference.json)
 
 ## Extension and ownership requirements
 
@@ -50,10 +86,11 @@ Provider facts verified against official documentation on 01/10/2026; no live Cl
 ## Commands and menu (implementation target)
 
 - `clickup tasks` / `clickup tâches` (also accept `clickup taches`): retrieve assigned tasks.
+- `clickup statuts` / `clickup statuses`: choose personal status filters, then Enregistrer.
 - `clickup connect` / `clickup connecter`: obtain the private OAuth invitation.
 - `clickup disconnect` / `clickup déconnecter`: request separately confirmed disconnect.
 - `clickup help` / `clickup aide`: connection status and module guidance.
-- Module menu: connection status, Connect or confirmed Disconnect, Tasks when connected, and Back to the main menu. Results offer Previous/Next as applicable, Refresh, Retry when incomplete, and Menu.
+- Module menu: connection status, Connect or confirmed Disconnect, Tasks and Choisir les statuts when connected, and Back to the main menu. Results offer Previous/Next as applicable, Refresh, Retry when incomplete, and Menu.
 
 These command spellings apply the existing deterministic routing and French-interface contract; they introduce no natural-language interpreter.
 
@@ -61,10 +98,14 @@ These command spellings apply the existing deterministic routing and French-inte
 
 Implementation exercises public routing/dispatch and module workflows with fake ClickUp providers in `tests/clickup.test.ts`. Coverage includes identity mismatch/ownership, single-Workspace enforcement, expired OAuth/browser state, account uniqueness, replaced/disconnected connections, Done/Closed exclusion, individually archived tasks, subtasks/multiple assignees, complete raw-provider pagination, duplicate starts, permission changes, persisted rate-limit cooldowns, partial failure, expiry and uncertain Slack delivery. `tests/postgres-clickup.test.ts` separately covers actual PostgreSQL concurrent external-account ownership. Check the active Node version before running project scripts; run `test`, `check` and `build` for runtime changes. Report actual PostgreSQL concurrency tests separately when `TEST_DATABASE_URL` is absent.
 
+Status-filter coverage also exercises signed French command/action ingress, two-User preference isolation, draft/save/cancel/reset and empty-save replay, stale editors, wrong DM/message/connection and 30-minute expiry, configured unused/inherited/shared/archived status definitions, incomplete home-List definitions, duplicate names, 150-choice pagination, unavailable names, completed-task inclusion, frozen filters, retained preferences and rate-limit/restart/delivery recovery. The PostgreSQL test additionally races two editor saves against the preference version; exactly one may succeed.
+
 Live verification must establish task archive-flag availability, coverage of active tasks in archived locations, page termination and shared/guest task access. Missing provider metadata must produce incomplete coverage rather than an unsupported claim of completeness. Configure the OAuth application and confirmed Mayasquad Workspace ID before live testing. No real OAuth setup, external messages, paid calls or deployment occurred in this interview.
 
 ## Delivery and setup status
 
 The interview is complete and the User confirmed the full shared understanding, then requested implementation. The runtime Module is implemented locally under `src/modules/clickup/`, composed in `src/app/modules.ts` and enabled only with `ENABLED_MODULES` containing `clickup`. Its startup creates module-owned connection, authorization-generation, OAuth state, confirmation/effect-checkpoint, scan and rate-limit tables. Generation records contain no credentials and persist across disconnect to invalidate in-flight authorization attempts. No existing module tables or mailbox data are changed; no manual migration is needed. Implementation does not establish live API completeness, OAuth setup or production deployment.
+
+The User reports the existing task command working well on 02/10/2026 and confirmed the complete [status-filter design](#personal-status-filters), then requested implementation. The extension is implemented locally with three additional module-owned tables: durable `clickup_status_preferences` keyed by Slack User and ClickUp Workspace, 30-minute `clickup_status_editors`, and 30-day `clickup_status_events` replay checkpoints. Startup creates them idempotently with no manual migration, new environment variable or permission. Preferences remain separate from credentials, connection generation and expiring task snapshots. Post-deploy provider checks remain necessary; see [the release procedure](deployment.md#clickup-release-candidate).
 
 The confirmed Mayasquad Workspace ID is still a setup input. No ID was found in nonsecret repository source/documentation; obtain it from the Workspace's normal ClickUp URL or authorized-Workspace response, rather than selecting by name. Live setup also requires the ClickUp OAuth application, client credentials and registered HTTPS callback. Module-specific configuration is read only when ClickUp is enabled, preserving independent startup without Gmail. Use [README setup](../README.md#clickup-setup) and the [release procedure](deployment.md#clickup-release-candidate).

@@ -12,6 +12,7 @@ import { ModuleRegistry, type RoutedJob } from '../src/core/modules.js';
 import { createClickupModule } from '../src/modules/clickup/index.js';
 import { Slack, SlackDeliveryRejected } from '../src/core/slack.js';
 import type { ClickupDatabase } from '../src/modules/clickup/transactions.js';
+import { frenchCommand } from '../src/app/commands.js';
 
 const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'unused', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'clickup', ENCRYPTION_KEY: randomBytes(32).toString('base64'), CLICKUP_CLIENT_ID: 'client', CLICKUP_CLIENT_SECRET: 'secret', CLICKUP_WORKSPACE_ID: '42' };
@@ -26,7 +27,7 @@ beforeEach(async () => {
 
 function harness(fetcher: typeof fetch) {
   const module = createClickupModule({ ...env }, sql, { fetcher });
-  const modules = new ModuleRegistry([{ ...module, normalizeText: text => text === 'tâches' ? 'tasks' : text }]);
+  const modules = new ModuleRegistry([{ ...module, normalizeText: text => frenchCommand('clickup', text) }]);
   const messages: Array<AgentMessage & { timestamp: string }> = [];
   const messenger = {
     async send(_actor: unknown, message: AgentMessage) { messages.push({ ...message, timestamp: `${messages.length + 1}.000` }); },
@@ -42,10 +43,10 @@ function harness(fetcher: typeof fetch) {
   return { module, modules, messages, messenger, run, text, click };
 }
 
-async function connect(h: ReturnType<typeof harness>) {
+async function connect(h: ReturnType<typeof harness>, actor = alice) {
   await h.module.initialize?.(sql);
   const app = createServer(readConfig(env), new JobStore(sql), h.modules);
-  await h.text('clickup connect');
+  await h.text('clickup connect', actor);
   const invitation = h.messages.at(-1)!.resourceLinks![0]!.url;
   const start = await app.inject(new URL(invitation).pathname + new URL(invitation).search);
   const state = new URL(start.headers.location!).searchParams.get('state')!;
@@ -96,6 +97,16 @@ function provider(pages: unknown[][]) {
   const tasks = new Map(pages.flat().map(value => [(value as { id: string }).id, value]));
   const failures = new Map<string, number>();
   let subject = 7, workspace = '42';
+  const statuses = [{ status: 'In progress', type: 'custom' }, { status: 'Unused', type: 'open' }, { status: 'Finished', type: 'done' }, { status: 'Closed', type: 'closed' }];
+  const locations = new Map<string, unknown>([
+    ['/api/v2/team/42/space', { spaces: [{ id: '10', statuses }] }],
+    ['/api/v2/space/10/folder', { folders: [{ id: '11' }] }],
+    ['/api/v2/space/10/list', { lists: [] }],
+    ['/api/v2/folder/11', { id: '11', statuses, folders: [] }],
+    ['/api/v2/folder/11/list', { lists: [{ id: '12' }] }],
+    ['/api/v2/list/12', { id: '12', statuses }],
+    ['/api/v2/team/42/shared', { shared: { tasks: [], lists: [], folders: [] } }],
+  ]);
   const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
     const url = new URL(String(input)); calls.push(url.pathname + url.search);
     if (url.pathname.endsWith('/oauth/token')) return Response.json({ access_token: 'alice-secret' });
@@ -104,8 +115,10 @@ function provider(pages: unknown[][]) {
     if (failure) return new Response('', { status: failure });
     if (url.pathname.endsWith('/user')) return Response.json({ user: { id: subject, username: 'Alice', email: 'alice@example.com' } });
     if (url.pathname.endsWith('/team')) return Response.json({ teams: [{ id: workspace, name: 'Mayasquad' }, { id: '99', name: 'Other' }] });
+    if (locations.has(url.pathname + url.search)) return Response.json(locations.get(url.pathname + url.search));
+    if (locations.has(url.pathname)) return Response.json(locations.get(url.pathname));
     if (url.pathname === '/api/v2/team/42/task') {
-      expect(url.searchParams.get('assignees[]')).toBe('7'); expect(url.searchParams.get('subtasks')).toBe('true');
+      expect(url.searchParams.get('assignees[]')).toBe(String(subject)); expect(url.searchParams.get('subtasks')).toBe('true');
       return Response.json({ tasks: pages[Number(url.searchParams.get('page'))] ?? [] });
     }
     if (url.pathname.startsWith('/api/v2/task/')) {
@@ -114,13 +127,275 @@ function provider(pages: unknown[][]) {
     }
     throw new Error(`Unexpected call ${input}`);
   }) as typeof fetch;
-  return { fetcher, calls, tasks, failures, changeIdentity: (id: number) => { subject = id; }, changeWorkspace: (id: string) => { workspace = id; } };
+  return { fetcher, calls, tasks, failures, locations, replaceTask: (id: string, value: ReturnType<typeof task>) => { tasks.set(id, value); for (const page of pages) { const index = page.findIndex(item => (item as { id: string }).id === id); if (index >= 0) page[index] = value; } }, changeIdentity: (id: number) => { subject = id; }, changeWorkspace: (id: string) => { workspace = id; } };
 }
 async function connected(p: ReturnType<typeof provider>) {
   const h = harness(p.fetcher), proposal = await connect(h);
   await h.click('confirm', proposal);
   return h;
 }
+
+it('opens the private French status picker with unused configured statuses and completed choices', async () => {
+  const h = await connected(provider([[task('one')]]));
+  await h.text('clickup statuts');
+  const picker = h.messages.at(-1)!;
+  expect(picker.kind).toBe('Statuts ClickUp');
+  expect(picker.text).toContain('Unused');
+  expect(picker.text).toContain('Finished');
+  expect(picker.text).toContain('Personal List');
+  expect(picker.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Enregistrer', 'Annuler', 'Réinitialiser le filtre']));
+  await h.click('status_save', picker, { ...alice, user: 'UBOB', channel: 'DBOB' });
+  expect(h.messages.at(-1)!.text).toContain('indisponible');
+});
+
+async function chooseStatus(h: ReturnType<typeof harness>, name: string, selected: boolean, message = h.messages.at(-1)!, eventId?: string) {
+  const label = `${selected ? 'Ajouter' : 'Retirer'} ${name.slice(0, 60)}`;
+  const button = message.buttons!.find(button => button.label === label)!;
+  expect(button, label).toBeDefined();
+  const route = h.modules.action(button.action, button.value);
+  await h.run({ ...route, payload: { ...route.payload, timestamp: message.timestamp } }, alice, eventId);
+}
+
+it('saves a personal completed-status filter without changing an earlier task snapshot', async () => {
+  const p = provider([[...Array.from({ length: 9 }, (_, index) => task(`active${index}`)), task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Closed', type: 'closed' } })]]), h = await connected(p);
+  await h.text('clickup tasks'); const original = h.messages.at(-1)!;
+  await h.text('clickup statuts');
+  await chooseStatus(h, 'In progress', false);
+  await chooseStatus(h, 'Unused', false);
+  await chooseStatus(h, 'Finished', true);
+  await chooseStatus(h, 'Closed', true);
+  await h.click('status_save');
+  expect(h.messages.at(-1)!.text).toContain('enregistré');
+  await h.click('page', original);
+  expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
+  expect(h.messages.at(-1)!.table!.rows[0]![0]).toEqual([{ text: 'Task active8', url: 'https://app.clickup.com/t/active8' }]);
+  await h.text('clickup tasks');
+  expect(h.messages.at(-1)!.table!.rows.map(row => row[0])).toEqual([[{ text: 'Task closed', url: 'https://app.clickup.com/t/closed' }], [{ text: 'Task done', url: 'https://app.clickup.com/t/done' }]]);
+  expect(h.messages.at(-1)!.text).toContain('Finished');
+  expect(new URL(`https://unused${p.calls.filter(path => path.startsWith('/api/v2/team/42/task')).at(-1)}`).searchParams.get('include_closed')).toBe('true');
+  await h.click('tasks', original);
+  expect(h.messages.at(-1)!.text).toContain('Finished');
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Retirer Closed', 'Ajouter In progress']));
+});
+
+it('does not turn a rejected empty save into a later successful save when delivery is retried', async () => {
+  const h = await connected(provider([]));
+  await h.text('clickup statuses');
+  await chooseStatus(h, 'In progress', false); await chooseStatus(h, 'Unused', false);
+  const empty = h.messages.at(-1)!, update = h.messenger.update;
+  h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
+  await expect(h.click('status_save', empty, alice, 'empty-save')).rejects.toThrow('rejected');
+  h.messenger.update = update;
+  await chooseStatus(h, 'Finished', true, empty);
+  await h.click('status_save', empty, alice, 'empty-save');
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
+});
+
+it('cancels draft edits and applies a reset only after Enregistrer', async () => {
+  const h = await connected(provider([[task('active'), task('unused', { status: { status: 'Unused', type: 'open' } })]]));
+  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false); await h.click('status_save');
+  await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true); await h.click('status_cancel');
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Closed');
+  await h.click('status_reset');
+  const reset = h.messages.at(-1)!;
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('1 tâches');
+  await h.click('status_save', reset);
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('2 tâches');
+  expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
+});
+
+it('rejects an outdated editor instead of overwriting a newer saved filter', async () => {
+  const h = await connected(provider([]));
+  await h.text('clickup statuses'); const older = h.messages.at(-1)!;
+  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false); await h.click('status_save');
+  await chooseStatus(h, 'Finished', true, older); await h.click('status_save');
+  expect(h.messages.at(-1)!.text).toContain('autre sauvegarde');
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
+});
+
+it('resumes incomplete status discovery without saving from a partial catalogue', async () => {
+  const p = provider([]), h = await connected(p);
+  p.failures.set('/api/v2/list/12', 403);
+  await h.text('clickup statuses'); const incomplete = h.messages.at(-1)!;
+  expect(incomplete.text).toContain('incomplète');
+  expect(incomplete.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+  await chooseStatus(h, 'Closed', true);
+  const retry = h.messages.at(-1)!.buttons!.find(button => button.action === 'clickup:status_retry')!;
+  const forgedSave = h.modules.action('clickup:status_save', retry.value);
+  await h.run({ ...forgedSave, payload: { ...forgedSave.payload, timestamp: incomplete.timestamp } });
+  expect(h.messages.at(-1)!.text).toContain('incomplète');
+  await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
+  const successfulReads = p.calls.filter(path => path.startsWith('/api/v2/team/42/space')).length;
+  p.failures.delete('/api/v2/list/12'); await h.click('status_retry', incomplete);
+  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(p.calls.filter(path => path.startsWith('/api/v2/team/42/space'))).toHaveLength(successfulReads);
+  await h.click('status_save'); await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+});
+
+it('does not repeat a saved effect after delivery rejection and a later reset', async () => {
+  const h = await connected(provider([]));
+  await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true);
+  const picker = h.messages.at(-1)!, update = h.messenger.update;
+  h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
+  await expect(h.click('status_save', picker, alice, 'saved-retry')).rejects.toThrow('rejected');
+  h.messenger.update = update;
+  await h.text('clickup statuses'); await h.click('status_reset'); await h.click('status_save');
+  await h.click('status_save', picker, alice, 'saved-retry');
+  await h.text('clickup statuses'); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
+});
+
+it('keeps preferences across disconnect, replacement and disabled-module startup while rejecting old editors', async () => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true); await h.click('status_save');
+  await h.text('clickup statuses'); const oldEditor = h.messages.at(-1)!;
+  await h.text('clickup disconnect'); await h.click('confirm');
+  const off = createModules(readConfig({ ...env, ENABLED_MODULES: '' }), sql, {});
+  expect(off.text('clickup statuts').module).toBe('core');
+  const proposal = await connect(h); await h.click('confirm', proposal);
+  await h.click('status_save', oldEditor); expect(h.messages.at(-1)!.text).toContain('indisponible');
+  p.changeIdentity(8); const replacement = await connect(h); await h.click('confirm', replacement);
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+});
+
+it('retains unavailable names without falling back to unfinished tasks', async () => {
+  const p = provider([[task('active'), task('done', { status: { status: 'Finished', type: 'done' } })]]), h = await connected(p);
+  await h.text('clickup statuses'); await chooseStatus(h, 'In progress', false); await chooseStatus(h, 'Unused', false); await chooseStatus(h, 'Finished', true); await h.click('status_save');
+  for (const [path, value] of p.locations) {
+    const container = value as { statuses?: Array<{ status: string; type: string }>; spaces?: Array<{ statuses: Array<{ status: string; type: string }> }> };
+    const rename = (statuses: Array<{ status: string; type: string }>) => statuses.map(status => status.status === 'Finished' ? { ...status, status: 'Renamed' } : status);
+    if (container.statuses) p.locations.set(path, { ...container, statuses: rename(container.statuses) });
+    if (container.spaces) p.locations.set(path, { ...container, spaces: container.spaces.map(space => ({ ...space, statuses: rename(space.statuses) })) });
+  }
+  p.replaceTask('done', task('done', { status: { status: 'Renamed', type: 'done' } }));
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.text).toContain('Finished · indisponible');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Finished');
+  await h.text('clickup tasks');
+  expect(h.messages.at(-1)!.text).toContain('Filtre appliqué : Finished');
+  expect(h.messages.at(-1)!.text).toContain('0 tâches');
+  expect(h.messages.at(-1)!.table).toBeUndefined();
+});
+
+it('discovers archived, nested, folderless and shared-only definitions with one choice per name', async () => {
+  const p = provider([]);
+  const definitions = (name: string) => [{ status: 'In progress', type: 'custom' }, { status: name, type: 'open' }];
+  p.locations.set('/api/v2/team/42/space?archived=true', { spaces: [{ id: '30', statuses: definitions('Archived') }] });
+  p.locations.set('/api/v2/space/30/folder', { folders: [] }); p.locations.set('/api/v2/space/30/list', { lists: [] });
+  p.locations.set('/api/v2/space/10/folder', { folders: [{ id: '11', statuses: [] }, { id: '22', parent_folder: '11' }] });
+  p.locations.set('/api/v2/folder/11', { id: '11', statuses: definitions('Inherited'), folders: [{ id: '22' }] });
+  p.locations.set('/api/v2/folder/22', { id: '22', statuses: definitions('Nested'), folders: [] });
+  p.locations.set('/api/v2/folder/22/list', { lists: [] });
+  p.locations.set('/api/v2/space/10/list', { lists: [{ id: '31' }] });
+  p.locations.set('/api/v2/list/31', { id: '31', statuses: definitions('Folderless') });
+  p.locations.set('/api/v2/team/42/shared', { shared: { folders: [], lists: [{ id: '32' }], tasks: [{ id: 'shared-task' }] } });
+  p.locations.set('/api/v2/list/32', { id: '32', statuses: definitions('Shared list') });
+  p.tasks.set('shared-task', task('shared-task', { list: { id: '33', name: 'Shared home' } }));
+  p.locations.set('/api/v2/list/33', { id: '33', statuses: definitions('Shared task home') });
+  const h = await connected(p); await h.text('clickup statuses');
+  const picker = h.messages.at(-1)!;
+  for (const name of ['Archived', 'Inherited', 'Nested', 'Folderless', 'Shared list', 'Shared task home']) expect(picker.text).toContain(name);
+  expect(picker.buttons!.filter(button => button.label === 'Retirer In progress')).toHaveLength(1);
+  expect(picker.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+});
+
+it('keeps more than 100 status choices reachable and preserves a saved filter after uncertain delivery', async () => {
+  const p = provider([]), statuses = Array.from({ length: 150 }, (_, index) => ({ status: `Status ${String(index).padStart(3, '0')} ${'long name '.repeat(10)}`, type: 'custom' }));
+  p.locations.set('/api/v2/team/42/space', { spaces: [{ id: '10', statuses }] });
+  p.locations.set('/api/v2/folder/11', { id: '11', statuses }); p.locations.set('/api/v2/list/12', { id: '12', statuses });
+  const h = await connected(p); await h.text('clickup statuses');
+  for (let page = 1; page < 15; page++) {
+    const message = h.messages.at(-1)!, next = message.buttons!.find(button => button.label === 'Suivant')!;
+    const route = h.modules.action(next.action, next.value);
+    await h.run({ ...route, payload: { ...route.payload, timestamp: message.timestamp } });
+  }
+  expect(h.messages.at(-1)!.text).toContain('Status 149');
+  expect(h.messages.at(-1)!.text).toContain('Page 15/15');
+  await chooseStatus(h, statuses[149]!.status, false);
+  const picker = h.messages.at(-1)!, update = h.messenger.update;
+  h.messenger.update = async () => { throw new Error('uncertain'); };
+  await expect(h.click('status_save', picker, alice, 'uncertain-filter-save')).rejects.toThrow('uncertain');
+  h.messenger.update = update;
+  await h.click('status_save', picker, alice, 'uncertain-filter-save');
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.text).toContain('149 statuts');
+  p.failures.set('/api/v2/team/42/task', 400);
+  await h.text('clickup tasks');
+  expect(h.messages.at(-1)!.text.length).toBeLessThan(6000);
+  expect(h.messages.at(-1)!.text).toContain('149 statuts');
+  expect(h.messages.at(-1)!.text).toContain('sélection complète');
+  expect(h.messages.at(-1)!.text).toContain('n’a pas pu être terminée');
+});
+
+it('keeps an editor recoverable during a catalogue rate-limit cooldown without asking to reconnect', async () => {
+  const p = provider([]), base = await connected(p);
+  const fetcher = (async (url: string | URL | Request, init?: RequestInit) => String(url).includes('/list/12')
+    ? new Response('', { status: 429, headers: { 'X-RateLimit-Reset': String(Math.ceil(Date.now() / 1000) + 120) } }) : p.fetcher(url, init)) as typeof fetch;
+  const h = harness(fetcher); await h.text('clickup statuses', alice, 'limited-catalogue'); const incomplete = h.messages.at(-1)!;
+  await h.click('status_retry', incomplete, alice, 'limited-catalogue-retry');
+  expect(h.messages.at(-1)!.text).toContain('temporairement');
+  expect(h.messages.at(-1)!.text).not.toContain('Reconnectez');
+  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Réessayer')).toBe(true);
+  // Simulate the provider's cooldown ending, then reconstruct the process.
+  await sql.query('UPDATE clickup_limits SET retry_at=now()-interval \'1 second\'');
+  await base.click('status_retry', incomplete, alice, 'catalogue-recovered');
+  expect(base.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+});
+
+it('keeps each User’s saved filter independent and rejects another DM or message and expired editors', async () => {
+  const p = provider([]), h = await connected(p), bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+  await h.text('clickup statuts'); await chooseStatus(h, 'Closed', true); await h.click('status_save');
+  p.changeIdentity(8); const proposal = await connect(h, bob); await h.click('confirm', proposal, bob);
+  await h.text('clickup statuses', bob); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
+  await h.click('status_save', h.messages.at(-1)!, bob);
+  p.changeIdentity(7); await h.text('clickup statuses'); const picker = h.messages.at(-1)!;
+  expect(picker.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  await h.click('status_reset', picker, { ...alice, channel: 'DOTHER' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
+  await h.click('status_reset', { ...picker, timestamp: '999.000' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
+  await sql.query("UPDATE clickup_status_editors SET expires_at=now()-interval '1 second'");
+  await h.click('status_reset', picker); expect(h.messages.at(-1)!.text).toContain('expiré');
+  await h.text('clickup statuses'); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+});
+
+it('blocks an unresolved shared task’s home List and hides a cached catalogue after workspace revocation', async () => {
+  const p = provider([]), h = await connected(p);
+  p.locations.set('/api/v2/team/42/shared', { shared: { folders: [], lists: [], tasks: [{ id: 'shared' }] } });
+  p.tasks.set('shared', task('shared', { list: { id: '33', name: 'Private home' } }));
+  p.locations.set('/api/v2/list/33', { id: '33', statuses: [] });
+  await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
+  expect(picker.text).toContain('incomplète'); expect(picker.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+  p.failures.set('/api/v2/team', 403);
+  await h.click('status_retry', picker);
+  expect(h.messages.at(-1)!.text).toContain('Reconnectez'); expect(h.messages.at(-1)!.text).not.toContain('Unused');
+  p.failures.clear(); p.locations.set('/api/v2/list/33', { id: '33', statuses: [{ status: 'Shared unused', type: 'custom' }] });
+  await h.click('status_retry', picker);
+  expect(h.messages.at(-1)!.text).toContain('Shared unused'); expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+});
+
+it('routes signed French status commands and editor controls through Slack ingress and dispatch', async () => {
+  const h = await connected(provider([])), app = createServer(readConfig(env), new JobStore(sql), h.modules);
+  const signed = (raw: string) => { const timestamp = String(Math.floor(Date.now() / 1000)); return { 'x-slack-request-timestamp': timestamp, 'x-slack-signature': `v0=${createHmac('sha256', 'secret').update(`v0:${timestamp}:${raw}`).digest('hex')}` }; };
+  try {
+    const raw = JSON.stringify({ type: 'event_callback', team_id: alice.team, event_id: 'status-command', event: { type: 'message', channel_type: 'im', user: alice.user, channel: alice.channel, text: 'clickup statuts' } });
+    expect((await app.inject({ method: 'POST', url: '/slack/events', payload: raw, headers: { ...signed(raw), 'content-type': 'application/json' } })).statusCode).toBe(200);
+    const job = (await sql.query("SELECT * FROM jobs WHERE id='slack:status-command'")).rows[0];
+    expect(job.module).toBe('clickup'); expect(job.payload.text).toBe('statuses');
+    await h.run(job, job.actor, job.id); const picker = h.messages.at(-1)!;
+    const add = picker.buttons!.find(button => button.label === 'Ajouter Closed')!;
+    const action = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: picker.timestamp }, actions: [{ action_id: add.action, value: add.value }] }) }).toString();
+    expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: action, headers: { ...signed(action), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
+    const click = (await sql.query("SELECT * FROM jobs WHERE id LIKE 'action:%'")).rows[0];
+    expect(click.payload.action).toBe('status_add');
+    await h.run(click, click.actor, click.id); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+    await h.click('status_save'); await h.text('clickup statuses');
+    expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  } finally { await app.close(); }
+});
 
 it('fetches all raw pages and lists direct assignments in a linked eight-row table, excluding only completed/individual archives', async () => {
   const p = provider([

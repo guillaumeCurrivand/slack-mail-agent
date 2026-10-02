@@ -45,6 +45,9 @@ A ClickUp workspace the User authorizes the Agent to access through their connec
 A ClickUp task or subtask that directly lists the connected ClickUp account among its assignees, including tasks shared with other assignees.
 _Avoid_: Team-assigned task (when no direct personal assignment exists)
 
+**ClickUp status filter**:
+The personal selection of ClickUp task status names a User wants included in their Assigned task results. A selected name applies across Lists in the ClickUp Workspace.
+
 **Unanswered message**:
 A channel message containing a mention, request, or question for which the listed person has not yet replied in the same thread.
 

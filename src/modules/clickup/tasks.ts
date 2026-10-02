@@ -2,21 +2,24 @@ import type { Actor } from '../../core/identity.js';
 import { formatDate, formatNumber } from '../../core/presentation.js';
 import type { MenuPage } from '../../core/navigation.js';
 import type { Button } from '../../core/slack.js';
+import { escapeCardValue } from '../../core/slack.js';
 import { ClickupAPI, ClickupError } from './api.js';
-import type { Connection, Scan, Task } from './domain.js';
+import type { Connection, Scan, StatusFilter, Task } from './domain.js';
 import { ClickupStore } from './store.js';
 
 const day = (value: number) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 const date = (value: number) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 const shorten = (value: string, length = 90) => value.length > length ? `${value.slice(0, length - 1)}…` : value;
-const eligible = (task: Task, subject: string) => !task.archived && !['done', 'closed'].includes(task.statusType) && task.assignees.includes(subject);
+const eligible = (task: Task, subject: string, filter: StatusFilter) => !task.archived && task.assignees.includes(subject) && (filter.mode === 'default' ? !['done', 'closed'].includes(task.statusType) : filter.names.includes(task.status));
 const sort = (a: Task, b: Task) => (a.due === null ? '9999-99-99' : day(a.due)).localeCompare(b.due === null ? '9999-99-99' : day(b.due)) || a.name.localeCompare(b.name, 'fr') || a.id.localeCompare(b.id);
 
-export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor: Actor, connection: Connection, workspaceId: string, eventId: string): Promise<Scan> {
+export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor: Actor, connection: Connection, workspaceId: string, eventId: string, filter: StatusFilter = { mode: 'default' }): Promise<Scan> {
   let scan = await store.scan(actor, eventId, true);
   if (scan && (scan.connectionId !== connection.id || Date.now() - Date.parse(scan.retrievedAt) >= 86400_000)) return { ...scan, tasks: [], finished: true, complete: false, notice: 'Ces résultats sont expirés ou liés à une ancienne connexion. Relancez clickup tâches.' };
   if (scan?.finished) return scan;
-  scan ??= { connectionId: connection.id, page: 0, tasks: [], seen: [], complete: false, finished: false, notice: '', retrievedAt: new Date().toISOString() };
+  scan ??= { connectionId: connection.id, filter, page: 0, tasks: [], seen: [], complete: false, finished: false, notice: '', retrievedAt: new Date().toISOString() };
+  // Pre-extension snapshots retain their original default, including unfinished retries.
+  scan.filter ??= { mode: 'default' };
   await store.saveScan(actor, eventId, scan);
   try {
     const identity = await api.identity();
@@ -24,7 +27,8 @@ export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor:
     const workspace = await api.workspace(workspaceId);
     const seen = new Set(scan.seen);
     while (!scan.finished) {
-      const page = await api.tasks(workspaceId, connection.identity.id, scan.page);
+      // Local name matching preserves unavailable selections without provider-side invalid-name errors.
+      const page = await api.tasks(workspaceId, connection.identity.id, scan.page, scan.filter.mode === 'custom');
       if (!page.length) { scan.finished = true; scan.complete = !scan.notice; break; }
       let newIds = 0;
       for (let value of page) {
@@ -36,7 +40,7 @@ export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor:
           // Workspace responses sometimes omit archived: resolve the task's own flag.
           if (!('archived' in (value as object))) value = await api.task(id);
           const task = api.parseTask(value, workspace);
-          if (eligible(task, connection.identity.id)) scan.tasks.push(task);
+          if (eligible(task, connection.identity.id, scan.filter)) scan.tasks.push(task);
         } catch { scan.notice = 'Certaines tâches ont des métadonnées ou un accès indisponibles.'; }
       }
       scan.seen = [...seen]; scan.page++;
@@ -70,10 +74,15 @@ export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connecti
   if (page + 1 < count) buttons.push({ label: 'Suivant', action: 'page', value: `${sourceId}|${page + 1}` });
   buttons.push({ label: 'Actualiser', action: 'tasks', value: 'tasks' });
   if (!scan.complete) buttons.push({ label: 'Réessayer', action: 'tasks', value: 'tasks' });
+  const selectedNames = scan.filter?.mode === 'custom' ? scan.filter.names.map(escapeCardValue).join(', ') : '';
+  const filterSummary = selectedNames.length > 1500
+    ? `${formatNumber(scan.filter?.mode === 'custom' ? scan.filter.names.length : 0)} statuts : ${shorten(selectedNames, 1500)} Consultez clickup statuts pour la sélection complète.`
+    : `${selectedNames}.`;
   const text = [
     scan.complete ? `${formatNumber(scan.tasks.length)} tâches · Page ${formatNumber(page + 1)}/${formatNumber(count)}.` : `Résultats incomplets : ${formatNumber(scan.tasks.length)} tâches récupérées · Page ${formatNumber(page + 1)}/${formatNumber(count)}.`,
     `Récupération : ${formatDate(scan.retrievedAt)}. Les pages conservent cet instantané ; les accès sont revérifiés.`,
-    scan.complete && !scan.tasks.length ? 'Aucune tâche assignée admissible dans Mayasquad.' : '',
+    scan.filter?.mode === 'custom' ? `Filtre appliqué : ${filterSummary}` : 'Filtre appliqué : tous les statuts non terminés.',
+    scan.complete && !scan.tasks.length ? 'Aucune tâche assignée correspondant à ce filtre dans Mayasquad.' : '',
     scan.notice, accessNotice,
   ].filter(Boolean).join('\n');
   return { kind: 'Mes tâches ClickUp', text, bindButtons: true, buttons,
