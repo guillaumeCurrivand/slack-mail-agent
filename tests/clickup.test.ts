@@ -1,6 +1,6 @@
 import { createHmac, randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
-import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { createModules } from '../src/app/modules.js';
 import { readConfig } from '../src/app/config.js';
 import { schema } from '../src/app/schema.js';
@@ -148,6 +148,133 @@ it('opens the private French status picker with unused configured statuses and c
   expect(h.messages.at(-1)!.text).toContain('indisponible');
 });
 
+it('loads a twelve-page catalogue without serializing independent List reads', async () => {
+  const p = provider([]), definitions = Array.from({ length: 120 }, (_, index) => ({ status: `Status ${String(index).padStart(3, '0')}`, type: 'custom' }));
+  p.locations.set('/api/v2/team/42/space', { spaces: [{ id: '10', statuses: definitions }] });
+  p.locations.set('/api/v2/folder/11', { id: '11', statuses: definitions });
+  p.locations.set('/api/v2/folder/11/list', { lists: definitions.map((_, index) => ({ id: String(1000 + index) })) });
+  for (const [index, status] of definitions.entries()) p.locations.set(`/api/v2/list/${1000 + index}`, { id: String(1000 + index), statuses: [status] });
+  let active = 0, peak = 0, reads = 0;
+  const fetcher = (async (input: string | URL | Request, init?: RequestInit) => {
+    if (new URL(String(input)).pathname.startsWith('/api/v2/list/')) {
+      active++; peak = Math.max(peak, active); reads++;
+      try { await new Promise(resolve => setTimeout(resolve, 20)); return await p.fetcher(input, init); }
+      finally { active--; }
+    }
+    return p.fetcher(input, init);
+  }) as typeof fetch;
+  const h = harness(fetcher), proposal = await connect(h); await h.click('confirm', proposal);
+  await h.text('clickup statuts');
+  expect(h.messages.at(-1)!.text).toContain('Page 1/12');
+  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  expect(reads).toBe(120); expect(peak).toBeGreaterThan(1); expect(peak).toBeLessThanOrEqual(4);
+  const calls = p.calls.length;
+  await h.click('status_page'); await chooseStatus(h, 'Status 010', false); await h.click('status_reset');
+  expect(h.messages.at(-1)!.text).toContain('Filtre par défaut'); expect(p.calls).toHaveLength(calls);
+});
+
+it('lets Retirer change a saved editor draft during a ClickUp cooldown without provider calls', async () => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuts'); const picker = h.messages.at(-1)!, calls = p.calls.length;
+  await sql.query("INSERT INTO clickup_limits(owner,connection_id,retry_at) SELECT owner,connection_id,now()+interval '2 minutes' FROM clickup_connections");
+  await chooseStatus(h, 'Unused', false, picker);
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  expect(h.messages.at(-1)!.text).toContain('Sélection personnelle');
+  expect(p.calls).toHaveLength(calls);
+  await h.click('status_save');
+  expect(h.messages.at(-1)!.text).toContain('temporairement');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  await h.click('status_cancel'); expect(h.messages.at(-1)!.text).toContain('annulée');
+});
+
+it('reuses a recent complete catalogue across restart and explicitly refreshes or expires it', async () => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuts'); const reads = p.calls.filter(path => !['/api/v2/user', '/api/v2/team', '/api/v2/oauth/token'].includes(path)).length;
+  const restarted = harness(p.fetcher);
+  await restarted.text('clickup statuts', alice, 'reopen-cached');
+  expect(p.calls.filter(path => !['/api/v2/user', '/api/v2/team', '/api/v2/oauth/token'].includes(path))).toHaveLength(reads);
+  expect(restarted.messages.at(-1)!.text).toContain('Catalogue vérifié');
+  p.locations.set('/api/v2/list/12', { id: '12', statuses: [{ status: 'New name', type: 'custom' }] });
+  await restarted.click('status_retry');
+  expect(restarted.messages.at(-1)!.text).toContain('New name');
+  await sql.query("UPDATE clickup_status_editors SET data=jsonb_set(data,'{catalogue,checkedAt}',to_jsonb((now()-interval '6 minutes')::text))");
+  const before = p.calls.length; await restarted.text('clickup statuts', alice, 'reopen-expired');
+  expect(p.calls.length - before).toBeGreaterThan(2);
+});
+
+it('returns a partial catalogue promptly instead of waiting inside a provider rate-limit reset', async () => {
+  const p = provider([]), h = await connected(p);
+  const limited = harness((async (input: string | URL | Request, init?: RequestInit) => String(input).includes('/list/12')
+    ? new Response('', { status: 429, headers: { 'Retry-After': '1' } }) : p.fetcher(input, init)) as typeof fetch);
+  const timers = vi.spyOn(globalThis, 'setTimeout');
+  try {
+    await limited.text('clickup statuts', alice, 'short-cooldown');
+    expect(limited.messages.at(-1)!.text).toContain('incomplète');
+    expect(timers.mock.calls.filter(([, delay]) => Number(delay) === 1000)).toHaveLength(0);
+    await chooseStatus(limited, 'Unused', false);
+    expect(limited.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  } finally { timers.mockRestore(); }
+});
+
+it('checkpoints a stalled discovery at its time limit and resumes it with Retry', async () => {
+  const p = provider([]), base = await connected(p);
+  let entered!: () => void;
+  const started = new Promise<void>(resolve => { entered = resolve; });
+  const stalled = harness((async (input: string | URL | Request, init?: RequestInit) => {
+    if (String(input).includes('/list/12')) {
+      entered();
+      return new Promise<Response>((_resolve, reject) => init!.signal!.addEventListener('abort', () => reject(new Error('aborted')), { once: true }));
+    }
+    return p.fetcher(input, init);
+  }) as typeof fetch);
+  vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+  try {
+    const loading = stalled.text('clickup statuts', alice, 'stalled-catalogue'); await started;
+    await vi.advanceTimersByTimeAsync(8000); await loading;
+    const partial = stalled.messages.at(-1)!;
+    expect(partial.text).toContain('incomplète'); expect(partial.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+    vi.useRealTimers();
+    await base.click('status_retry', partial, alice, 'resume-stalled');
+    expect(base.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+  } finally { vi.useRealTimers(); }
+});
+
+it('keeps the longest cooldown when concurrent catalogue reads receive different rate-limit resets', async () => {
+  const p = provider([]), base = await connected(p);
+  p.locations.set('/api/v2/folder/11/list', { lists: [{ id: '12' }, { id: '13' }, { id: '14' }] });
+  const longest = Math.ceil(Date.now() / 1000) + 120;
+  const limited = harness((async (input: string | URL | Request, init?: RequestInit) => {
+    const path = new URL(String(input)).pathname;
+    if (path.startsWith('/api/v2/list/')) {
+      if (path !== '/api/v2/list/12') await new Promise(resolve => setTimeout(resolve, 10));
+      return new Response('', { status: 429, headers: { 'X-RateLimit-Reset': String(path === '/api/v2/list/12' ? longest : longest - 90) } });
+    }
+    return p.fetcher(input, init);
+  }) as typeof fetch);
+  await limited.text('clickup statuts', alice, 'concurrent-cooldowns');
+  expect(limited.messages.at(-1)!.text).toContain('incomplète');
+  const deadline = (await sql.query('SELECT retry_at FROM clickup_limits')).rows[0].retry_at;
+  expect(new Date(deadline).getTime()).toBeGreaterThanOrEqual(longest * 1000);
+  const before = p.calls.length; await chooseStatus(limited, 'Unused', false);
+  expect(p.calls).toHaveLength(before);
+  await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
+  for (const id of ['13', '14']) p.locations.set(`/api/v2/list/${id}`, { id, statuses: [{ status: `New ${id}`, type: 'custom' }] });
+  await base.click('status_retry', limited.messages.at(-1)!, alice, 'cooldowns-ended');
+  expect(base.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(true);
+});
+
+it('does not apply a Save rejected during cooldown when its delivery is retried after later draft edits', async () => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuts'); await chooseStatus(h, 'Unused', false); const draft = h.messages.at(-1)!;
+  await sql.query("INSERT INTO clickup_limits(owner,connection_id,retry_at) SELECT owner,connection_id,now()+interval '2 minutes' FROM clickup_connections");
+  const update = h.messenger.update; h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
+  await expect(h.click('status_save', draft, alice, 'cooldown-save')).rejects.toThrow('rejected');
+  h.messenger.update = update; await chooseStatus(h, 'Closed', true, draft);
+  await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
+  await h.click('status_save', draft, alice, 'cooldown-save');
+  await h.text('clickup statuts'); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
+});
+
 async function chooseStatus(h: ReturnType<typeof harness>, name: string, selected: boolean, message = h.messages.at(-1)!, eventId?: string) {
   const label = `${selected ? 'Ajouter' : 'Retirer'} ${name.slice(0, 60)}`;
   const button = message.buttons!.find(button => button.label === label)!;
@@ -274,6 +401,7 @@ it('retains unavailable names without falling back to unfinished tasks', async (
   }
   p.replaceTask('done', task('done', { status: { status: 'Renamed', type: 'done' } }));
   await h.text('clickup statuses');
+  await h.click('status_retry');
   expect(h.messages.at(-1)!.text).toContain('Finished · indisponible');
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Finished');
   await h.text('clickup tasks');

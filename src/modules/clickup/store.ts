@@ -105,7 +105,8 @@ export class ClickupStore {
   async blockUntil(actor: Actor, connectionId: string, until: number) {
     await this.sql.query(`INSERT INTO clickup_limits(owner,connection_id,retry_at)
       SELECT owner,connection_id,$3 FROM clickup_connections WHERE owner=$1 AND connection_id=$2
-      ON CONFLICT(owner) DO UPDATE SET connection_id=excluded.connection_id,retry_at=excluded.retry_at`, [ownerKey(actor), connectionId, new Date(until)]);
+      ON CONFLICT(owner) DO UPDATE SET connection_id=excluded.connection_id,
+      retry_at=CASE WHEN clickup_limits.connection_id=excluded.connection_id THEN GREATEST(clickup_limits.retry_at,excluded.retry_at) ELSE excluded.retry_at END`, [ownerKey(actor), connectionId, new Date(until)]);
   }
   async cleanup(actor: Actor) {
     await this.sql.query('DELETE FROM clickup_oauth_states WHERE owner=$1 AND expires_at<now()', [ownerKey(actor)]);

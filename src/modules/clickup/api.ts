@@ -6,6 +6,7 @@ export class ClickupError extends Error {
 }
 const id = z.union([z.string().regex(/^\d+$/), z.number().int().nonnegative()]).transform(String);
 const taskId = z.string().regex(/^[\w-]{1,128}$/);
+type ReadOptions = { waitForRateLimit?: boolean; signal?: AbortSignal };
 const rawTask = z.object({
   id: taskId, name: z.string(), status: z.object({ status: z.string(), type: z.string() }), archived: z.boolean(),
   assignees: z.array(z.object({ id })), due_date: z.union([z.number().finite(), z.string().regex(/^\d+$/)]).nullish(),
@@ -17,14 +18,15 @@ const taskLink = (value: string) => {
 };
 export class ClickupAPI {
   constructor(private token: string, private fetcher: typeof fetch = fetch, private limit?: { retryAt(): Promise<number>; blockUntil(until: number): Promise<void> }) {}
-  async get(path: string): Promise<unknown> {
+  async get(path: string, options: ReadOptions = {}): Promise<unknown> {
     for (let attempt = 0; ; attempt++) {
+      options.signal?.throwIfAborted();
       const retryAt = await this.limit?.retryAt() ?? 0;
       if (retryAt > Date.now()) throw new ClickupError(429, retryAt);
       let response;
-      try { response = await this.fetcher(`https://api.clickup.com/api/v2/${path}`, { headers: { Authorization: this.token }, signal: AbortSignal.timeout(30_000) }); }
+      try { response = await this.fetcher(`https://api.clickup.com/api/v2/${path}`, { headers: { Authorization: this.token }, signal: options.signal ? AbortSignal.any([options.signal, AbortSignal.timeout(30_000)]) : AbortSignal.timeout(30_000) }); }
       catch (error) {
-        if (attempt >= 2) throw error;
+        if (attempt >= 2 || options.signal?.aborted) throw error;
         await new Promise(resolve => setTimeout(resolve, 250 * 2 ** attempt)); continue;
       }
       if (response.ok) return response.json();
@@ -32,6 +34,7 @@ export class ClickupAPI {
       const retryAfter = Number(response.headers.get('Retry-After') ?? 0) * 1000;
       const delay = response.status === 429 ? Math.max(reset - Date.now(), retryAfter, 1000) : 250 * 2 ** attempt;
       if (response.status === 429) await this.limit?.blockUntil(Date.now() + delay);
+      if (response.status === 429 && options.waitForRateLimit === false) throw new ClickupError(429, Date.now() + delay);
       if (attempt >= 2 || (response.status !== 429 && response.status < 500)) throw new ClickupError(response.status, reset);
       // Do not retry before the provider's reset. Long waits become an explicit partial result.
       if (delay > 60_000) throw new ClickupError(response.status, Math.max(reset, Date.now() + retryAfter));
@@ -39,12 +42,12 @@ export class ClickupAPI {
       while (remaining > 0) { const chunk = Math.min(remaining, 30_000); await new Promise(resolve => setTimeout(resolve, chunk)); remaining -= chunk; }
     }
   }
-  async identity(): Promise<Identity> {
-    const { user } = z.object({ user: z.object({ id, username: z.string().nullish(), email: z.string().min(1) }) }).parse(await this.get('user'));
+  async identity(options: ReadOptions = {}): Promise<Identity> {
+    const { user } = z.object({ user: z.object({ id, username: z.string().nullish(), email: z.string().min(1) }) }).parse(await this.get('user', options));
     return { id: user.id, name: user.username || user.email, email: user.email };
   }
-  async workspace(workspaceId: string): Promise<string> {
-    const { teams } = z.object({ teams: z.array(z.object({ id, name: z.string() })) }).parse(await this.get('team'));
+  async workspace(workspaceId: string, options: ReadOptions = {}): Promise<string> {
+    const { teams } = z.object({ teams: z.array(z.object({ id, name: z.string() })) }).parse(await this.get('team', options));
     const workspace = teams.find(team => team.id === workspaceId);
     if (!workspace) throw new ClickupError(403);
     return workspace.name;
@@ -53,8 +56,8 @@ export class ClickupAPI {
     const query = new URLSearchParams({ 'assignees[]': userId, subtasks: 'true', include_closed: String(includeClosed), page: String(page), order_by: 'id' });
     return z.object({ tasks: z.array(z.unknown()) }).parse(await this.get(`team/${workspaceId}/task?${query}`)).tasks;
   }
-  async task(id: string): Promise<unknown> {
-    const result = await this.get(`task/${taskId.parse(id)}`);
+  async task(id: string, options: ReadOptions = {}): Promise<unknown> {
+    const result = await this.get(`task/${taskId.parse(id)}`, options);
     if (z.object({ id: taskId }).parse(result).id !== id) throw new Error('Task identity changed');
     return result;
   }

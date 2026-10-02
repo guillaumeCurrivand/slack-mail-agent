@@ -28,6 +28,14 @@ export class ClickupStatusStore {
   async editor(actor: Actor, reference: string, source = false): Promise<StatusEditor | undefined> {
     return (await this.sql.query(`SELECT id,connection_id AS "connectionId",version,data,state FROM clickup_status_editors WHERE ${source ? 'source_id' : 'id'}=$1 AND owner=$2 AND channel=$3 AND workspace=$4 AND expires_at>now()`, [reference, ownerKey(actor), actor.channel, this.workspace])).rows[0];
   }
+  async catalogue(actor: Actor, connectionId: string): Promise<StatusCatalogue | undefined> {
+    const row = (await this.sql.query(`SELECT data->'catalogue' AS catalogue FROM clickup_status_editors
+      WHERE owner=$1 AND channel=$2 AND workspace=$3 AND connection_id=$4 AND expires_at>now()
+      AND data->'catalogue'->>'complete'='true' AND data->'catalogue'->>'checkedAt'>$5
+      ORDER BY data->'catalogue'->>'checkedAt' DESC LIMIT 1`,
+    [ownerKey(actor), actor.channel, this.workspace, connectionId, new Date(Date.now() - 5 * 60_000).toISOString()])).rows[0];
+    return row?.catalogue;
+  }
   async open(actor: Actor, eventId: string, connectionId: string, catalogue: StatusCatalogue): Promise<StatusEditor | undefined> {
     const preference = await this.preference(actor);
     const data = { filter: preference.filter, catalogue };
