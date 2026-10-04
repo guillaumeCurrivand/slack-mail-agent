@@ -6,6 +6,7 @@ import { z } from 'zod';
 import { browserConfigSchema, browserInstructions, browserScenarioSchema, replayBrowser, startPreview } from './browser.js';
 import { maintenanceBranchSchema } from './domain.js';
 import type { Result, Work } from './domain.js';
+import { localServiceSchema, startLocalServices } from './local-services.js';
 
 const command = z.array(z.string().min(1).max(2000)).min(1).max(100);
 export const localProjectSchema = z.object({
@@ -15,10 +16,38 @@ export const localProjectSchema = z.object({
   baseBranch: z.string().max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9_-]*)*$/).optional(),
   browser: browserConfigSchema.optional(),
   setup: z.array(command).max(30).default([]),
+  services: z.array(localServiceSchema).max(10).refine(services => new Set(services.map(service => service.id)).size === services.length && services.every(service => service.id !== 'preview'), 'Service IDs must be unique and cannot be preview.').optional(),
 }).strict().refine(value => (value.baseBranch ?? 'test') !== (value.branch ?? 'maintenance'), 'Base and maintenance branches must differ.');
 export type LocalProject = z.infer<typeof localProjectSchema>;
 const commitTitleSchema = z.string().trim().min(1).max(120).regex(/^[^\r\n\x00-\x1f\x7f]+$/, 'Commit title must be a single line.');
 const reportSchema = z.object({ actionable: z.boolean(), summary: z.string().min(1).max(8000), browserRequired: z.boolean(), commitTitle: commitTitleSchema.optional(), browserScenario: browserScenarioSchema.optional() }).strict();
+
+/** Cursor's result can concatenate progress messages with its final JSON report. */
+export function parseCursorReport(stdout: string): z.infer<typeof reportSchema> {
+  try {
+    const envelope = z.object({ type: z.literal('result'), is_error: z.literal(false), result: z.string() }).parse(JSON.parse(stdout));
+    const text = envelope.result.trim();
+    const objects: { start: number; end: number }[] = [];
+    let depth = 0, start = 0, quoted = false, escaped = false;
+    for (let index = 0; index < text.length; index++) {
+      const char = text[index];
+      if (quoted) {
+        if (escaped) escaped = false;
+        else if (char === '\\') escaped = true;
+        else if (char === '"') quoted = false;
+      } else if (depth > 0 && char === '"') quoted = true;
+      else if (char === '{') { if (depth++ === 0) start = index; }
+      else if (depth > 0 && char === '}' && --depth === 0) objects.push({ start, end: index + 1 });
+    }
+    // Never choose between conflicting reports or accept prose after a purported result.
+    if (depth || objects.length !== 1) throw new Error('Ambiguous report');
+    const object = objects[0]!;
+    if (!/^(?:```)?\s*$/.test(text.slice(object.end).trim())) throw new Error('Trailing text');
+    return reportSchema.parse(JSON.parse(text.slice(object.start, object.end)));
+  } catch {
+    throw new Error('Rapport Cursor invalide : un unique objet JSON final conforme est requis. Consultez le journal local.');
+  }
+}
 type Journal = { phase: 'new' | 'prepared' | 'attempting' | 'answered' | 'validated' | 'committed' | 'finished';
   branch?: string; baseBranch?: string; baseline?: string; attempt?: number; report?: z.infer<typeof reportSchema>; failure?: string; tests?: string[]; commit?: string; result?: Result };
 export type CommandResult = { code: number; stdout: string; stderr: string };
@@ -57,6 +86,7 @@ export class LocalRunner {
     const branch = project.branch ?? 'maintenance';
     const baseBranch = project.baseBranch ?? 'test', remoteBase = `origin/${baseBranch}`;
     let stopPreview: (() => Promise<void>) | undefined;
+    let stopServices: (() => Promise<void>) | undefined;
     const directory = path.join(this.root, 'runs', createHash('sha256').update(work.id).digest('hex'));
     const checkout = path.join(directory, 'checkout'), journalPath = path.join(directory, 'journal.json');
     await mkdir(directory, { recursive: true });
@@ -103,6 +133,7 @@ export class LocalRunner {
       }
 
       if (journal.phase === 'prepared' || journal.phase === 'answered') {
+        stopServices = await startLocalServices(project.services ?? [], directory, childEnvironment());
         if (project.browser) stopPreview = await startPreview(project.browser, checkout, directory, childEnvironment());
         for (let attempt = Math.max(work.attempts, journal.attempt ?? 0); attempt < 2; attempt = journal.attempt!) {
           // Save before asking the server; an uncertain attempt admission cannot spend twice.
@@ -126,9 +157,7 @@ export class LocalRunner {
             const result = await this.exec([...this.agent, '--print', ...(work.kind === 'build' ? ['--force'] : []), '--output-format', 'json', `Read and follow the task in ${JSON.stringify(promptFile)}. Return only the requested JSON.`], checkout);
             await writeFile(path.join(directory, `attempt-${journal.attempt}.log`), result.stdout + '\n' + result.stderr, { mode: 0o600 });
             if (result.code) throw new Error(`Cursor a échoué (${result.code}). Consultez le journal local.`);
-            const envelope = JSON.parse(result.stdout);
-            if (envelope.type !== 'result' || envelope.is_error || typeof envelope.result !== 'string') throw new Error('Résultat Cursor invalide.');
-            journal.report = reportSchema.parse(JSON.parse(envelope.result.trim().replace(/^```(?:json)?\s*/, '').replace(/\s*```$/, '')));
+            journal.report = parseCursorReport(result.stdout);
             journal.phase = 'answered'; await save();
             if (!journal.report.actionable) return finish({ outcome: 'needs_information', summary: journal.report.summary, tests: [] });
             if (await git('rev-parse', 'HEAD') !== journal.baseline || await git('branch', '--show-current') !== branch) throw new Error('Cursor a modifié l’historique ou la branche. Vérification humaine nécessaire.');
@@ -199,6 +228,6 @@ export class LocalRunner {
         return finish({ outcome: 'blocked', summary: `Publication du commit ${journal.commit} non confirmée. Vérifiez la branche distante avant toute reprise ; le checkout et le commit sont conservés.`, tests: journal.tests ?? [], commit: journal.commit });
       }
       return finish({ outcome: 'blocked', summary: error instanceof Error ? error.message.split('\n')[0]!.slice(0, 2000) : 'Worker indisponible.', tests: journal.tests ?? [] });
-    } finally { await stopPreview?.(); }
+    } finally { try { await stopPreview?.(); } finally { await stopServices?.(); } }
   }
 }

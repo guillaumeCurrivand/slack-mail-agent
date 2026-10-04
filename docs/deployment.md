@@ -42,6 +42,23 @@ EOA uses `preprod` as its base and `maintenance/ai` as its destination. The loca
 
 On the worker PC, stop the existing worker normally, pull the reviewed `main` commit if it is not already present, and set `"baseBranch":"preprod"` in the existing project entry. Restart with `npm run development:worker -- development-worker.local.json`; compiled installations must first run `npm run build`. Use `development status pilot` to identify the current blocked run, then `development retry <run-id>` once. Existing finished journals preserve their old result, so restarting alone does not retry them. Runs already in progress retain their original branch settings; do not edit or delete their journals. Confirm the new investigation progresses and the remote `preprod` tip remains unchanged. No `test` branch needs creating or publishing for EOA.
 
+### Development local environment and browser recovery — 05/10/2026
+
+This update changes only the local Development worker: ordered backend/tunnel/preview startup, configurable readiness deadlines, Cursor report parsing, grouped test-account lookup and login-completion assertions. It requires no server app rebuild/restart, server environment changes, Slack manifest changes or database migration. The server may pull the reviewed `main` commit to keep its checkout/documentation current:
+
+```bash
+cd /opt/slack-mail-agent &&
+git fetch origin main &&
+git pull --ff-only origin main &&
+git rev-parse HEAD
+```
+
+Compare the printed SHA with the release handoff. Preserve the existing environment and database volume. This worker-only procedure assumes the server already has the preceding Development fixes; it does not replace deployment of an older server release.
+
+On the workstation, stop the existing worker with Ctrl+C and wait for its prompt. Pull the reviewed `main` commit if it is not already present. Apply the [EOA profile](development-eoa.md#worker-configuration), including `services`, `browser.startupTimeoutMs` and `browser.accountsGroup: "local"`. Existing local config, `.env`, credentials, Cursor MCP/permissions and the project-specific skill are intentionally not versioned; the runbook records the setup needed to reproduce them. This change adds no package dependency. Restart `npm run development:worker -- development-worker.local.json`; compiled installations must run `npm run build` first. Preserve the worker token, identity and journals.
+
+Post-update: check the [worker process](development-eoa.md#check-whether-the-worker-is-running), then `development status pilot`. Explicitly retry only the latest blocked run once with `development retry <run-id>`. Verify backend → ngrok → frontend readiness, the configured tunnel hostname, browser replay success and cleanup of services started by the worker. A finished blocked journal is not retried just by restarting. Observe the eventual maintenance commit and `to build` transition separately; the successful eleven-step local replay did not publish a commit or prove the complete workflow.
+
 ### Development repository URL validation fix — 04/10/2026
 
 The follow-up production failure points to `new URL` in the repository validation refinement. Malformed URLs, including Slack-formatted repository links, reproduced the same uncaught `TypeError` locally even through `safeParse`. The fix accepts Slack link wrappers only in the configuration DM's repository field and uses non-throwing URL validation. Invalid values produce a French error without saving; credential-free HTTPS restrictions remain enforced.
