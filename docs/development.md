@@ -32,6 +32,8 @@ development status pilot
 
 French aliases are `development configurer`, `development projets`, `development statut` and `development relancer`. Configuration JSON keys and exact ClickUp status values stay unchanged. Repository URLs must be credential-free HTTPS URLs; GitHub and GitLab repository paths are supported. The worker independently allowlists the same project ID, repository and skill. Configuring a Slack project cannot choose arbitrary executables or local paths on the worker. Set `"enabled":false` in the complete configuration to pause new claims; already-started work may finish. Retain the same worker identity until its active claims are resolved.
 
+Configuration checks Slack channel membership and ClickUp Folder access before saving. If either access check fails, the DM identifies Slack or ClickUp and asks the User to resend the command after resolving access; the requested configuration is not saved. The local Cursor worker is not needed for configuration. A successful command replies **Projet … enregistré**. If an older version silently exhausted its queued retries, send a new configuration message after upgrading; do not reset the failed job in the database.
+
 ## Local worker setup
 
 Use Node 24+, Git, an authenticated Cursor CLI, repository access and the project's development prerequisites. A long-running app can inherit an older PATH than a newly opened PowerShell session. Check the installed launcher before concluding the CLI is absent. Follow the official [Cursor installation](https://cursor.com/docs/cli/installation), [authentication](https://cursor.com/docs/cli/reference/authentication) and [headless](https://cursor.com/docs/cli/headless) documentation for the actual workstation.

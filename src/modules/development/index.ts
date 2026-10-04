@@ -73,8 +73,12 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
         const parsed = projectSchema.safeParse(input);
         if (!parsed.success) return send('Configuration invalide. ' + help);
         const existing = await store.project(parsed.data.id);
-        if (!await visible(actor, parsed.data) || (existing && !await visible(actor, existing))) return send('Vous et le bot devez avoir accès au canal actuel et au canal configuré.');
-        await clickup.lists(parsed.data.folder);
+        let accessible: boolean;
+        try { accessible = await visible(actor, parsed.data) && (!existing || await visible(actor, existing)); }
+        catch { return send('Configuration non enregistrée : vérification des accès Slack indisponible. Vérifiez les permissions du bot, puis renvoyez la commande development configure.'); }
+        if (!accessible) return send('Vous et le bot devez avoir accès au canal actuel et au canal configuré.');
+        try { await clickup.lists(parsed.data.folder); }
+        catch { return send('Configuration non enregistrée : lecture du dossier ClickUp indisponible. Vérifiez son identifiant et les accès du jeton Development, puis renvoyez la commande development configure.'); }
         await store.save(parsed.data, eventId);
         return send(`Projet ${parsed.data.name} enregistré. ${parsed.data.enabled ? 'Les tickets Ready for AI sont autorisés pour le worker local.' : 'Nouveaux traitements suspendus.'}`);
       }

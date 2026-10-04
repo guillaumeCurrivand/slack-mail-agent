@@ -23,7 +23,7 @@ beforeAll(async () => { db = new PGlite(); await db.exec(coreSchema); });
 beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health CASCADE'); });
 afterAll(async () => { for (const app of apps) await app.close(); await db.close(); });
 
-async function harness() {
+async function harness(failure?: 'conversations.info' | 'conversations.members' | 'clickup') {
   const sql: Database = { query: (text, values) => db.query(text, values), transaction: work => db.transaction(tx => work({ query: (text, values) => tx.query(text, values) })) };
   const tasks = new Map<string, Ticket>([['abc123', { id: 'abc123', name: 'Réparer le menu', description: 'Le menu ne se ferme pas au clic.', url: 'https://app.clickup.com/t/abc123', status: 'open', comments: [], attachments: [] }]]);
   const comments: string[] = [], statuses: string[] = [], posts: any[] = [];
@@ -31,6 +31,7 @@ async function harness() {
   const fetcher = (async (url: URL | string, init?: RequestInit) => {
     const target = new URL(String(url)), body = init?.body ? JSON.parse(String(init.body)) : undefined;
     if (target.hostname === 'api.clickup.com') {
+      if (failure === 'clickup') return Response.json({}, { status: 403 });
       if (target.pathname.endsWith('/folder/123/list')) return Response.json({ lists: [{ id: 'list1' }] });
       if (target.pathname.endsWith('/list/list1/task')) return Response.json({ tasks: [...tasks.values()].map(task => ({ id: task.id, status: { status: task.status } })), last_page: true });
       const match = /\/task\/([^/]+)(\/comment)?$/.exec(target.pathname);
@@ -46,8 +47,19 @@ async function harness() {
       snapshots++;
       return Response.json({ id: task.id, name: task.name, description: task.description, status: { status: task.status }, list: { id: 'list1' } });
     }
-    if (target.pathname.endsWith('/conversations.info')) return Response.json({ ok: true, channel: { id: body.channel, is_member: body.channel === 'CPROJECT' } });
-    if (target.pathname.endsWith('/conversations.members')) return Response.json({ ok: true, members: ['UALICE', 'UBOB'] });
+    if (target.pathname.startsWith('/api/conversations.')) {
+      // Match the production rejection: JSON POST arguments were not accepted.
+      if (init?.method !== 'GET' || init.body || !target.searchParams.has('channel')) return Response.json({ ok: false, error: 'invalid_arguments' });
+      if (target.pathname === `/api/${failure}`) return Response.json({ ok: false, error: 'missing_scope' });
+      const channel = target.searchParams.get('channel');
+      if (target.pathname.endsWith('/conversations.info')) return Response.json({ ok: true, channel: { id: channel, is_member: channel === 'CPROJECT' } });
+      if (target.pathname.endsWith('/conversations.members')) {
+        expect(target.searchParams.get('limit')).toBe('200');
+        return Response.json(target.searchParams.get('cursor') === 'next+page'
+          ? { ok: true, members: ['UALICE'], response_metadata: { next_cursor: '' } }
+          : { ok: true, members: ['UBOB'], response_metadata: { next_cursor: 'next+page' } });
+      }
+    }
     if (target.pathname.endsWith('/chat.postMessage') || target.pathname.endsWith('/chat.update')) {
       const ts = `1700000000.${String(++counter).padStart(6, '0')}`;
       posts.push({ ...body, ts });
@@ -82,12 +94,26 @@ async function harness() {
 it('configures through signed DM dispatch and restricts configuration/status to channel members', async () => {
   const h = await harness();
   await h.configure(); expect(await h.store.project('pilot')).toEqual(project);
+  expect(h.posts.at(-1).text).toContain('Projet Projet pilote enregistré');
+  await h.dm('development projects');
+  expect(h.posts.at(-1).text).toContain('pilot — Projet pilote');
   await h.dm(`development configure ${JSON.stringify({ ...project, skill: 'other' })}`, 'UOUTSIDER');
   expect((await h.store.project('pilot'))!.skill).toBe('maintenance');
   await h.dm('development projects', 'UOUTSIDER');
   expect(h.posts.at(-1).text).toContain('Aucun projet accessible');
   expect((await h.ingress('https://app.clickup.com/t/abc123', { team: 'TOTHER' })).response.statusCode).toBe(403);
   expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'] }, 'wrong')).statusCode).toBe(401);
+});
+
+it.each(['conversations.info', 'conversations.members', 'clickup'] as const)('reports %s configuration access failures in the DM without saving a project', async failure => {
+  const h = await harness(failure);
+  await h.configure();
+  expect(await h.store.project('pilot')).toBeUndefined();
+  expect(h.posts.at(-1).text).toContain('Configuration non enregistrée');
+  expect(h.posts.at(-1).text).toContain(failure === 'clickup' ? 'ClickUp' : 'Slack');
+  expect(h.posts.at(-1).channel).toBe('DALICE');
+  const jobs = (await h.sql.query("SELECT status FROM jobs WHERE module='development' AND actor->>'user'='UALICE'")).rows;
+  expect(jobs).toEqual([{ status: 'done' }]);
 });
 
 it('queues one review for duplicate signed channel deliveries and preserves Slack clarifications before authorization', async () => {

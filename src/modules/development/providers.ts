@@ -57,9 +57,11 @@ export class ClickupDevelopment {
 /** Channel membership is checked at configuration, receipt and delivery. */
 export class DevelopmentChannels {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
-  private async request(method: string, body: Record<string, unknown>) {
-    const response = await this.fetcher(`https://slack.com/api/${method}`, { method: 'POST',
-      headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify(body), signal: AbortSignal.timeout(20_000) });
+  private async request(method: string, parameters: Record<string, string | number>) {
+    const url = new URL(`https://slack.com/api/${method}`);
+    for (const [key, value] of Object.entries(parameters)) url.searchParams.set(key, String(value));
+    const response = await this.fetcher(url.toString(), { method: 'GET',
+      headers: { Authorization: `Bearer ${this.token}` }, signal: AbortSignal.timeout(20_000) });
     const data = await response.json() as any;
     if (!response.ok || !data.ok) throw new Error('Accès Slack indisponible.');
     return data;
