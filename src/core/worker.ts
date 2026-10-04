@@ -2,8 +2,23 @@ import type { Pool } from 'pg';
 import { dispatchJob, type RuntimeOptions } from './dispatch.js';
 import { isIntegration, workOwnerKey, type WorkIdentity } from './identity.js';
 import type { ModuleRegistry } from './modules.js';
-import type { Messenger } from './slack.js';
+import { SlackDeliveryRejected, type Messenger } from './slack.js';
 import { JobStore, withWorkOwner } from './store.js';
+
+const diagnosticCodes = new Set(['access_denied', 'channel_not_found', 'ekm_access_denied', 'invalid_auth', 'invalid_blocks', 'is_archived', 'missing_scope', 'no_permission', 'not_in_channel', 'rate_limited', 'ratelimited', 'token_expired', 'token_revoked', 'message_not_found', 'cant_update_message', 'ECONNRESET', 'ECONNREFUSED', 'ETIMEDOUT', 'ENOTFOUND', 'EAI_AGAIN']);
+
+function failureDetails(error: unknown) {
+  if (!(error instanceof Error)) return { error_type: 'NonError' };
+  const code = 'code' in error ? error.code : undefined;
+  // Never log messages, query details, causes, payloads or the raw stack: these can contain credentials.
+  const location = error.stack?.split('\n').slice(1).map(line => line.replaceAll('\\', '/').match(/\/(?:src|dist)\/((?:core|app|modules)\/[a-zA-Z0-9_./-]+\.[cm]?[jt]s:\d+:\d+)(?:\)|$)/)?.[1]).find(Boolean);
+  return {
+    error_type: error instanceof SlackDeliveryRejected ? 'SlackDeliveryRejected' : error instanceof TypeError ? 'TypeError'
+      : error instanceof SyntaxError ? 'SyntaxError' : error instanceof RangeError ? 'RangeError' : 'Error',
+    error_code: typeof code === 'string' && (diagnosticCodes.has(code) || /^[0-9A-Z]{5}$/.test(code)) ? code : undefined,
+    error_location: location,
+  };
+}
 
 export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY: number }, modules: ModuleRegistry, messenger: Messenger) {
   const globalStore = new JobStore(pool), enabled = modules.enabledIds();
@@ -26,11 +41,11 @@ export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY
           const retryAt = await dispatchJob(client, config, modules, messenger, job);
           if (retryAt) await new JobStore(client).defer(job.id, retryAt);
           else await new JobStore(client).complete(job.id);
-        } catch {
+        } catch (error) {
           // Usually a DB/Slack delivery failure. AI interpretations and message checkpoints are already durable.
           if (isIntegration(job.actor)) await new JobStore(client).defer(job.id, new Date(Date.now() + 30_000));
           else await new JobStore(client).retryOrFail(job.id);
-          console.error(JSON.stringify({ event: 'job_failed', job: job.id }));
+          console.error(JSON.stringify({ event: 'job_failed', job: job.id, module: job.module, ...failureDetails(error) }));
         }
         return true;
       }, candidate.module);
@@ -41,19 +56,19 @@ export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY
     await globalStore.cleanup();
     for (const module of modules.all()) {
       try { await module.cleanup?.(pool); }
-      catch { console.error(JSON.stringify({ event: 'module_cleanup_failed', module: module.id })); }
+      catch (error) { console.error(JSON.stringify({ event: 'module_cleanup_failed', module: module.id, ...failureDetails(error) })); }
     }
   };
   const loops = Array.from({ length: config.WORKER_CONCURRENCY }, async () => {
     while (!stopping) {
-      try { await tick(); } catch { console.error(JSON.stringify({ event: 'worker_error' })); }
+      try { await tick(); } catch (error) { console.error(JSON.stringify({ event: 'worker_error', ...failureDetails(error) })); }
       if (!stopping) await new Promise(resolve => setTimeout(resolve, 500));
     }
   });
   let housekeepingRun: Promise<void> | undefined;
   const runCleanup = () => {
     if (stopping || housekeepingRun) return;
-    housekeepingRun = cleanup().catch(() => console.error(JSON.stringify({ event: 'retention_cleanup_failed' })))
+    housekeepingRun = cleanup().catch(error => console.error(JSON.stringify({ event: 'retention_cleanup_failed', ...failureDetails(error) })))
       .finally(() => { housekeepingRun = undefined; });
   };
   const housekeeping = setInterval(runCleanup, 3600_000);

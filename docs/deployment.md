@@ -36,6 +36,12 @@ The production diagnostic showed Slack rejecting JSON POST lookups with `invalid
 
 Deploy the reviewed, pushed `main` commit with the Development commands above. No environment, Slack scope, local worker configuration or database migration changes are needed. After `/ready` succeeds, send the original `development configure` command as a **new private DM**, wait for **Projet … enregistré**, then send `development projects` and verify the project appears. The failed historical job does not restart automatically; do not modify its database state. Local fake-provider tests cover the production rejection, membership pagination, successful configuration/listing and access-error replies; a successful live reconfiguration must still be observed.
 
+### Diagnosing a failed background command
+
+Worker failure logs include the job/Module identity, a fixed error type, recognized Slack/network or PostgreSQL SQLSTATE codes, and the first available application-relative code location. Error messages, raw stacks, SQL details, command contents and credentials are not logged. Retry and delivery behavior is unchanged. This diagnostic update requires an app rebuild/restart through the procedure above, with no environment, scope or migration changes.
+
+After readiness succeeds, reproduce the failing command once as a new DM and run `docker compose logs --since 5m --tail 60 app`. Inspect the new `job_failed` entry's `error_code` and `error_location`; use the deployed commit's source for line numbers. The diagnostic release does not itself establish that the command's underlying failure is fixed. Do not reset historical failed jobs or repeatedly resend a command while its retries are active.
+
 ## Yousign release candidate
 
 The opt-in [Yousign Module](yousign.md) receives the existing company subscription at `/webhooks/yousign`. Pull the reviewed release containing `src/modules/yousign/index.ts` before enabling it: older releases reject `ENABLED_MODULES` containing `yousign` and fail startup. Preserve `.env`, the existing encryption key, database volume and Compose project. Add `YOUSIGN_WEBHOOK_SECRET`, `YOUSIGN_SUBSCRIPTION_ID`, `YOUSIGN_SANDBOX` (`false` for production, `true` for sandbox), and the existing operational recipient `SLACK_ADMIN_USER_ID`; append `yousign` to `ENABLED_MODULES`. No Yousign API key, new subscription, Gmail or AI credentials are needed. Invite the bot into approved destinations; verify `channels:read`, `groups:read` and `chat:write` on the installed token.

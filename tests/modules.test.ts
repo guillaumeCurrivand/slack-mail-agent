@@ -12,6 +12,7 @@ import { createServer } from '../src/core/server.js';
 import type { AgentMessage, Messenger } from '../src/core/slack.js';
 import { coreSchema, JobStore, type Sql } from '../src/core/store.js';
 import { worker } from '../src/core/worker.js';
+import { SlackDeliveryRejected } from '../src/core/slack.js';
 import type { Pool } from 'pg';
 import { emptyState } from '../src/modules/mail/domain.js';
 import { Store } from '../src/modules/mail/store.js';
@@ -140,6 +141,38 @@ it('leaves disabled jobs untouched, processes other work for that user, and resu
   await runUntilReply(createModules(readConfig(mailEnv), sql, mailEnv));
   expect((await sql.query("SELECT status,attempts,payload FROM jobs WHERE id='disabled-mail'")).rows[0]).toEqual({ status: 'done', attempts: 3, payload: {} });
   expect((await new Store(sql).load(alice)).drafts).toHaveLength(1);
+});
+
+it.each([
+  { error: new SlackDeliveryRejected('synthetic-private-token', 'invalid_blocks'), code: 'invalid_blocks', type: 'SlackDeliveryRejected' },
+  { error: Object.assign(new Error('synthetic-private-token'), { code: '42P01', detail: 'synthetic-private-token' }), code: '42P01', type: 'Error' },
+  { error: Object.assign(new Error('synthetic-private-token'), { code: 'synthetic-private-token' }), code: undefined, type: 'Error' },
+])('logs safe failure details through worker dispatch ($code)', async ({ error, code, type }) => {
+  error.stack = 'Error: synthetic-private-token\n    at handle (file:///app/dist/modules/development/index.js:81:21)';
+  const query = (text: string, values?: any[]) => text.includes('pg_try_advisory_lock')
+    ? Promise.resolve({ rows: [{ locked: true }] }) : text.includes('pg_advisory_unlock')
+      ? Promise.resolve({ rows: [{}] }) : sql.query(text, values);
+  const pool = { query, async connect() { return { query, release() {} }; } } as unknown as Pool;
+  const modules = new ModuleRegistry([{ id: 'probe', description: 'Failing provider', async handle() { throw error; } }]);
+  await new JobStore(sql).enqueue('diagnostic-job', alice, { type: 'text', text: 'synthetic-private-token' }, 'probe');
+  let logged!: (entry: any) => void;
+  const result = new Promise<any>(resolve => { logged = resolve; });
+  const spy = vi.spyOn(console, 'error').mockImplementation(value => {
+    const entry = JSON.parse(String(value));
+    if (entry.event === 'job_failed') logged(entry);
+  });
+  const stop = worker(pool, { ...options, WORKER_CONCURRENCY: 1 }, modules, { async send() {} });
+  let timeout: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const entry = await Promise.race([result, new Promise<never>((_, reject) => {
+      timeout = setTimeout(() => reject(new Error('No diagnostic was logged')), 3000);
+    })]);
+    expect(entry).toMatchObject({ event: 'job_failed', job: 'diagnostic-job', module: 'probe',
+      error_type: type, error_location: 'modules/development/index.js:81:21' });
+    expect(entry.error_code).toBe(code);
+    expect(JSON.stringify(spy.mock.calls)).not.toContain('synthetic-private-token');
+    expect((await sql.query("SELECT status,attempts FROM jobs WHERE id='diagnostic-job'")).rows[0]).toEqual({ status: 'queued', attempts: 1 });
+  } finally { clearTimeout(timeout); await stop(); spy.mockRestore(); }
 });
 
 it('keeps navigation and the other module responsive during a held mail scan while serializing mail state', async () => {
