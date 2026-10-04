@@ -116,6 +116,28 @@ it.each(['conversations.info', 'conversations.members', 'clickup'] as const)('re
   expect(jobs).toEqual([{ status: 'done' }]);
 });
 
+it.each(['<URL>', '<URL|Orientaction frontend>'])('accepts Slack repository link formatting %s through signed DM dispatch', async format => {
+  const h = await harness();
+  const repository = 'https://gitlab.com/mayasquad/orient-action/orient-action-frontend';
+  const configured = { ...project, repository };
+  await h.dm(`development configure ${JSON.stringify({ ...configured, repository: format.replace('URL', repository) })}`);
+  expect(await h.store.project('pilot')).toEqual(configured);
+  expect(h.posts.at(-1).text).toContain('enregistré');
+  await h.dm('development projects');
+  expect(h.posts.at(-1).text).toContain('pilot — Projet pilote');
+});
+
+it.each(['not-a-url', '<https://example.com', 'https://', '<not-a-url|https://gitlab.com/example/project>', '<http://example.com/project>', '<https://user:password@example.com/project>', '<https://example.com/project?token=secret>', '<https://example.com/project#fragment>'])('rejects invalid repository input without throwing or saving: %s', async repository => {
+  expect(projectSchema.safeParse({ ...project, repository }).success).toBe(false);
+  const h = await harness();
+  await h.dm(`development configure ${JSON.stringify({ ...project, repository })}`);
+  expect(await h.store.project('pilot')).toBeUndefined();
+  expect(h.posts.at(-1).text).toContain('Configuration invalide');
+  expect(h.posts.at(-1).text).not.toContain('user:password');
+  expect(h.posts.at(-1).text).not.toContain('token=secret');
+  expect((await h.sql.query("SELECT status FROM jobs WHERE module='development' AND actor->>'user'='UALICE'")).rows).toEqual([{ status: 'done' }]);
+});
+
 it('queues one review for duplicate signed channel deliveries and preserves Slack clarifications before authorization', async () => {
   const h = await harness(); await h.configure();
   const request = await h.ingress('<https://app.clickup.com/t/abc123|ticket>', { id: 'same' });

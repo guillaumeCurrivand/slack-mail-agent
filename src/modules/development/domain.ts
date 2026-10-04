@@ -8,8 +8,8 @@ export const projectSchema = z.object({
   channel: z.string().regex(/^[CG][A-Z0-9]+$/),
   folder: z.string().regex(/^\d+$/),
   repository: z.url().refine(value => {
-    const url = new URL(value);
-    return url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && !/[\s<>]/.test(value);
+    const url = URL.parse(value);
+    return url !== null && url.protocol === 'https:' && !url.username && !url.password && !url.search && !url.hash && !/[\s<>]/.test(value);
   }, 'Use a credential-free HTTPS repository URL.'),
   skill: z.string().trim().min(1).max(200),
   enabled: z.boolean().default(true),

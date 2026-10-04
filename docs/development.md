@@ -34,6 +34,8 @@ French aliases are `development configurer`, `development projets`, `development
 
 Configuration checks Slack channel membership and ClickUp Folder access before saving. If either access check fails, the DM identifies Slack or ClickUp and asks the User to resend the command after resolving access; the requested configuration is not saved. The local Cursor worker is not needed for configuration. A successful command replies **Projet … enregistré**. If an older version silently exhausted its queued retries, send a new configuration message after upgrading; do not reset the failed job in the database.
 
+The configuration DM accepts Slack's automatic `<https://…>` and `<https://…|label>` formatting in the JSON `repository` string and stores the link target as the plain URL. The label never selects the repository. Invalid URLs return **Configuration invalide** instead of throwing; HTTPS and the restrictions on credentials, query strings and fragments still apply.
+
 ## Local worker setup
 
 Use Node 24+, Git, an authenticated Cursor CLI, repository access and the project's development prerequisites. A long-running app can inherit an older PATH than a newly opened PowerShell session. Check the installed launcher before concluding the CLI is absent. Follow the official [Cursor installation](https://cursor.com/docs/cli/installation), [authentication](https://cursor.com/docs/cli/reference/authentication) and [headless](https://cursor.com/docs/cli/headless) documentation for the actual workstation.

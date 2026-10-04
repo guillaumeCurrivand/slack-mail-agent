@@ -36,6 +36,12 @@ The production diagnostic showed Slack rejecting JSON POST lookups with `invalid
 
 Deploy the reviewed, pushed `main` commit with the Development commands above. No environment, Slack scope, local worker configuration or database migration changes are needed. After `/ready` succeeds, send the original `development configure` command as a **new private DM**, wait for **Projet … enregistré**, then send `development projects` and verify the project appears. The failed historical job does not restart automatically; do not modify its database state. Local fake-provider tests cover the production rejection, membership pagination, successful configuration/listing and access-error replies; a successful live reconfiguration must still be observed.
 
+### Development repository URL validation fix — 04/10/2026
+
+The follow-up production failure points to `new URL` in the repository validation refinement. Malformed URLs, including Slack-formatted repository links, reproduced the same uncaught `TypeError` locally even through `safeParse`. The fix accepts Slack link wrappers only in the configuration DM's repository field and uses non-throwing URL validation. Invalid values produce a French error without saving; credential-free HTTPS restrictions remain enforced.
+
+Deploy the reviewed, pushed `main` commit using the Development procedure above. No environment, permissions, local worker or database migration changes are required. After readiness passes, send the configuration command once as a new private DM, verify **Projet … enregistré**, then verify the project in `development projects`. Previous failed jobs remain historical. Automated signed-DM regression tests cover both Slack link forms and malformed/forbidden URLs; successful live configuration remains to be observed after deployment.
+
 ### Diagnosing a failed background command
 
 Worker failure logs include the job/Module identity, a fixed error type, recognized Slack/network or PostgreSQL SQLSTATE codes, and the first available application-relative code location. Error messages, raw stacks, SQL details, command contents and credentials are not logged. Retry and delivery behavior is unchanged. This diagnostic update requires an app rebuild/restart through the procedure above, with no environment, scope or migration changes.

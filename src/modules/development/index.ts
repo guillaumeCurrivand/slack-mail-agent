@@ -70,6 +70,10 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       if (text.startsWith('configure ')) {
         let input: unknown;
         try { input = JSON.parse(text.slice(10)); } catch { return send('JSON de configuration invalide. ' + help); }
+        if (input !== null && typeof input === 'object' && 'repository' in input && typeof input.repository === 'string') {
+          // Slack can turn a pasted URL into <url> or <url|label> inside the JSON string.
+          input = { ...input, repository: input.repository.replace(/^<(https:\/\/[^<>\s|]+)(?:\|[^<>]*)?>$/, '$1') };
+        }
         const parsed = projectSchema.safeParse(input);
         if (!parsed.success) return send('Configuration invalide. ' + help);
         const existing = await store.project(parsed.data.id);
