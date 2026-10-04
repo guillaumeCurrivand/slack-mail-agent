@@ -40,7 +40,8 @@
           "npx playwright test"
         ]
       ],
-      "branch": "maintenance/ai"
+      "branch": "maintenance/ai",
+      "baseBranch": "preprod"
     }
   ]
 }

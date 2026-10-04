@@ -18,7 +18,7 @@ afterEach(async () => {
   }
 });
 
-async function fixture(options: { failChecks?: boolean; browser?: boolean; lostPush?: boolean; commitTitle?: string | null; browserScenario?: unknown } = {}) {
+async function fixture(options: { baseBranch?: string; failChecks?: boolean; browser?: boolean; lostPush?: boolean; commitTitle?: string | null; browserScenario?: unknown } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mayassistant-development-test-')); directories.push(directory);
   const remote = path.join(directory, 'remote.git'), seed = path.join(directory, 'seed'), state = path.join(directory, 'state');
   await mkdir(seed);
@@ -28,11 +28,12 @@ async function fixture(options: { failChecks?: boolean; browser?: boolean; lostP
     return result.stdout.trim();
   };
   await git(directory, 'init', '--bare', remote);
-  await git(seed, 'init', '-b', 'test');
+  const baseBranch = options.baseBranch ?? 'test';
+  await git(seed, 'init', '-b', baseBranch);
   await git(seed, 'config', 'user.name', 'Synthetic test'); await git(seed, 'config', 'user.email', 'test@example.invalid');
   await writeFile(path.join(seed, 'README.md'), 'Synthetic repository.');
   await git(seed, 'add', '.'); await git(seed, 'commit', '-m', 'Initial');
-  await git(seed, 'push', remote, 'test'); await git(remote, 'symbolic-ref', 'HEAD', 'refs/heads/test');
+  await git(seed, 'push', remote, baseBranch); await git(remote, 'symbolic-ref', 'HEAD', `refs/heads/${baseBranch}`);
   const skillPath = path.join(directory, 'SKILL.md'); await writeFile(skillPath, 'Investigate the ticket; fix only the requested issue.');
   const local: LocalProject = { id: 'pilot', repository: remote, skill: 'maintenance', skillPath, checks: [['check']], browserChecks: [], setup: [] };
   const work: Work = { id: randomUUID(), project: { id: 'pilot', name: 'Pilot', repository: remote, skill: 'maintenance', channel: 'CPROJECT', folder: '123', enabled: true }, kind: 'build',
@@ -75,6 +76,35 @@ it('pushes one tested commit to maintenance, preserves test, and resumes a compl
   expect(h.calls.some(argv => argv.includes('--force') && argv[0] === 'git')).toBe(false);
 });
 
+it.each(['review', 'build'] as const)('uses preprod without a remote test branch for %s', async kind => {
+  const h = await fixture({ baseBranch: 'preprod' });
+  h.local.baseBranch = 'preprod'; h.local.branch = 'maintenance/ai';
+  const base = await h.git(h.remote, 'rev-parse', 'preprod');
+  const result = await h.runner.run({ ...h.work, kind }, h.local, h.attempt);
+  expect(result.outcome).toBe(kind === 'build' ? 'pushed' : 'actionable');
+  expect(await h.git(h.remote, 'rev-parse', 'preprod')).toBe(base);
+  expect(await h.git(h.remote, 'for-each-ref', '--format=%(refname)', 'refs/heads/test')).toBe('');
+  if (kind === 'build') {
+    expect(await h.git(h.remote, 'rev-parse', 'maintenance/ai')).toBe(result.commit);
+    expect(await h.git(h.remote, 'rev-list', '--count', 'preprod..maintenance/ai')).toBe('1');
+  } else expect(h.count().pushes).toBe(0);
+  expect(JSON.parse(await readFile(h.journalPath, 'utf8')).baseBranch).toBe('preprod');
+});
+
+it('names the missing configured base branch and does not fall back to test', async () => {
+  const h = await fixture(); h.local.baseBranch = 'preprod';
+  const result = await h.runner.run(h.work, h.local, h.attempt);
+  expect(result.outcome).toBe('blocked'); expect(result.summary).toContain('branche distante preprod est absente');
+  expect(h.count().agents).toBe(0); expect(h.count().pushes).toBe(0);
+});
+
+it('refuses a base branch change while a previous commit awaits publication', async () => {
+  const h = await fixture(); h.local.baseBranch = 'preprod';
+  await atomicJson(h.journalPath, { phase: 'committed', branch: 'maintenance', commit: 'a'.repeat(40) });
+  await expect(h.runner.run(h.work, h.local, h.attempt)).rejects.toThrow('branche');
+  expect(h.calls).toHaveLength(0);
+});
+
 it('stops after exactly two failed check attempts and never creates a remote maintenance branch', async () => {
   const h = await fixture({ failChecks: true });
   const result = await h.runner.run(h.work, h.local, h.attempt);
@@ -98,14 +128,23 @@ it.each([null, 'Repair menu\nUnexpected paragraph'])('blocks invalid commit meta
   expect(await h.git(h.remote, 'for-each-ref', '--format=%(refname)', 'refs/heads/maintenance')).toBe('');
 });
 
-it('accumulates exactly one additional commit for the next ticket without overwriting the previous fix', async () => {
-  const h = await fixture(); const first = await h.runner.run(h.work, h.local, h.attempt);
+it.each(['test', 'preprod'])('accumulates one commit per ticket above %s without overwriting the previous fix', async baseBranch => {
+  const h = await fixture({ baseBranch }); h.local.baseBranch = baseBranch;
+  const first = await h.runner.run(h.work, h.local, h.attempt);
   let attempts = 0;
   const secondWork = { ...h.work, id: randomUUID(), ticket: { ...h.work.ticket, id: 'def456', name: 'Second ticket' } };
   const second = await h.runner.run(secondWork, h.local, async expected => { expect(expected).toBe(attempts); return ++attempts; });
   expect(second.outcome).toBe('pushed');
   expect(await h.git(h.remote, 'rev-parse', 'maintenance^')).toBe(first.commit);
-  expect(await h.git(h.remote, 'rev-list', '--count', 'test..maintenance')).toBe('2');
+  expect(await h.git(h.remote, 'rev-list', '--count', `${baseBranch}..maintenance`)).toBe('2');
+});
+
+it('rejects unsafe base branch names and publishing directly to the base branch', () => {
+  const value = { server: 'https://agent.example.com', stateDirectory: 'state', projects: [{ id: 'pilot', repository: 'url', skill: 'maintenance', skillPath: 'skill', checks: [['check']], branch: 'maintenance/ai', baseBranch: 'preprod' }] };
+  expect(workerConfigSchema.safeParse(value).success).toBe(true);
+  for (const baseBranch of ['--help', '../preprod', 'preprod; command', 'preprod//other', 'maintenance/ai']) {
+    expect(workerConfigSchema.safeParse({ ...value, projects: [{ ...value.projects[0], baseBranch }] }).success).toBe(false);
+  }
 });
 
 it('does not publish a visual change without configured browser verification', async () => {

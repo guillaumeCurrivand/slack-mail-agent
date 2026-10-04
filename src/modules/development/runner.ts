@@ -11,14 +11,16 @@ const command = z.array(z.string().min(1).max(2000)).min(1).max(100);
 export const localProjectSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), repository: z.string().min(1), skill: z.string().min(1),
   skillPath: z.string().min(1), checks: z.array(command).min(1).max(25), browserChecks: z.array(command).max(5).default([]),
-  branch: maintenanceBranchSchema.optional(), browser: browserConfigSchema.optional(),
+  branch: maintenanceBranchSchema.optional(),
+  baseBranch: z.string().max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9_-]*)*$/).optional(),
+  browser: browserConfigSchema.optional(),
   setup: z.array(command).max(30).default([]),
-}).strict();
+}).strict().refine(value => (value.baseBranch ?? 'test') !== (value.branch ?? 'maintenance'), 'Base and maintenance branches must differ.');
 export type LocalProject = z.infer<typeof localProjectSchema>;
 const commitTitleSchema = z.string().trim().min(1).max(120).regex(/^[^\r\n\x00-\x1f\x7f]+$/, 'Commit title must be a single line.');
 const reportSchema = z.object({ actionable: z.boolean(), summary: z.string().min(1).max(8000), browserRequired: z.boolean(), commitTitle: commitTitleSchema.optional(), browserScenario: browserScenarioSchema.optional() }).strict();
 type Journal = { phase: 'new' | 'prepared' | 'attempting' | 'answered' | 'validated' | 'committed' | 'finished';
-  branch?: string; baseline?: string; attempt?: number; report?: z.infer<typeof reportSchema>; failure?: string; tests?: string[]; commit?: string; result?: Result };
+  branch?: string; baseBranch?: string; baseline?: string; attempt?: number; report?: z.infer<typeof reportSchema>; failure?: string; tests?: string[]; commit?: string; result?: Result };
 export type CommandResult = { code: number; stdout: string; stderr: string };
 export type Execute = (argv: string[], cwd: string, input?: string) => Promise<CommandResult>;
 
@@ -53,6 +55,7 @@ export class LocalRunner {
     if (work.project.id !== project.id || work.project.repository !== project.repository || work.project.skill !== project.skill)
       return { outcome: 'blocked', summary: 'La configuration du module ne correspond pas au projet autorisé sur ce worker.', tests: [] };
     const branch = project.branch ?? 'maintenance';
+    const baseBranch = project.baseBranch ?? 'test', remoteBase = `origin/${baseBranch}`;
     let stopPreview: (() => Promise<void>) | undefined;
     const directory = path.join(this.root, 'runs', createHash('sha256').update(work.id).digest('hex'));
     const checkout = path.join(directory, 'checkout'), journalPath = path.join(directory, 'journal.json');
@@ -70,25 +73,26 @@ export class LocalRunner {
     const git = (...args: string[]) => checked(['git', ...args]);
     if (journal.result) return journal.result;
     if (journal.phase === 'attempting') return finish({ outcome: 'blocked', summary: 'Un essai a été interrompu ou son résultat est inconnu. Investigation conservée ; aucune relance automatique.', tests: journal.tests ?? [] });
-    if (journal.phase !== 'new' && (journal.branch ?? 'maintenance') !== branch) throw new Error('La branche du traitement a changé. Restaurez sa configuration avant de reprendre.');
+    if (journal.phase !== 'new' && ((journal.branch ?? 'maintenance') !== branch || (journal.baseBranch ?? 'test') !== baseBranch))
+      throw new Error('La branche de base ou de maintenance du traitement a changé. Restaurez sa configuration avant de reprendre.');
 
     try {
       if (journal.phase === 'new') {
         // A unique per-run clone preserves every failed investigation and never resets a developer checkout.
         await checked(['git', 'clone', '--no-checkout', '--', project.repository, checkout], directory);
         const branches = await git('for-each-ref', '--format=%(refname)', 'refs/remotes/origin/');
-        if (!branches.split('\n').includes('refs/remotes/origin/test')) throw new Error('La branche distante test est absente.');
-        let base = 'origin/test';
+        if (!branches.split('\n').includes(`refs/remotes/origin/${baseBranch}`)) throw new Error(`La branche distante ${baseBranch} est absente.`);
+        let base = remoteBase;
         if (branches.split('\n').includes(`refs/remotes/origin/${branch}`)) {
-          const integrated = await this.exec(['git', 'merge-base', '--is-ancestor', `origin/${branch}`, 'origin/test'], checkout);
+          const integrated = await this.exec(['git', 'merge-base', '--is-ancestor', `origin/${branch}`, remoteBase], checkout);
           if (integrated.code !== 0) {
-            const current = await this.exec(['git', 'merge-base', '--is-ancestor', 'origin/test', `origin/${branch}`], checkout);
-            if (current.code !== 0) throw new Error(`${branch} et test ont divergé. Réconciliez les branches avant de relancer.`);
+            const current = await this.exec(['git', 'merge-base', '--is-ancestor', remoteBase, `origin/${branch}`], checkout);
+            if (current.code !== 0) throw new Error(`${branch} et ${baseBranch} ont divergé. Réconciliez les branches avant de relancer.`);
             base = `origin/${branch}`;
           }
         }
         await git('checkout', '-b', branch, base);
-        journal.branch = branch; journal.baseline = await git('rev-parse', 'HEAD');
+        journal.branch = branch; journal.baseBranch = baseBranch; journal.baseline = await git('rev-parse', 'HEAD');
         await git('config', 'user.name', 'Mayassistant');
         await git('config', 'user.email', 'mayassistant@localhost');
         // The coding subprocess is told not to publish; its default push destination is disabled as well.
