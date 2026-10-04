@@ -84,7 +84,7 @@ Slack requests must be signed and belong to the configured workspace. Bot messag
 
 ## Development setup
 
-Follow [Development](docs/development.md) to configure the new `development` Module, its dedicated ClickUp/worker tokens, Slack channel events, project mapping and local Cursor worker. The worker uses your separately billed Cursor account. It runs while your computer is available, pushes one tested commit per ticket to `maintenance`, changes the ticket to `to build`, and leaves PR/MR creation and merging to you. See [deployment checks](docs/deployment.md#development-release-candidate); this capability is not enabled by default.
+Follow [Development](docs/development.md) to configure the new `development` Module, its dedicated ClickUp/worker tokens, Slack channel events, project mapping and local Cursor worker. The worker uses your separately billed Cursor account. It runs while your computer is available, pushes one tested commit per ticket to the configured maintenance branch, changes the ticket to `to build`, and leaves PR/MR creation and merging to you. See [deployment checks](docs/deployment.md#development-release-candidate); this capability is not enabled by default.
 
 ## Yousign setup
 

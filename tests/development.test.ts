@@ -119,12 +119,13 @@ it('polls Ready for AI directly, freezes requirements, serializes work and admit
   expect((await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 })).statusCode).toBe(409);
   expect((await h.api('attempt', { id: work.id, lease: work.lease, expected: 1 })).json().attempt).toBe(2);
   expect((await h.api('attempt', { id: work.id, lease: work.lease, expected: 1 })).statusCode).toBe(409);
-  const result = { outcome: 'pushed', summary: 'Menu corrigé.', tests: ['Tests réussis'], commit: 'a'.repeat(40) };
+  const result = { outcome: 'pushed', branch: 'maintenance/ai', summary: 'Menu corrigé.', tests: ['Tests réussis'], commit: 'a'.repeat(40) };
   expect((await h.api('result', { id: work.id, lease: work.lease, result })).statusCode).toBe(200);
   expect((await h.api('result', { id: work.id, lease: work.lease, result })).statusCode).toBe(200);
   await h.run(`development:finish:${work.id}`);
   expect(h.statuses).toEqual(['to build']); expect(h.comments).toHaveLength(1);
-  expect(h.posts.at(-1).text).toContain('Commit poussé sur maintenance');
+  expect(h.posts.at(-1).text).toContain('Commit poussé sur maintenance/ai');
+  expect(h.comments[0]).toContain('Commit poussé sur maintenance/ai');
   await h.poll(); expect(await h.store.history('pilot')).toHaveLength(1);
   h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
   expect(await h.store.history('pilot')).toHaveLength(2);

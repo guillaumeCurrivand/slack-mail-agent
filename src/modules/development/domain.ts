@@ -1,5 +1,7 @@
 import { z } from 'zod';
 
+export const maintenanceBranchSchema = z.string().regex(/^maintenance(?:\/[a-zA-Z0-9][a-zA-Z0-9_-]*)?$/);
+
 export const projectSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/),
   name: z.string().trim().min(1).max(100),
@@ -23,6 +25,7 @@ export const resultSchema = z.object({
   outcome: z.enum(['actionable', 'needs_information', 'pushed', 'blocked']),
   summary: z.string().min(1).max(8000),
   tests: z.array(z.string().max(2000)).max(30).default([]),
+  branch: maintenanceBranchSchema.optional(),
   commit: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
 }).strict();
 export type Result = z.infer<typeof resultSchema>;

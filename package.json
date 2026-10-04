@@ -24,9 +24,11 @@
   },
   "devDependencies": {
     "@electric-sql/pglite": "^0.3.0",
+    "@playwright/mcp": "0.0.83",
     "@types/html-to-text": "^9.0.0",
     "@types/node": "^24.0.0",
     "@types/pg": "^8.0.0",
+    "playwright": "1.64.0-alpha-1790635538000",
     "tsx": "^4.0.0",
     "typescript": "^5.0.0",
     "vitest": "^4.1.11"

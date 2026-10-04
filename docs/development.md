@@ -12,7 +12,7 @@ An enabled Folder is polled once per minute. A human selecting `Ready for AI` au
 
 Implementation runs sequentially per repository with two attempts total (initial plus one retry), no execution deadline, and a separate checkout for each run. The controller runs the configured automated checks; changes to visible behavior require configured browser checks. Missing information or failed necessary verification blocks publication, posts the blocker to Slack/ClickUp, and leaves unfinished work in its private checkout. Other independent queued work may proceed.
 
-After successful verification, the controller creates one descriptive commit per ticket and pushes it to `maintenance`, never force-pushing. It changes the ticket to **`to build`** only after a confirmed push, then posts the commit link, summary and test results. Multiple tickets may accumulate on `maintenance`. Humans review, open the PR/MR, merge to `test`, deploy and close tickets. If `test` and `maintenance` diverge, a human reconciles them; the worker does not create surprise merge commits. After maintenance is merged normally into test, the next run starts from the newer test tip.
+After successful verification, the controller creates one descriptive English commit per ticket and pushes it to the locally configured maintenance branch, never force-pushing. `branch` defaults to `maintenance`; the EOA pilot uses the approved `maintenance/ai`. The coding agent supplies a separate English `commitTitle`; the controller adds `fix(clickup:<task-id>):` instead of copying a possibly French ticket title. Missing or multiline titles block publication. ClickUp/Slack reports and clarification questions remain French. It changes the ticket to **`to build`** only after a confirmed push, then posts the commit link, summary and test results. Multiple tickets may accumulate on the configured maintenance branch. Humans review, open the PR/MR, merge to `test`, deploy and close tickets. If `test` and that maintenance branch diverge, a human reconciles them; the worker does not create surprise merge commits. After maintenance is merged normally into test, the next run starts from the newer test tip.
 
 ## Server setup
 
@@ -34,13 +34,19 @@ French aliases are `development configurer`, `development projets`, `development
 
 ## Local worker setup
 
-Use Node 24+, Git, an authenticated Cursor CLI, repository access and the project's development prerequisites. Cursor was not available on PATH during local implementation; no CLI installation or account login was performed. Follow the official [Cursor installation](https://cursor.com/docs/cli/installation), [authentication](https://cursor.com/docs/cli/reference/authentication) and [headless](https://cursor.com/docs/cli/headless) documentation for the actual workstation.
+Use Node 24+, Git, an authenticated Cursor CLI, repository access and the project's development prerequisites. A long-running app can inherit an older PATH than a newly opened PowerShell session. Check the installed launcher before concluding the CLI is absent. Follow the official [Cursor installation](https://cursor.com/docs/cli/installation), [authentication](https://cursor.com/docs/cli/reference/authentication) and [headless](https://cursor.com/docs/cli/headless) documentation for the actual workstation.
 
-Copy [development-worker.example.json](../development-worker.example.json) to `development-worker.local.json` and edit it. `repository`, `id` and `skill` must match the server's project. `skillPath` points to the existing skill's `SKILL.md`. Review any skill instructions that assume Cursor-editor-only tools, interactive approvals, relative support files or production access before enabling unattended use. Include project-owned supporting skill files in the repository or make referenced paths available on the worker.
+Copy [development-worker.example.json](../development-worker.example.json) to `development-worker.local.json` and edit it. `repository`, `id` and `skill` must match the server's project. Use a dedicated `stateDirectory` outside an existing working checkout; the worker creates separate clones beneath it. `skillPath` points to a worker-compatible `SKILL.md`; the [maintenance skill template](../skills/development-maintenance/SKILL.md) provides investigation, verification, French reports and English commit titles. Unlike an interactive ticket skill, it leaves commits, ClickUp writes and publication to the controller. Include project-owned supporting skill files in the repository or make referenced paths available on the worker.
 
 `agent` is an executable-and-arguments array. It defaults to `["agent"]`; use the installed CLI's executable or interpreter entry point. Child processes do not use implicit shell expansion. On Windows, `.cmd`/`.bat` launchers cannot be passed as native executables: configure a supported executable/interpreter launcher, or run the worker and Cursor in WSL. Do not interpolate ticket contents into shell commands.
 
-`setup`, `checks` and `browserChecks` are trusted local command arrays. Adapt the example to the project. `setup` prepares each new checkout without modifying non-ignored files. `checks` must contain at least one real validation command. Configure `browserChecks` for visible behavior (for example a project Playwright suite that starts its own preview). Worker success depends on their exit codes; Cursor's textual claims alone do not count as passing checks. No live browser suite was exercised during implementation.
+For Cursor's Windows PowerShell launcher, use `["powershell.exe", "-NoProfile", "-File", "C:/Users/YOUR_USER/AppData/Local/cursor-agent/agent.ps1", "--trust"]`, replacing the path with the installed launcher. `--trust` acknowledges the per-run workspace in headless mode. This avoids relying on PowerShell command discovery from a native Node child process. An explicit launcher was verified with `--version` on 04/10/2026; that does not verify account authentication or a coding run.
+
+`setup`, `checks` and `browserChecks` are trusted local command arrays. Adapt the example to the project. `setup` prepares each new checkout without modifying non-ignored files. `checks` must contain at least one real validation command. Configure either `browser` for MCP exploration plus independent scenario replay, or `browserChecks` for trusted command-based browser checks. Worker success depends on their exit codes; Cursor's textual claims alone do not count as passing checks. No live browser suite was exercised during implementation.
+
+Cursor's [integrated browser](https://cursor.com/docs/agent/tools/browser) is documented in the editor; this worker uses [CLI MCP support](https://cursor.com/docs/cli/mcp) with [Microsoft Playwright MCP](https://github.com/microsoft/playwright-mcp). Install worker development dependencies with `npm ci`, then `node node_modules/playwright/cli.js install chromium`. Configure a Cursor MCP named `mayassistant-browser` using the installed Node executable and the absolute path to `node_modules/@playwright/mcp/cli.js`, with `--headless`, `--isolated`, `--block-service-workers` and an external `--output-dir`. Use `--executable-path` with the Chromium path returned by `node -e "console.log(require('playwright').chromium.executablePath())"`, and restrict `--allowed-origins` to the preview and approved test services. Preserve existing MCP entries; enable only this server with `agent mcp enable mayassistant-browser`. No project Cypress/Playwright test suite is required for this mode. Use non-watching unit-test commands (for example `npm test -- --watchAll=false` for Create React App).
+
+The worker requires remote `test` and publishes to the configured `branch` (`maintenance` or `maintenance/<name>`). Creating local branches alone does not make them available to fresh remote clones. Git cannot store `maintenance` alongside `maintenance/...`; use `maintenance/ai` when that namespace is already in use. A run pins its branch before execution; restore its original configuration when recovering an in-flight run. New server code must be deployed before workers report the new `branch` result field.
 
 Set `DEVELOPMENT_WORKER_TOKEN` in your local environment, authenticate Git/Cursor normally, then run from the Mayassistant checkout:
 
@@ -58,6 +64,31 @@ node dist/modules/development/worker-main.js development-worker.local.json
 `--once` processes at most one available run and exits. The polling loop otherwise runs while the computer is awake and connected. A normal stop waits for active work; there is no task timeout. Run it under your existing process manager if automatic startup is desired. This implementation does not install a service or change startup settings.
 
 The worker launches trusted repository code and a powerful coding agent on your machine. A separate checkout is not an operating-system sandbox. Use development-only credentials and review the configured skill/tool access. Server ClickUp, Slack and database tokens are removed from child environments. Cursor credentials remain available for its own authentication. Do not enable the pilot on a repository or skill you do not trust.
+
+### Browser MCP and replay configuration
+
+In a local project entry, configure:
+
+```json
+{
+  "branch": "maintenance/ai",
+  "browser": {
+    "url": "http://127.0.0.1:3199",
+    "start": ["powershell.exe", "-NoProfile", "-Command", "$env:PORT='3199'; $env:HOST='127.0.0.1'; $env:BROWSER='none'; npm start"],
+    "allowedOrigins": ["https://YOUR_APPROVED_TEST_API"],
+    "accountsFile": "C:/YOUR_PROJECT/browser-accounts.json",
+    "accounts": ["beneficiary", "admin", "beneficiary_2"]
+  }
+}
+```
+
+Replace the test API and account path with approved local values. Omit account fields when login is unnecessary. Accounts are objects keyed by role, each containing `email` and `password`. Only roles explicitly allowed by the operator may be selected. Credentials stay in that local file; scenario login steps reference the role and field, never a literal password. The MCP exploration session is isolated from the replay browser. Do not copy production credentials into either session.
+
+The controller rejects an occupied preview port, starts the configured command in its own per-run checkout, and stops that process tree after the run. Readiness is bounded to avoid waiting forever on a broken startup; coding itself still has no execution deadline. Project dependencies and required development environment must work in a fresh clone. A missing environment blocks the run.
+
+For a visible change, Cursor uses MCP to explore the preview and returns a `browserScenario` containing navigation, interaction and assertions. The controller validates and independently executes those steps with Playwright in a fresh browser. It saves `browser-<attempt>/browser.png` and `browser-result.json` outside the checkout. Failed/missing scenarios block publication. This proves the supplied scenario passed, not that the agent chose exhaustive coverage. The replay restricts network requests to the preview plus `allowedOrigins`; MCP restrictions are configuration controls, not a sandbox. Keep both allowlists consistent.
+
+Supported steps are `navigate`, `click`, `fill`, `fillAccount`, `press`, `expectVisible`, `expectHidden`, `expectText` and `expectURL`. The exact parameter shapes are supplied in the controller prompt. More complex flows not expressible by these steps require an explicitly configured command-based browser check. An empty `browserChecks` is valid when `browser` is configured; without either, visible changes cannot publish.
 
 ## Spending
 

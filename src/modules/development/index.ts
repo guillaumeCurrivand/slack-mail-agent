@@ -10,7 +10,7 @@ import { ClickupDevelopment, DevelopmentChannels } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
 
 const help = 'Configurez un projet avec development configure {"id":"projet","name":"Projet","channel":"C…","folder":"123","repository":"https://github.com/organisation/projet","skill":"maintenance"}. '
-  + 'Les membres du canal peuvent consulter et configurer ce projet. Publiez un lien ClickUp dans le canal pour une analyse. Ready for AI autorise le traitement ; le commit testé est poussé sur maintenance puis le ticket passe à to build. Aucun PR/MR automatique. '
+  + 'Les membres du canal peuvent consulter et configurer ce projet. Publiez un lien ClickUp dans le canal pour une analyse. Ready for AI autorise le traitement ; le commit testé est poussé sur la branche de maintenance configurée sur le worker puis le ticket passe à to build. Aucun PR/MR automatique. '
   + 'Commandes : development projects ; development status <projet> ; development retry <identifiant du traitement bloqué>. Le worker local doit être connecté. Les appels Cursor sont facturés séparément ; le budget OpenAI de Mayassistant ne les couvre pas.';
 
 export function createDevelopmentModule(config: DevelopmentConfig, database: Database, dependencies: {
@@ -34,7 +34,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     if (!row || row.state !== 'reporting') return;
     const result = row.result as Result, project = row.config as Project;
     const commitUrl = result.commit && result.outcome === 'pushed' ? `${project.repository.replace(/\.git\/?$/, '').replace(/\/$/, '')}/${new URL(project.repository).hostname === 'github.com' ? 'commit' : '-/commit'}/${result.commit}` : undefined;
-    const text = `${row.ticket.name}\n${result.summary}\n${result.tests.length ? `Vérifications :\n${result.tests.join('\n')}` : ''}\n${result.outcome === 'pushed' ? 'Commit poussé sur maintenance. Statut : to build. À vous de créer le PR/MR.' : result.outcome === 'actionable' ? 'Informations suffisantes. Passez le ticket à Ready for AI pour autoriser le traitement.' : result.commit ? 'Publication à vérifier. Ne relancez pas le code avant réconciliation du commit.' : 'Traitement arrêté. Précisez le ticket puis demandez explicitement une relance.'}`;
+    const text = `${row.ticket.name}\n${result.summary}\n${result.tests.length ? `Vérifications :\n${result.tests.join('\n')}` : ''}\n${result.outcome === 'pushed' ? `Commit poussé sur ${result.branch ?? 'maintenance'}. Statut : to build. À vous de créer le PR/MR.` : result.outcome === 'actionable' ? 'Informations suffisantes. Passez le ticket à Ready for AI pour autoriser le traitement.' : result.commit ? 'Publication à vérifier. Ne relancez pas le code avant réconciliation du commit.' : 'Traitement arrêté. Précisez le ticket puis demandez explicitement une relance.'}`;
     try {
       if (result.outcome === 'pushed') await store.effect(`${id}:status`, () => clickup.built(row.ticket.id));
       await store.effect(`${id}:comment`, () => clickup.comment(row.ticket.id, `${text}${commitUrl ? `\nCommit : ${commitUrl}` : ''}`));
