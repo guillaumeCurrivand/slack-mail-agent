@@ -74,6 +74,10 @@ For module-specific configuration, write a module-local reader and call it insid
 
 Use `context.budget` for all paid AI work: reserve an upper bound before making a request and settle verified usage afterward. Uncertain calls retain their reservation. This budget is already tagged with the module ID and enforces the shared monthly ceiling and per-user ceiling across all modules. Do not create independent spending ledgers. Shared alerts and the `budget` command operate across the whole assistant.
 
+Development has the User's explicit exception: its trusted local Cursor worker uses separate provider-side billing, not the shared OpenAI ledger. Do not generalize this exception to new Modules. See [the Development decision](adr/0006-local-development-worker.md).
+
+`receiveChannel(actor, payload, eventId)` is an optional opt-in receipt for signed human channel messages. Shared ingress validates workspace, channel/user identifiers, timestamps and excludes bot/subtype events; the Module filters configured destinations and durably enqueues its own work. Membership checks and external calls happen after acknowledgement. Only Development currently registers this callback. `Messenger.postThread` supports non-interactive channel replies; the Module must authorize the destination and checkpoint delivery as with channel notifications.
+
 Keep prompts and provider-specific domain interpretation in the module. Never put credentials in prompts or treat retrieved messages as authorization. Design any new external permissions and approval flows for the actual feature when adding it.
 
 ## Verification

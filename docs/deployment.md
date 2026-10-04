@@ -6,6 +6,28 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Development release candidate
+
+Target branch: existing `main`. This implementation is a locally verified release candidate; no production update has been performed. Deploy only a reviewed, pushed commit and record its SHA as `TARGET_COMMIT` on the server. Preserve `.env`, the encryption key, Compose project and database volume.
+
+Append `development` to `ENABLED_MODULES` only after configuring `DEVELOPMENT_CLICKUP_TOKEN` and a strong `DEVELOPMENT_WORKER_TOKEN` (32+ characters). The same worker token belongs on the trusted local machine, never in Slack or prompts. Startup creates `development_*` tables automatically; no manual migration command. Apply the updated Slack manifest's `message.channels` and `message.groups` subscriptions; the existing channel/history/read/write scopes remain applicable. Invite the bot to the pilot channel. [Development setup](development.md) owns project and local worker configuration; Cursor usage is billed separately.
+
+After the reviewed candidate is committed and pushed, run on the confirmed server, replacing the placeholder with its actual SHA:
+
+```bash
+cd /opt/slack-mail-agent &&
+TARGET_COMMIT='<reviewed-main-commit-sha>' &&
+git fetch origin main &&
+git pull --ff-only origin main &&
+test "$(git rev-parse HEAD)" = "$TARGET_COMMIT" &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+Stop old app workers before the new image starts (the existing deployment script does so). The local development worker runs separately on the developer's computer, not in the app container. Start it only after the selected project and checks are configured. Its checkout/journal directory must remain persistent and private. Do not expose PostgreSQL or a local inbound port for it.
+
+Post-deploy: verify `/ready`, other Modules' menus and private ownership, Development help, project membership checks and the worker's authentication. With a consented pilot ticket, verify a posted link gets a threaded analysis, a clarification becomes a ClickUp comment, Ready for AI creates one tested maintenance commit, and the status becomes `to build`. Confirm no PR/MR, merge, deployment or test-branch change occurs. Test missing information and failed checks without a push, then a worker restart without duplicate commits. Real PostgreSQL races require `TEST_DATABASE_URL`; fake-provider and local-Git tests do not establish live provider behavior. A successful production release must be observed separately.
+
 ## Yousign release candidate
 
 The opt-in [Yousign Module](yousign.md) receives the existing company subscription at `/webhooks/yousign`. Pull the reviewed release containing `src/modules/yousign/index.ts` before enabling it: older releases reject `ENABLED_MODULES` containing `yousign` and fail startup. Preserve `.env`, the existing encryption key, database volume and Compose project. Add `YOUSIGN_WEBHOOK_SECRET`, `YOUSIGN_SUBSCRIPTION_ID`, `YOUSIGN_SANDBOX` (`false` for production, `true` for sandbox), and the existing operational recipient `SLACK_ADMIN_USER_ID`; append `yousign` to `ENABLED_MODULES`. No Yousign API key, new subscription, Gmail or AI credentials are needed. Invite the bot into approved destinations; verify `channels:read`, `groups:read` and `chat:write` on the installed token.

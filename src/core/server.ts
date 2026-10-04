@@ -21,6 +21,14 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (body.type === 'url_verification') return { challenge: body.challenge };
     if (body.team_id !== config.SLACK_TEAM_ID) return reply.code(403).send();
     const event = body.event;
+    if (modules.all().some(module => module.receiveChannel) && body.type === 'event_callback' && event?.type === 'message' && ['channel', 'group'].includes(event.channel_type) &&
+      !event.subtype && !event.bot_id && /^[UW][A-Z0-9]+$/.test(event.user ?? '') && /^[CG][A-Z0-9]+$/.test(event.channel ?? '') && typeof event.text === 'string') {
+      if (typeof body.event_id !== 'string' || !body.event_id || event.text.length > 8000 || !/^\d+\.\d+$/.test(event.ts ?? '') ||
+        (event.thread_ts !== undefined && !/^\d+\.\d+$/.test(event.thread_ts))) return reply.code(400).send();
+      const actor = { team: body.team_id, user: event.user, channel: event.channel };
+      for (const module of modules.all()) await module.receiveChannel?.(actor, { text: event.text, timestamp: event.ts, thread: event.thread_ts ?? event.ts }, `slack:${body.event_id}`);
+      return { ok: true };
+    }
     if (body.type !== 'event_callback' || event?.type !== 'message' || event.channel_type !== 'im' || event.subtype || event.bot_id || !/^[UW][A-Z0-9]+$/.test(event.user ?? '') || !/^D[A-Z0-9]+$/.test(event.channel ?? '') || typeof event.text !== 'string') return { ok: true };
     if (!body.event_id || event.text.length > 8000) return reply.code(400).send();
     const route = modules.text(event.text);

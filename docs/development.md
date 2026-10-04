@@ -1,0 +1,84 @@
+# Development — local maintenance automation
+
+The User approved this Module on 03/10/2026. Implementation is local; real Slack, ClickUp, Cursor, browser verification and production deployment require live validation. The technical Module ID is `development`; the Slack name is **Développement**.
+
+## Approved behavior
+
+Each Development project connects one Slack channel, one ClickUp Folder (all non-archived Lists), one repository and one Cursor skill. The pilot starts with one project. Everyone in the channel may interact with it. Configuration and status commands are available through private Module DMs and recheck channel membership. Bot membership is required. Existing personal ClickUp OAuth connections and other Modules' state remain private.
+
+A ticket link posted in the connected channel queues an investigation. The local worker reads the ticket snapshot, comments and repository using the configured skill, then responds in the original Slack thread with an actionable result or specific missing-information questions. Human thread replies before authorization are saved as attributed ClickUp clarification comments and trigger reassessment. Bot messages, edits, unrelated channels and unsigned events are ignored. Standard `https://app.clickup.com/t/<task-id>` links are supported; custom-ID URLs should be replaced with the task's standard link. Arbitrary linked pages are not fetched by the server.
+
+An enabled Folder is polled once per minute. A human selecting `Ready for AI` authorizes implementation, including for subtasks independently carrying that status and tickets never linked in Slack. Already-ready tickets are eligible when the project is first enabled. The first accepted snapshot freezes requirements; the worker does not reread them during implementation. Moving away from Ready for AI must be observed by a poll before moving back can authorize another run. `development retry <run-id>` explicitly retries a blocked run against its frozen snapshot. A repeated delivery or repeated poll never authorizes another attempt.
+
+Implementation runs sequentially per repository with two attempts total (initial plus one retry), no execution deadline, and a separate checkout for each run. The controller runs the configured automated checks; changes to visible behavior require configured browser checks. Missing information or failed necessary verification blocks publication, posts the blocker to Slack/ClickUp, and leaves unfinished work in its private checkout. Other independent queued work may proceed.
+
+After successful verification, the controller creates one descriptive commit per ticket and pushes it to `maintenance`, never force-pushing. It changes the ticket to **`to build`** only after a confirmed push, then posts the commit link, summary and test results. Multiple tickets may accumulate on `maintenance`. Humans review, open the PR/MR, merge to `test`, deploy and close tickets. If `test` and `maintenance` diverge, a human reconciles them; the worker does not create surprise merge commits. After maintenance is merged normally into test, the next run starts from the newer test tip.
+
+## Server setup
+
+1. Preserve existing Module IDs and append `development` to `ENABLED_MODULES`.
+2. Set `DEVELOPMENT_CLICKUP_TOKEN` to a dedicated ClickUp token with access to the intended Folder, comments and status updates. This belongs to Development, not another person's saved ClickUp connection.
+3. Generate a strong random `DEVELOPMENT_WORKER_TOKEN` of at least 32 characters. Store the same value securely on the trusted worker. Never paste it into Slack, prompts or source control. Worker endpoints require this bearer token and production HTTPS.
+4. Apply the updated [Slack manifest](../slack-manifest.json): add `message.channels` and `message.groups` alongside `message.im`. Existing bot scopes include `channels:read`, `groups:read`, `channels:history`, `groups:history` and `chat:write`; reinstall if granting additional scopes. Invite Mayassistant to the chosen channel. Editing the repository manifest alone does not update the installed Slack app.
+5. Restart through [the deployment procedure](deployment.md#development-release-candidate). Startup creates the Module's `development_*` tables and its durable polling job automatically.
+
+In a DM, open **Développement**, then configure the project (replace every example value):
+
+```text
+development configure {"id":"pilot","name":"Pilot","channel":"CPROJECT","folder":"123456","repository":"https://github.com/ORGANIZATION/REPOSITORY","skill":"maintenance"}
+development projects
+development status pilot
+```
+
+French aliases are `development configurer`, `development projets`, `development statut` and `development relancer`. Configuration JSON keys and exact ClickUp status values stay unchanged. Repository URLs must be credential-free HTTPS URLs; GitHub and GitLab repository paths are supported. The worker independently allowlists the same project ID, repository and skill. Configuring a Slack project cannot choose arbitrary executables or local paths on the worker. Set `"enabled":false` in the complete configuration to pause new claims; already-started work may finish. Retain the same worker identity until its active claims are resolved.
+
+## Local worker setup
+
+Use Node 24+, Git, an authenticated Cursor CLI, repository access and the project's development prerequisites. Cursor was not available on PATH during local implementation; no CLI installation or account login was performed. Follow the official [Cursor installation](https://cursor.com/docs/cli/installation), [authentication](https://cursor.com/docs/cli/reference/authentication) and [headless](https://cursor.com/docs/cli/headless) documentation for the actual workstation.
+
+Copy [development-worker.example.json](../development-worker.example.json) to `development-worker.local.json` and edit it. `repository`, `id` and `skill` must match the server's project. `skillPath` points to the existing skill's `SKILL.md`. Review any skill instructions that assume Cursor-editor-only tools, interactive approvals, relative support files or production access before enabling unattended use. Include project-owned supporting skill files in the repository or make referenced paths available on the worker.
+
+`agent` is an executable-and-arguments array. It defaults to `["agent"]`; use the installed CLI's executable or interpreter entry point. Child processes do not use implicit shell expansion. On Windows, `.cmd`/`.bat` launchers cannot be passed as native executables: configure a supported executable/interpreter launcher, or run the worker and Cursor in WSL. Do not interpolate ticket contents into shell commands.
+
+`setup`, `checks` and `browserChecks` are trusted local command arrays. Adapt the example to the project. `setup` prepares each new checkout without modifying non-ignored files. `checks` must contain at least one real validation command. Configure `browserChecks` for visible behavior (for example a project Playwright suite that starts its own preview). Worker success depends on their exit codes; Cursor's textual claims alone do not count as passing checks. No live browser suite was exercised during implementation.
+
+Set `DEVELOPMENT_WORKER_TOKEN` in your local environment, authenticate Git/Cursor normally, then run from the Mayassistant checkout:
+
+```powershell
+npm run development:worker -- development-worker.local.json
+```
+
+For a compiled installation:
+
+```powershell
+npm run build
+node dist/modules/development/worker-main.js development-worker.local.json
+```
+
+`--once` processes at most one available run and exits. The polling loop otherwise runs while the computer is awake and connected. A normal stop waits for active work; there is no task timeout. Run it under your existing process manager if automatic startup is desired. This implementation does not install a service or change startup settings.
+
+The worker launches trusted repository code and a powerful coding agent on your machine. A separate checkout is not an operating-system sandbox. Use development-only credentials and review the configured skill/tool access. Server ClickUp, Slack and database tokens are removed from child environments. Cursor credentials remain available for its own authentication. Do not enable the pilot on a repository or skill you do not trust.
+
+## Spending
+
+The User explicitly approved **separate Cursor billing**. Cursor analysis and implementation use the local Cursor account and its provider-side limits. Mayassistant's existing $10 OpenAI budget does not account for or cap this usage; the budget screen must not be interpreted as total Development spend. Two attempts are not a dollar ceiling. Other Modules keep their existing spending safeguards.
+
+## Recovery, access and retention
+
+`development status <project>` shows recent queued/running/completed/blocked operations and folder-read failures. Project data is shared with channel members; the private DM is only a presentation surface. The worker token grants trusted access to Development snapshots and results for the configured Slack workspace. It does not grant access to other Modules' tables.
+
+Running claims do not expire, because there is no execution time limit. `worker.json` stores a stable worker identity; `worker.lock` prevents overlapping local instances. After a hard crash, first establish that the old worker and its Cursor child processes have stopped, then remove only the stale lock file and restart using the same state directory. Do not create a new worker identity to bypass an active claim. An interrupted/uncertain Cursor call is reported as blocked instead of dispatched twice. Local journals retain prompts, outputs, checks and separate checkouts for inspection.
+
+An already-pushed commit is recovered by SHA. Lost push responses are checked against remote ancestry; no new commit is created. If publication cannot be confirmed, the saved SHA is reported and automatic code retry is disabled until an operator reconciles it. This also prevents a status toggle from silently building another fix for that uncertain commit.
+
+External ClickUp/Slack writes receive a durable sending marker first. Unknown outcomes become `reporting_error` and are never blindly replayed; inspect the actual ticket/thread and reconcile that exact effect before recovery. The current pilot requires operator database recovery for uncertain deliveries: inspect `development_runs` and its `development_effects` rows, verify whether each external effect happened, mark verified effects `done` (record the Slack timestamp in `detail` for a verified Slack post) or delete only verified-not-delivered effect rows, then set the run back to `reporting`. Restore its `development:finish:<run-id>` integration job to `queued`, clear `finished_at`, set `available_at=now()`, and restore its payload to `{"type":"finish","run":"<run-id>"}` because completed jobs clear their payload. If queue retention already removed that job, enqueue a new Development integration job with the same payload and configured workspace identity. Stop conflicting work and take a backup first. Never mark an unverified effect done, delete the run, rerun coding for a pushed commit, or clear all delivery markers. An operator UI for this exceptional recovery is future work.
+
+For the pilot, Module configuration, minimal deduplication state, snapshots and effect history are retained until the operator deliberately decommissions the project; local worker evidence is also retained. Protect and back up this data. Do not delete an active run's journal, worker identity or effect checkpoints. A time-based retention policy is deferred until recovery requirements are validated. Disabling the Module preserves state and exposes no worker routes. Other Modules' retention contracts remain unchanged.
+
+## Verification and live rollout
+
+Local verification on 03/10/2026: `npm test` passed 333 tests; 25 real-PostgreSQL tests were skipped without `TEST_DATABASE_URL`. `npm run check`, `npm run build`, Git whitespace checks and local documentation-target checks passed. This verification covered the local release candidate on `main`; no live provider or production deployment was exercised.
+
+Automated tests use fake Slack/ClickUp providers and disposable local Git repositories. They cover signed channel routing, membership, duplicate delivery, frozen snapshots, two attempts, sequential claiming, one commit, failed checks, missing browser checks, lost push responses and interrupted attempts. Real PostgreSQL claim races use `TEST_DATABASE_URL`; they are skipped without a disposable database.
+
+Before enabling real work, run one consented ticket through Slack review, clarification, Ready for AI, local checks, a maintenance commit and `to build`. Verify the original thread, commit URL, GitLab/GitHub permissions and the test branch's unchanged tip. Repeat with insufficient information and a failing check. No PR/MR, merge or deployment should be created by the worker. Live tests can incur Cursor charges and push code, so use the selected pilot repository.

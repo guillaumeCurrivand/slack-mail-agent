@@ -1,0 +1,19 @@
+{
+  "server": "https://mail.tyrstats.com",
+  "stateDirectory": "C:/Work/mayassistant-development-state",
+  "agent": ["agent"],
+  "projects": [
+    {
+      "id": "pilot",
+      "repository": "https://github.com/YOUR_ORGANIZATION/YOUR_REPOSITORY",
+      "skill": "maintenance",
+      "skillPath": "C:/Work/YOUR_PROJECT/.cursor/skills/maintenance/SKILL.md",
+      "setup": [["powershell.exe", "-NoProfile", "-Command", "npm ci"]],
+      "checks": [
+        ["powershell.exe", "-NoProfile", "-Command", "npm test"],
+        ["powershell.exe", "-NoProfile", "-Command", "npm run build"]
+      ],
+      "browserChecks": [["powershell.exe", "-NoProfile", "-Command", "npx playwright test"]]
+    }
+  ]
+}

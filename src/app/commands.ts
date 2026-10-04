@@ -5,11 +5,13 @@ export function frenchCommand(module: string, text: string): string {
     slack: { aide: 'help', canaux: 'channels', 'sans réponse': 'unanswered', 'sans reponse': 'unanswered', 'sans-réponse': 'unanswered', 'sans-reponse': 'unanswered' },
     clickup: { aide: 'help', tâches: 'tasks', taches: 'tasks', statuts: 'statuses', connecter: 'connect', déconnecter: 'disconnect', deconnecter: 'disconnect' },
     yousign: { aide: 'help', canaux: 'channels', statut: 'status' },
+    development: { aide: 'help', projets: 'projects' },
     documentation: { aide: 'help', historique: 'history', archives: 'archived', archivés: 'archived' },
   };
   const normalized = text.toLowerCase();
   if (exact[module]?.[normalized]) return exact[module]![normalized]!;
   if (module === 'mail') return text.replace(/^détails(?=\s+[\w-]+(?:\s+\d+)?$)/i, 'details');
+  if (module === 'development') return text.replace(/^(configurer|statut|relancer)(?=\s)/i, word => ({ configurer: 'configure', statut: 'status', relancer: 'retry' })[word.toLowerCase()]!);
   if (module !== 'documentation') return text;
   // Match whole grammar words and leave the remainder byte-for-byte unchanged.
   const words: Record<string, string> = { projets: 'projects', projet: 'project', composants: 'components', composant: 'component', technologies: 'technologies', technologie: 'technology', hébergeurs: 'hosts', hebergeurs: 'hosts', hébergeur: 'host', hebergeur: 'host', hébergements: 'hosting', hebergements: 'hosting', hébergement: 'hosting-entry', hebergement: 'hosting-entry', outils: 'tools', outil: 'tool', historique: 'history', archives: 'archived', archivés: 'archived', créer: 'create', creer: 'create', modifier: 'edit', archiver: 'archive', restaurer: 'restore', rechercher: 'search', compter: 'count' };

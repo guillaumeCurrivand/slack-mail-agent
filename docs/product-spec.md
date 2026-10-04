@@ -6,7 +6,7 @@ Status: approved by the user after the design interview. An initial local implem
 
 The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter and Slack Unanswered are implemented locally. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
 
-Modules are maintained in this repository and deployed together, with independent enablement, connection requirements, and module-owned data. All modules share the existing $10 monthly AI ceiling, with usage tracked by module. Disabled modules do not execute work; saved state and pending jobs remain for re-enablement. Existing queued mail work and previously posted mail buttons retain their approval and ownership safeguards.
+Modules are maintained in this repository and deployed together, with independent enablement, connection requirements, and module-owned data. OpenAI work shares the existing $10 monthly AI ceiling, with usage tracked by module. Development's explicitly approved local Cursor billing is separate; see its contract below. Disabled modules do not execute work; saved state and pending jobs remain for re-enablement. Existing queued mail work and previously posted mail buttons retain their approval and ownership safeguards.
 
 Slack Unanswered is implemented locally but disabled by default; live Slack access and model-quality validation remain release work. Its approved full behavior is specified in [the Slack Unanswered feature contract](slack-unanswered.md). See [the architecture decision](adr/0002-private-assistant-modules.md) for rationale and [module guide](adding-a-module.md) for implementation conventions.
 
@@ -68,10 +68,14 @@ On 02/10/2026 the User reported the existing task command working well and appro
 
 The User approved [Yousign's complete contract](yousign.md) on 02/10/2026 and authorized implementation. One company webhook drives identical French notifications in a workspace-shared destination list managed by everyone through private menus. This explicitly extends the DM-only contract for automatic notifications in selected public/private/externally shared channels; configuration, status, confirmations and operational alerts remain private. Adding authorizes future posts immediately, removal cancels waiting posts and empty selections skip events without backfill. Integration-owned durable work preserves deduplication, partial recovery and uncertainty safeguards without impersonating a Slack User or invoking AI. See [the ownership ADR](adr/0005-shared-yousign-notifications.md). The Module is implemented and tested locally; live release work remains unverified.
 
+## Development module
+
+The User approved the [Development contract](development.md) on 03/10/2026 and authorized implementation. The new `development` Module connects a Slack channel, ClickUp Folder, repository and Cursor skill, with everyone in the channel able to interact. Signed project-channel ticket links trigger investigation and threaded clarification, saved to ClickUp. A human's `Ready for AI` status authorizes a frozen ticket snapshot; a local worker investigates, implements and verifies it, with no execution deadline and at most two attempts total. It pushes one commit per ticket to `maintenance`, then sets **`to build`** and reports the result. PR/MR creation, merge into `test`, deployment and final closure remain human actions. Cursor billing is explicitly separate from the existing OpenAI allowance. See [the ownership/execution decision](adr/0006-local-development-worker.md). This extends channel access only for Development and leaves other Modules' private boundaries unchanged. Live provider and deployment verification remain required.
+
 ## Audience and access
 
 - One Slack workspace, serving the user's team of 10.
-- User interactions are in private messages with the bot. Yousign's explicitly approved automatic notifications post to selected channels under [its own contract](yousign.md); other Modules retain their existing private boundaries.
+- User interactions are private except Development's explicitly connected project channels. Yousign's approved automatic notifications post to selected channels under [its own contract](yousign.md); other Modules retain their existing private boundaries.
 - Each Mail Sorter user connects at most one personal-to-them Google Workspace Gmail account; connecting Gmail is not required to use the assistant's shared commands or future independent modules.
 - Each user has separate Gmail authorization, rules, project mappings, conversation history, previews, and action records.
 - No shared team rules in version one. Team administrators may manage availability and connection health through the product but cannot browse other users' mail, rules, or conversations through it.
@@ -121,7 +125,7 @@ Templates are offered during onboarding; each user approves their own copy befor
 
 - OpenAI for version one. Exact model remains an implementation choice to validate against classification quality and cost.
 - Keep the classification component replaceable so TypeSafe Jev can be evaluated later. No TypeSafe integration is required for version one.
-- **AI budget: $10 per calendar month across all 10 users combined. Hosting is separate.**
+- **OpenAI budget: $10 per calendar month across all 10 users combined. Hosting and the explicitly approved local Development Cursor billing are separate.**
 - Alert at $8 and prevent new paid AI work from exhausting the remaining allowance; retain access to functions that do not require paid AI calls.
 - Track both conversational and classification usage, including retries. Reserve an estimated upper bound before dispatching requests so concurrent users cannot each spend the same remaining allowance.
 - Per-user usage controls should be configurable. No specific per-user dollar allocation or daily run quota was agreed.

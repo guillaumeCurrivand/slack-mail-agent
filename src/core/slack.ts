@@ -16,6 +16,7 @@ export interface Messenger {
   post?(actor: Actor, message: AgentMessage): Promise<string>;
   update?(actor: Actor, timestamp: string, message: AgentMessage): Promise<void>;
   postChannel?(destination: { team: string; channel: string }, message: AgentMessage): Promise<string>;
+  postThread?(destination: { team: string; channel: string; thread?: string }, message: AgentMessage): Promise<string>;
 }
 export const menuButton: Button = { label: 'Menu', action: 'menu', value: '', scope: 'core' };
 /** Slack explicitly rejected the message, so delivery can be retried. */
@@ -107,7 +108,14 @@ export class Slack implements Messenger {
   async update(actor: Actor, timestamp: string, message: AgentMessage) {
     await this.deliver(actor, message, timestamp);
   }
-  private async deliver(actor: { channel: string }, message: AgentMessage, timestamp?: string) {
+  async postThread(destination: { team: string; channel: string; thread?: string }, message: AgentMessage) {
+    if (!/^[CG][A-Z0-9]+$/.test(destination.channel) || (destination.thread && !/^\d+\.\d+$/.test(destination.thread)) || message.buttons?.length || message.selects?.length)
+      throw new SlackDeliveryRejected('Invalid channel reply.');
+    const result = await this.deliver(destination, message, undefined, destination.thread);
+    if (typeof result.ts !== 'string' || !/^\d+\.\d+$/.test(result.ts)) throw new Error('Slack message identity unavailable.');
+    return result.ts;
+  }
+  private async deliver(actor: { channel: string }, message: AgentMessage, timestamp?: string, thread?: string) {
     const text = ['Connect', 'Connexion'].includes(message.kind ?? '') ? withMintedConnectUrl(message.text) : message.kind ? message.text : sanitizeReply(message.text);
     const buttons = message.buttons ?? [];
     const blocks: any[] = [];
@@ -165,7 +173,7 @@ export class Slack implements Messenger {
     }
     const response = await this.fetcher(`https://slack.com/api/${timestamp ? 'chat.update' : 'chat.postMessage'}`, {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}), text: escapeSlack([plainReading(text), ...(message.table ? [message.table.columns.join(' | '), ...message.table.rows.map(row => row.map(cellText).join(' | '))] : [])].join('\n').slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify({ channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}), ...(thread ? { thread_ts: thread } : {}), text: escapeSlack([plainReading(text), ...(message.table ? [message.table.columns.join(' | '), ...message.table.rows.map(row => row.map(cellText).join(' | '))] : [])].join('\n').slice(0, 3500)), blocks: blocks.slice(0, 50), unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
     });
     if (response.status === 429) {
       const seconds = Number(response.headers.get('retry-after'));

@@ -12,7 +12,7 @@
   "settings": {
     "event_subscriptions": {
       "request_url": "https://mail.tyrstats.com/slack/events",
-      "bot_events": ["message.im"]
+      "bot_events": ["message.im", "message.channels", "message.groups"]
     },
     "interactivity": { "is_enabled": true, "request_url": "https://mail.tyrstats.com/slack/actions" },
     "org_deploy_enabled": false,

@@ -10,6 +10,7 @@
     "dev": "tsx watch src/main.ts",
     "build": "tsc -p tsconfig.json",
     "start": "node dist/main.js",
+    "development:worker": "tsx src/modules/development/worker-main.ts",
     "test": "vitest run",
     "check": "tsc --noEmit -p tsconfig.json",
     "test:watch": "vitest"

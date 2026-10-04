@@ -1,11 +1,11 @@
 # Private Slack assistant
 
-The Agent offers capabilities through one Slack bot, with private interactions for each person. Mail Sorter is its first Module.
+The Agent offers capabilities through one Slack bot, with private interactions and explicitly connected shared project channels. Mail Sorter is its first Module.
 
 ## Language
 
 **Agent**:
-The Slack assistant a person interacts with privately across its Modules.
+The Slack assistant a person interacts with across its Modules, privately or in a connected project channel.
 _Avoid_: Mail Sorter (when referring to the whole assistant)
 
 **Module**:
@@ -35,6 +35,18 @@ A channel message from the Agent describing an event received from the Yousign i
 **ClickUp**:
 The Module for privately consulting a person's assigned ClickUp tasks through the Agent.
 
+**Development**:
+The Module for investigating project maintenance tickets and preparing fixes authorized by the team.
+
+**Development project**:
+A connection between a project's Slack channel, ClickUp Folder, repository and maintenance skill.
+
+**Maintenance ticket**:
+A ClickUp task or subtask in a Development project's configured Folder, describing requested maintenance work.
+
+**Authorized maintenance request**:
+The fixed requirements of a Maintenance ticket accepted after a person selects Ready for AI.
+
 **ClickUp account**:
 The personal ClickUp identity a User connects to the Agent.
 
@@ -55,11 +67,11 @@ A channel message containing a mention, request, or question for which the liste
 A group of unanswered messages whose thread context suggests they may concern the recipient, though it does not establish that clearly.
 
 **User message**:
-A Slack DM the person typed.
+A Slack DM or connected project-channel message the person typed.
 _Avoid_: user bubble, human message
 
 **Agent message**:
-A Slack DM posted by the Agent.
+A Slack message posted by the Agent privately or in an explicitly authorized channel.
 _Avoid_: bot message, chatbot reply, bot answer
 
 **Reply**:

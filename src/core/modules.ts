@@ -23,6 +23,8 @@ export interface AssistantModule {
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
   registerRoutes?(app: FastifyInstance): void;
+  /** Opt-in signed channel receipt. Only durable enqueue belongs on this path. */
+  receiveChannel?(actor: Actor, payload: JobPayload, eventId: string): Promise<void>;
   cleanup?(pool: Pool): Promise<void>;
   handle(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext): Promise<void>;
   handleIntegration?(actor: IntegrationActor, payload: JobPayload, eventId: string, context: IntegrationContext): Promise<Date | void>;
