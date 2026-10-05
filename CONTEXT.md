@@ -60,6 +60,30 @@ _Avoid_: Team-assigned task (when no direct personal assignment exists)
 **ClickUp status filter**:
 The personal selection of ClickUp task status names a User wants included in their Assigned task results. A selected name applies across Lists in the ClickUp Workspace. During incomplete discovery, default mode can retain all unfinished statuses with explicit name inclusions/exclusions; those exceptions remain until the User changes or resets them.
 
+**Documentation**:
+The Module for consulting and maintaining the company's shared inventory of projects, technologies, hosting, and tools through private interactions with the Agent.
+
+**Project**:
+A company application, service, or initiative described in the shared inventory.
+
+**Project component**:
+A distinct part of a Project, such as its frontend, backend, or API, with its own technologies and hosting information.
+
+**Host/service**:
+A named hosting provider or service recorded in the inventory that can support several Projects.
+
+**Hosting entry**:
+The recorded hosting information for a Project component in a particular environment, such as production or staging.
+
+**Technology**:
+A software technology recorded as being used by one or more Project components.
+
+**Tool**:
+A product or service used by the company, particular Projects, or both, with its usage and referent recorded in the inventory.
+
+**Change history**:
+The inventory's record of who changed information, when they changed it, and its values before and after each change.
+
 **Unanswered message**:
 A channel message containing a mention, request, or question for which the listed person has not yet replied in the same thread.
 

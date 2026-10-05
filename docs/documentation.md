@@ -1,26 +1,82 @@
 # Documentation module
 
-The [shared presentation contract](product-spec.md#interactive-message-presentation) now uses French throughout application-owned screens. The English technical command examples below remain compatible. Recommended French commands are `documentation aide`, `documentation projets`, `documentation projet <cible>`, `documentation historique [cible]`, `documentation archives`, `documentation rechercher <JSON>` and `documentation compter <JSON>`. Use `créer`, `modifier`, `archiver` or `restaurer` with `projet`, `technologie`, `composant`, `hébergeur`, `hébergement` or `outil`; browse with `technologies`, `composants`, `hébergeurs`, `hébergements` and `outils`. JSON keys/enums retain their technical English syntax. Selectors, saved values and URLs are preserved. Displayed field/source/status labels are French; stored history attribution remains unchanged. Dates display Paris local time and amounts use French formatting without changing their value or currency.
+Documentation maintains the company's shared inventory through private Slack DMs. It records Projects, their Components and Technologies, hosting information, shared Hosts/services and Tools. You can browse records, ask inventory questions and propose individual-record changes. It shows saved links without reading the linked documents.
 
 Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–10 are implemented locally. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
 
-## Delivered locally — ticket 01
+This document owns the Module's feature contract. Start with the quick start and task links below; detailed field constraints and recovery rules follow. Historical ticket links remain valid, but sections are named for their capabilities. See [all modules](../README.md#modules-and-project-structure) for shared routing and setup.
 
-Documentation is opt-in with `ENABLED_MODULES` containing `documentation`. It adds Projects, Add Project and Help to its private menu with Back/Menu navigation. Disabled Documentation is not constructed, initialized, dispatched or cleaned up; its existing tables and paused jobs remain. It requires no Gmail or AI credentials.
+## Availability and setup
+
+Include `documentation` in the deployment's `ENABLED_MODULES`. Structured browsing and changes need no Gmail, encryption or AI credentials. Natural-language questions and changes need the existing optional OpenAI configuration and shared AI allowance; rendering, confirmation and later result pages need no further paid interpretation.
+
+Inventory and append-only history are shared with people who have access to the bot in its configured Slack workspace. Each User's confirmations, selections and 30-minute Project context remain private. The one-time spreadsheet transition uses a separate [operator import procedure](documentation-import.md); enabling the Module does not switch source authority.
+
+## Quick start
+
+1. DM `menu` and open **Documentation**, or send `documentation projets`.
+2. Select a Project from the record dropdown to read its fields and navigate to Components, hosting, Tools and history. Exact lookup also works: `documentation projet Alpha`.
+3. To add a Project, send `documentation créer projet {"name":"Alpha"}`. To replace just its description, send `documentation modifier projet Alpha {"description":"Application équipe"}`. Review the separate confirmation Card and confirm within 24 hours; navigation alone saves nothing.
+4. Optional: ask `documentation où Alpha est-il hébergé ?` or `documentation combien de projets utilisent React ?`. Natural language uses AI interpretation; the answer uses current inventory records. Missing or ambiguous information requires clarification.
+
+Each typed request, including a follow-up about `ce projet`, keeps the `documentation` prefix. All application-owned screens use French under the [shared presentation contract](product-spec.md#interactive-message-presentation). English commands below remain compatible; JSON keys and enums stay in English, and selectors, saved values and URLs stay literal. Dates display Paris local time.
+
+## Find the right command or rule
+
+| Task | Read this section |
+| --- | --- |
+| Browse/create Projects; exact name, alias or identifier lookup | [Projects](#projects) |
+| Replace or clear selected fields; review before/after values | [Editing records](#editing-records) |
+| Record a Project's parts and technology references | [Technologies and Components](#technologies-and-components) |
+| Record environments, services, costs and access references | [Hosts/services and Hosting entries](#hostsservices-and-hosting-entries) |
+| Record company-wide and Project-linked products | [Tools](#tools) |
+| Archive/restore records without losing history | [Archive and Restore](#archive-and-restore) |
+| Ask about one Project; use private follow-up context | [Project questions and context](#project-questions-and-context) |
+| Search/filter/count across the inventory, with or without AI | [Inventory filters and counts](#inventory-filters-and-counts) |
+| Describe one change conversationally | [Natural-language changes](#natural-language-changes) |
+| Review, apply and reconcile the initial spreadsheet snapshot | [Import and transition](#import-and-transition) and [operator procedure](documentation-import.md) |
+
+For all record kinds, see [Relationships and identity](#relationships-and-identity), [Mutation confirmation, overwrite, and recovery](#mutation-confirmation-overwrite-and-recovery), and [Spending, availability, and private state](#spending-availability-and-private-state). The [presentation contract](#presentation-redesign) defines the current Slack tables, relationship names and value pages; stable identifiers remain internal or available in technical instructions.
+
+## French command reference
+
+| Purpose | French shortcut | English shortcut |
+| --- | --- | --- |
+| Help | `documentation aide` | `documentation help` |
+| Projects / one Project | `documentation projets`, `documentation projet <cible>` | `documentation projects`, `documentation project <target>` |
+| Technology catalog | `documentation technologies`, `documentation technologie <cible>` | `documentation technologies`, `documentation technology <target>` |
+| A Project's Components / one Component | `documentation composants <projet>`, `documentation composant <cible>` | `documentation components <project>`, `documentation component <target>` |
+| Shared Hosts/services | `documentation hébergeurs`, `documentation hébergeur <cible>` | `documentation hosts`, `documentation host <target>` |
+| A Component's entries / one entry | `documentation hébergements <composant>`, `documentation hébergement <identifiant>` | `documentation hosting <component>`, `documentation hosting-entry <identifier>` |
+| Tools | `documentation outils`, `documentation outil <cible>` | `documentation tools`, `documentation tool <target>` |
+| Shared history / archived records | `documentation historique`, `documentation archives` | `documentation history`, `documentation archived` |
+| Exact inventory search / count | `documentation rechercher <JSON>`, `documentation compter <JSON>` | `documentation search <JSON>`, `documentation count <JSON>` |
+| Propose one creation / edit | `documentation créer <type> <JSON>`, `documentation modifier <type> <cible> <JSON>` | `documentation create <kind> <JSON>`, `documentation edit <kind> <target> <JSON>` |
+| Propose archive / restore | `documentation archiver <type> <cible>`, `documentation restaurer <type> <cible>` | `documentation archive <kind> <target>`, `documentation restore <kind> <target>` |
+
+Mutation types are `projet`, `technologie`, `composant`, `hébergeur`, `hébergement`, `outil` (English: `project`, `technology`, `component`, `host`, `hosting`, `tool`). Optional list page numbers start at zero; supported syntax and constraints are in the capability sections below. Exact names match case-insensitively; use a stable identifier to disambiguate a mutation. Creating/editing with JSON makes no AI call.
+
+<a id="delivered-locally--ticket-01"></a>
+
+## Projects
+
+Documentation is opt-in with `ENABLED_MODULES` containing `documentation`. It adds Projects, Add Project and Help to its private menu with Back/Menu navigation. Disabled Documentation is not constructed, initialized, dispatched or cleaned up; its existing tables and paused jobs remain. These structured Project paths require no Gmail or AI credentials.
 
 - `documentation` or `documentation help`: show commands and field constraints.
 - `documentation projects [page]`: browse eight Projects per page; typed page numbers start at zero and clamp to the last available page. Previous/Next and Project details update the private navigation message.
 - `documentation project <identifier, exact name or alias>`: show current fields and clickable saved repository/documentation URLs. Exact identifiers take precedence; names and aliases match case-insensitively without partial or semantic matching. Ambiguous names/aliases open paginated choices, never a guessed Project.
-- `documentation history <identifier, exact name or alias>`: show that Project's Change history, one entry per page, with actor, UTC time, source and exact saved fields. Creation shows no prior record. A History control is also available in Project details; ticket 02 adds edit history below.
+- `documentation history <identifier, exact name or alias>`: show that Project's Change history, one entry per page, with actor, Paris-local display time, source and exact saved fields. Creation shows no prior record. A History control is also available in Project details; omit the target for workspace-shared history.
 - `documentation create project {"name":"Alpha","aliases":["A"],"description":"Example","repositories":["https://example.com/repo"],"documentationLinks":["https://example.com/docs"],"notes":"Example"}`: propose one Project using the fixed JSON fields. Only name is required. Omitted optional fields and explicit null remain Unknown; supplied empty lists/text remain empty. Names and aliases are trimmed and limited to 120 characters and one line; names must be nonempty. Up to 20 aliases, 1,500 characters each for description/notes, and 10 URLs per link list (400 characters per URL) are allowed. URLs must be HTTP(S) without credentials or whitespace. The normalized JSON record must fit within 5,000 characters so its full proposal is shown. Unknown fields, editable system metadata, multiple records and invalid input are rejected before proposal creation.
 
 Creation posts a separate **Create Project confirmation** Card identifying the Project by name, with exact normalized fields and the saved expiry time. Its stable identifier is reserved internally. Its initiating User can confirm only from the same DM, within 24 hours of saving the proposal. Browsing and menu navigation never approve it or replace it. The configured Slack workspace shares the inventory and initial history; confirmations, ambiguity selectors and delivery metadata remain private to their actor/DM. There is no additional membership check or permitted-user list. Existing signed ingress, workspace checks and other Modules' private data boundaries remain in force.
 
 One PostgreSQL statement locks the saved confirmation and commits the Project, source-attributed initial history and applied confirmation checkpoint atomically. The history identifies the Slack actor and `Slack structured creation` source. Distinct click IDs and restarts report the saved outcome without adding Projects/history. A database failure rolls back all three. Delivery intent is checkpointed before Slack: explicit rejection permits retry; uncertain delivery is not blindly resent. A fresh request can inspect the saved outcome. Proposal retries preserve its identifier, fields and original expiry.
 
-Project/history tables have lifetime retention. Enabled-module cleanup removes private interaction metadata older than 30 days, separately from inventory/history, while preserving delivery markers for pending jobs and confirmations/lookup records whenever that owner's Documentation work is pending. Cleanup cannot extend confirmation validity. All delivered paths make zero AI calls, including with an exhausted shared allowance.
+Project/history tables have lifetime retention. Enabled-module cleanup removes private interaction metadata older than 30 days, separately from inventory/history, while preserving delivery markers for pending jobs and confirmations/lookup records whenever that owner's Documentation work is pending. Cleanup cannot extend confirmation validity. Project browsing, structured proposals and confirmation make zero AI calls, including with an exhausted shared allowance.
 
-## Delivered locally — ticket 02
+<a id="delivered-locally--ticket-02"></a>
+
+## Editing records
 
 Project details offer **Edit** instructions identifying the stable target and allowed fields. `documentation edit project <identifier, exact name or alias> {"description":"Replacement","notes":null}` proposes one Project edit using any nonempty subset of `name`, `aliases`, `description`, `repositories`, `documentationLinks` and `notes`. It uses creation's per-field constraints, with a 5,000-character normalized replacement-object limit. Omitted fields remain unchanged; optional fields accept null to clear to Unknown, while empty lists/text remain empty. A name must remain valid. Unsupported fields, identifiers, actor/time and lifecycle metadata, invalid values and multi-record objects are rejected. A missing exact target is explained; ambiguous names/aliases require inspection and resubmission with a stable identifier, never a guessed mutation.
 
@@ -28,11 +84,13 @@ The separate **Edit Project confirmation** Card shows the target name/context, s
 
 Confirmation locks the saved operation and shared Project in the database, applies only approved fields to the current record, and atomically appends Change history and the terminal effect checkpoint. It never rejects a stale record version. Alice proposing description A, Bob saving B plus notes, and Alice confirming saves A, records B → A, and preserves Bob's notes. Names change in place: identifiers, pending confirmations and history still identify the same Project. Lookup uses current names/aliases with explicit ambiguity handling.
 
-Edit history includes only fields that actually changed, with their commit-time before/after values, Slack actor, UTC time, stable Project identifier and `Slack structured edit` source. `documentation history` and the Module's **History** control browse workspace-shared history; the existing record-specific command/control remains available. Both paginate one entry at a time. Long Project details and history entries offer **More values**/**Previous values** pages to show all literal fields without truncation. Inventory can grow beyond creation's single-object limit through separate valid field edits. Users cannot edit history or restore earlier values through a dedicated control in this slice.
+Edit history includes only fields that actually changed, with their commit-time before/after values, Slack actor, stored UTC timestamp (displayed in Paris local time), stable Project identifier and `Slack structured edit` source. `documentation history` and the Module's **History** control browse workspace-shared history; the existing record-specific command/control remains available. Both paginate one entry at a time. Long Project details and history entries offer **More values**/**Previous values** pages to show all literal fields without truncation. Inventory can grow beyond creation's single-object limit through separate valid field edits. Users cannot edit history or restore earlier values through a dedicated control; ordinary confirmed corrections remain available.
 
 Repeated clicks, restart/retry and delivery errors report the saved applied outcome without reapplying it after a later edit. The result Card distinguishes an applied replacement, an already-satisfied selection (no mutation or new history) and a missing target (no mutation). A database/history error rolls back the edit and effect checkpoint, allowing a retry against current values. Existing uncertain-delivery rules remain: definite rejection permits retry; uncertainty is not blindly resent. Cleanup cannot erase checkpoints needed by pending work or expire lifetime inventory/history.
 
-## Delivered locally — ticket 03
+<a id="delivered-locally--ticket-03"></a>
+
+## Technologies and Components
 
 The Module menu adds **Technologies** with **Add Technology**, while Project details add **Components** with **Add Component**. Lists show eight records per page and update the private navigation message. Technology details expose Edit, History and a paginated Components list naming each parent Project. Component details expose Edit, History, the parent Project and each linked Technology. Shared History includes all three delivered record kinds and a Record details control. Names can change without changing identifiers, parent relationships, Technology references or pending confirmations.
 
@@ -43,15 +101,15 @@ The Module menu adds **Technologies** with **Add Technology**, while Project det
 - `documentation create technology {"name":"React","category":"Frontend","notes":"Example"}` and `documentation edit technology <identifier or exact name> {"category":null,"notes":"Replacement"}`: propose one Technology creation or selected-field edit. Supported fields are name, category and notes. Name is required, trimmed, nonempty, one line and at most 120 characters; category allows 120 characters and notes 1,500. Omitted creation values and null are Unknown; empty optional text stays empty.
 - `documentation create component {"name":"Web client","projectId":"<Project identifier>","type":"frontend","technologies":["React","<Technology identifier>"]}` and `documentation edit component <identifier or exact name> {"name":"API","type":"backend","technologies":[]}`: propose one Component creation or selected-field edit. Name follows Technology name constraints. Type is optional text of up to 120 characters; there is no required type vocabulary or invented business data. Creation requires the stable identifier of an existing workspace Project as `projectId`. The parent is fixed; edit fields are name, type and technologies. Technologies accepts at most 50 existing identifiers or exact names; names must resolve unambiguously. Selections are deduplicated and saved as stable identifiers before the confirmation Card is shown. Null means Unknown; an empty list means no Technologies. Missing catalog entries require a separate confirmed Technology creation.
 
-Add/Edit instructions identify the record kind and stable target or Project parent and list supported fields. Unsupported fields, system metadata, parent changes, invalid names and multi-record requests are rejected. Unknown or ambiguous targets/references do not create a pending mutation. Several Components in different Projects can share one catalog Technology without duplicating it. Hosting is delivered by ticket 04 below.
+Add/Edit instructions identify the record kind and stable target or Project parent and list supported fields. Unsupported fields, system metadata, parent changes, invalid names and multi-record requests are rejected. Unknown or ambiguous targets/references do not create a pending mutation. Several Components in different Projects can share one catalog Technology without duplicating it. Hosting is described under [Hosts/services and Hosting entries](#hostsservices-and-hosting-entries).
 
 Creation and editing reuse the 24-hour initiating-User/DM-bound confirmation and selected-field overwrite policy described above. Proposal persistence validates targets, references and workspace; apply revalidates supported saved fields, the current target, its Project parent and all resulting Technology identifiers within the workspace. A database statement locks the confirmation and current shared target, protects referenced rows, and commits the mutation, actual before/after history and terminal checkpoint atomically. A parent foreign key additionally protects Component identity. History failure rolls back creation/editing and its effect checkpoint. Missing or invalid references report failure without a mutation or history entry; matching fields report an already-satisfied edit. Replays, restart and delivery errors retain the saved outcome and cannot repeat effects after later edits. Lifetime inventory/history and private cleanup rules remain unchanged.
 
-All delivered reads, instructions, proposals and confirmations use no AI or Gmail and remain available when the shared AI allowance is exhausted. Automated checks use fake messaging and an embedded database; real PostgreSQL concurrency requires `TEST_DATABASE_URL`, and live Slack/deployment remains unverified.
+These structured Technology/Component paths use no AI or Gmail and remain available when the shared AI allowance is exhausted. Automated checks use fake messaging and an embedded database; real PostgreSQL concurrency requires `TEST_DATABASE_URL`, and live Slack/deployment remains unverified.
 
-Project questions and private context are delivered in ticket 07 below; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10. The rest of this document specifies their approved target. No real spreadsheet has been imported and the source spreadsheet's authority has not been switched by this implementation.
+<a id="delivered-locally--ticket-04"></a>
 
-## Delivered locally — ticket 04
+## Hosts/services and Hosting entries
 
 Documentation adds **Hosts/services** and **Add Host/service** to its private menu. Component details offer **Hosting entries** and **Add Hosting entry**. Each list paginates eight records at a time. Host/service details navigate to linked entries; entries navigate to their Component and shared service. Details and shared History retain stable identifiers and actor/source-attributed lifetime history. Renames preserve every relationship.
 
@@ -62,11 +120,13 @@ Documentation adds **Hosts/services** and **Add Host/service** to its private me
 - `documentation create hosting {"componentId":"<Component identifier>","serviceId":"<existing Host/service identifier or exact name>","environment":"production","accountReference":"Team account","urls":["https://example.com/app"],"accessInstructions":"See password manager","notes":"Example"}`: propose one entry with a fixed Component parent and required existing service. Environment is optional, one line, at most 120 characters. Account reference, access instructions and notes allow 1,500 characters each; URLs follow the existing 10-link/400-character HTTP(S) constraints. Only necessary relationships are required; omitted optional values remain Unknown. Creation/selected replacements fit 5,000 normalized JSON characters. Store account references, instructions and password-manager links; never submit passwords or API keys. Secret fields and credential-bearing URLs are unsupported.
 - `documentation edit hosting <identifier> {"environment":"staging","serviceId":"<existing Host/service>","notes":null}`: propose selected business fields; the Component parent and system metadata cannot be edited. Optional fields may be cleared to Unknown with null; empty values remain empty. Each missing service requires a separate confirmed creation. Parent/service kind, identity and workspace are validated at proposal and apply boundaries; apply locks referenced rows.
 
-Project details show paginated Components and environments, production first, saved hosting URLs, stable detail controls and explicit missing values. Projects without recorded Components/entries show Unknown. Each page contains up to eight entries or Components without hosting; Previous/Next retains the Project. Long literal values use the existing value pagination. A saved link is available to open; the Agent does not read it. Several entries across Components/environments/Projects may reference the same service, without copying its cost.
+Project details offer **Components** and **Hosting entries** controls. The hosting view lists environments production first, saved hosting URLs, named record controls and explicit missing values. Projects without recorded Components/entries show Unknown. Each page contains up to eight entries or Components without hosting; Previous/Next retains the Project. Long literal values use the existing value pagination. A saved link is available to open; the Agent does not read it. Several entries across Components/environments/Projects may reference the same service, without copying its cost.
 
-Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible. See ticket 07 for Project questions; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10.
+Add/Edit instructions, browsing, exact lookup, confirmations and history use no AI or Gmail, and never contact or change infrastructure providers. Each save affects one record, requires the initiating User's separate DM-bound confirmation within 24 hours, preserves unrelated fields, and commits actual before/after history with the terminal effect checkpoint atomically. Failed/satisfied operations and replay/restart/delivery recovery reuse the existing safeguards. Existing Projects, Technologies, Components, history and pending controls remain compatible.
 
-## Delivered locally — ticket 05
+<a id="delivered-locally--ticket-05"></a>
+
+## Tools
 
 Documentation adds **Tools** and **Add Tool** to its private menu. Project details offer a paginated **Tools** list; Tool details navigate to every saved Project relationship and offer Edit/History. Lists show eight records per page. Exact names match case-insensitively; identifiers take precedence. Ambiguous lookups offer paginated choices, and ambiguous edits/references require a stable identifier.
 
@@ -76,9 +136,11 @@ Documentation adds **Tools** and **Add Tool** to its private menu. Project detai
 
 Company-wide and Project usage may coexist. Omitted usage, referent, company-wide status and Project links remain Unknown. Usage is descriptive text: unmatched words never create Projects or relationships. Missing Projects require a separate confirmed Project creation; ambiguous names/aliases require explicit resolution. Referents describe inventory contacts, confer no exclusive edit authority, trigger no notifications and add no membership check. Another User with existing bot/workspace access can read/edit the Tool using their own confirmation.
 
-Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. All delivered Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible. Project questions and private context are delivered in ticket 07; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10.
+Every save affects one record and reuses the initiating-User/DM-bound 24-hour confirmation, selected-field overwrite, unrelated-field preservation, actual before/after history, terminal replay outcome and delivery/restart recovery described above. Tool Project references are workspace-validated at proposal and against the merged record at confirmation, with referenced-row locks at commit. Tool and Project renames retain identities and links. These structured Tool paths use no AI or Gmail, including with an exhausted AI budget. Existing inventory and pending controls remain compatible.
 
-## Delivered locally — ticket 06
+<a id="delivered-locally--ticket-06"></a>
+
+## Archive and Restore
 
 All six record kinds offer **Archive** while active and **Restore** while archived. These private, message-bound controls propose a separate confirmation Card; navigation never applies the change. Typed equivalents are `documentation archive <project|technology|component|host|hosting|tool> <identifier or exact name>` and `documentation restore <kind> <identifier or exact name>`. Project aliases also work; Hosting entries use stable identifiers (`hosting-entry` is accepted as an alternative kind). Ambiguous targets require inspection and resubmission with one identifier. Every Documentation User may propose and confirm changes through their own controls without extra roles.
 
@@ -88,11 +150,13 @@ Archive/Restore confirmations retain the initiating User/DM and original 24-hour
 
 New edits of archived targets require restoration. An edit proposed before archival remains pending when clicked while archived; after a separately confirmed Restore, it may be retried within its original 24-hour window. Restoration never refreshes that window. Intervening ordinary edits still follow the approved selected-field overwrite policy. Disable/re-enable preserves inventory/history and pending operations while expiry keeps running. These paths need no AI, Gmail or provider calls. Permanent deletion and dedicated restoration of earlier field values remain unavailable.
 
-## Delivered locally — ticket 07
+<a id="delivered-locally--ticket-07"></a>
 
-`documentation where is Alpha hosted?` and `documentation which technologies does Alpha use?` interpret one Project question through the shared, module-attributed AI budget. The existing `OPENAI_MODEL` and `OPENAI_API_KEY` are optional for the Module; without a key, supported model, provider or allowance, natural language explains its limitation and exposes Menu, exact lookup, structured editing and history. Those paths remain free. Filters/counts and natural-language mutations are delivered in tickets 08/09 below.
+## Project questions and context
 
-The interpreter receives only the User's question and returns a strict hosting/technologies read plan or clarification/unsupported result. Selectors must be copied from the question, then resolve exact identifiers, case-insensitive names or aliases. Arbitrary SQL, extra fields, invented selectors and mutation plans are rejected. The Module renders answers directly from current workspace inventory; no paid generation or model-authored facts are used. Missing values are Unknown, recorded empty Technology selections are None recorded, and each page states its coverage. Hosting entries show production first with distinct Components/environments, saved access information, stable source identifiers and detail controls. Project repository/documentation and hosting URL links are available without fetching their destinations. Archived Projects and referenced records remain visibly labeled.
+`documentation where is Alpha hosted?` and `documentation which technologies does Alpha use?` interpret one Project question through the shared, module-attributed AI budget. The existing `OPENAI_MODEL` and `OPENAI_API_KEY` are optional for the Module; without a key, supported model, provider or allowance, natural language explains its limitation and exposes Menu, exact lookup, structured editing and history. Those paths remain free. See [Inventory filters and counts](#inventory-filters-and-counts) and [Natural-language changes](#natural-language-changes) for the other interpretation paths.
+
+For a single-Project question, the interpreter receives only the User's question and returns a strict hosting/technologies read plan or clarification/unsupported result. Selectors must be copied from the question, then resolve exact identifiers, case-insensitive names or aliases. For a read question, arbitrary SQL, extra fields, invented selectors and mutation plans are rejected. The Module renders answers directly from current workspace inventory; no paid generation or model-authored facts are used. Missing values are Unknown, recorded empty Technology selections are None recorded, and each page states its coverage. Hosting entries show production first with distinct Components/environments, saved access information and named source-record controls; stable identities remain internal. Project repository/documentation and hosting URL links are available without fetching their destinations. Archived Projects and referenced records remain visibly labeled.
 
 Opening Project details, selecting one unambiguous question target, or choosing a clarification establishes private User/DM Documentation context by stable Project identity for 30 minutes. Follow-ups such as `documentation which technologies does this project use?` read current records, including after renames/edits. Missing/expired context asks for a Project. Ambiguous question matches clear context and save paginated actor/DM-bound candidate identifiers; only an explicit choice establishes context. Choices expire after 30 minutes, and the first selection is retained on replay. Every typed follow-up still requires the prefix. Other Users and Modules cannot supply this context.
 
@@ -100,7 +164,9 @@ Durable question attempts precede token counting and generation. Reservations us
 
 Automated fake-provider checks establish workflow safeguards, not live model accuracy. [Synthetic evaluation cases](testing/documentation-project-questions.md) and [deployment checks](deployment.md#documentation-project-questions-release-candidate) remain separate release work.
 
-## Delivered locally — ticket 08
+<a id="delivered-locally--ticket-08"></a>
+
+## Inventory filters and counts
 
 Inventory questions support exact relationship filters and distinct-record counts across Projects, Components, Technologies, Hosts/services, Hosting entries and Tools, in either direction. Examples: `documentation how many projects use React?`, `documentation which projects use React and Compute across any of their components?`, and `documentation which tools are company-wide?`. Interpretation selects a constrained read plan using existing shared budget/checkpoints; inventory never enters the model and rendering uses no AI. Existing single-Project answers and private 30-minute Project context remain available. An inventory follow-up naming `this project` can use that context; another record kind is never remembered or guessed.
 
@@ -117,7 +183,9 @@ Lists show eight distinct records per page, total saved-match counts, page/recor
 
 Missing keys, unsupported models, provider failure or exhausted/reserved budget leave exact search/count and pagination available. The inventory fingerprint travels in actor-bound page controls, preserving restart notices after rejected delivery. No schema migration, new required environment variables or permissions are needed. Fake-provider public request/action tests establish workflow safeguards; live Slack/model evaluation and production deployment remain unverified. See [deployment checks](deployment.md#documentation-inventory-queries-release-candidate).
 
-## Delivered locally — ticket 09
+<a id="delivered-locally--ticket-09"></a>
+
+## Natural-language changes
 
 Users can describe one creation, selected-field edit, archive or restoration conversationally for all six record kinds. Examples: `documentation please create a project named Alpha with description Team app`, `documentation please add a component named Web to Alpha using React`, `documentation please set this project description to Updated`, and `documentation please archive the tool Tracker`. Every typed follow-up retains the prefix. Exact JSON commands and lifecycle shortcuts remain free alternatives.
 
@@ -137,7 +205,7 @@ Automated tests use fake AI/Slack through signed ingress, registry routing and d
 
 ## Approved target decisions
 
-These choices define the approved target. Only the capabilities under Delivered locally are currently available; the remaining behavior is assigned to later tickets.
+These choices define the approved contract implemented in the capability sections above and the [import section](#import-and-transition) below. Live verification and the real spreadsheet transition remain separate work. Future ideas are listed under [Deferred scope](#deferred-scope).
 
 - The database becomes authoritative after importing the spreadsheet. See the [authority decision](adr/0004-authoritative-documentation-inventory.md).
 - Trust the bot's existing Slack workspace access boundary; do not add a company-membership check or permitted-user list. Existing signed Slack ingress, configured-workspace validation, and actor-bound private interactions still apply.
@@ -184,7 +252,7 @@ Costs, when present, belong to their Host/service record with an explicit curren
 
 ## Natural-language answers
 
-Example requests include `documentation where is Project X hosted?`, `documentation which projects use React and OVH?`, and `documentation how many projects use this technology?` Every typed request, including a follow-up using "this project", retains the module prefix under the [existing routing contract](adr/0002-private-assistant-modules.md).
+Example requests include `documentation where is Project X hosted?`, `documentation which projects use React and OVH across any of their components?`, and `documentation how many projects use React?` Every typed request, including a follow-up using "this project", retains the module prefix under the [existing routing contract](adr/0002-private-assistant-modules.md). Only Project context is remembered; name other record kinds explicitly.
 
 Interpret questions into supported, validated read operations over current inventory records. The model does not execute arbitrary SQL, create facts, or make mutations while answering. Query results determine matches and counts; answer wording must preserve unknown fields and the coverage of paginated results. Clarify ambiguous projects, references, or requested relationships instead of silently choosing one. A combined-filter question must not silently impose a same-component relationship if its wording does not establish that relationship.
 
@@ -196,7 +264,7 @@ Remember only the most recently unambiguously selected Project for that person's
 
 Documentation appears in the existing main menu when enabled. Its menu provides Projects, Technologies, Hosts/services, Tools, Archived records, History, and help, with normal Back/Menu navigation. Components and Hosting entries are reachable from their Project. Lists paginate and record details show available Add/Edit, Archive, history, and related-record controls. Archived details offer Restore. Navigation does not erase a separate confirmation or result Card.
 
-Add/Edit controls identify the kind of record and existing target, list the allowed fields, and explain the typed request. Structured commands cover list/search by explicit names or identifiers, show details, create one record, update selected fields/relationships on one record, archive, restore an archived record, and read history. Exact command syntax can be chosen during implementation and must appear in help and controls; it must not require AI for those operations. Slack modal forms are not a version-one requirement.
+Add/Edit controls identify the kind of record and existing target, list the allowed fields, and explain the typed request. Structured commands cover list/search by explicit names or identifiers, show details, create one record, update selected fields/relationships on one record, archive, restore an archived record, and read history. The exact syntax is documented in the capability sections above and in Slack help; these structured operations require no AI. Slack modal forms are not a version-one requirement.
 
 Natural-language edits and structured edits enter the same saved confirmation workflow. Record identifiers and relationship selectors in controls are data validated by the module; namespacing or an AI interpretation alone does not grant approval.
 
@@ -248,7 +316,7 @@ Restoring an archived record is included. A dedicated operation or button to rei
 
 ## Spending, availability, and private state
 
-Use the shared module-attributed AI budget and existing reservations, ceiling, alerts, and per-user controls; the Documentation module does not create another allowance. Natural-language interpretation and any paid answer generation use that budget. Browsing, record/history reads, structured commands, confirmation, archive, and restoration do not need paid calls. If an API key, service, or budget is unavailable, explain that natural-language interpretation is unavailable and show the non-AI paths. Do not pretend an uninterpreted question was answered.
+Use the shared module-attributed AI budget and existing reservations, ceiling, alerts, and per-user controls; the Documentation module does not create another allowance. Natural-language interpretation uses that budget; current answers are rendered deterministically from inventory without paid answer generation. Browsing, record/history reads, structured commands, confirmation, archive, and restoration do not need paid calls. If an API key, service, or budget is unavailable, explain that natural-language interpretation is unavailable and show the non-AI paths. Do not pretend an uninterpreted question was answered.
 
 Inventory records and history are workspace-scoped and owned by Documentation. User context, pending confirmations, menu targets, and delivery bookkeeping remain actor-scoped. Do not expose another User's private conversation, saved confirmation controls, Mail Sorter data, or Slack Unanswered settings. Shared edit access does not alter private ownership in other Modules. Retrieved inventory text and links are data, not instructions authorizing operations or spending.
 
@@ -262,7 +330,9 @@ The review lists resolved mappings, remaining ambiguous references, potentially 
 
 Import is deduplicated and checkpointed so retrying the same reviewed batch cannot create duplicate records or initial history. Record provenance and the applied outcome, and verify imported records/relationships against the approved mapping. On failed or incomplete import, report its actual state and retain recovery information. Transition occurs only after the reviewed import is successfully applied and verified. Subsequent changes use Slack; editing the old spreadsheet does not update the inventory. A real production import is separate from local implementation and synthetic testing.
 
-### Delivered locally — ticket 10
+<a id="delivered-locally--ticket-10"></a>
+
+### Offline import and reconciliation
 
 The [operator procedure](documentation-import.md) provides offline review/approve/apply/reconcile/status/recover commands for an explicit JSON cell snapshot and the configured workspace. It does not access live Sheets or consume binary XLSX files; preparing and verifying a complete cell snapshot from an independently obtained export is an operator prerequisite. Review preserves all original cells/formulas and literal hyperlink display/link values, proposes clear names, and requires explicit dispositions, field evidence and User resolutions before approval. Combined values, environment/component assignments, ambiguous usage and same-named identities are never guessed.
 

@@ -2,7 +2,41 @@
 
 Status: original connection/task-listing behavior approved on 01/10/2026 and implemented. Personal status filters approved on 02/10/2026 and implemented locally. Automated checks use fake providers; live status-catalogue completeness, Slack behavior and production deployment remain unverified. Approval of this contract does not authorize provisioning or deployment.
 
-This document is authoritative for ClickUp's approved target behavior. The [product specification](product-spec.md) owns assistant-wide safeguards; [Adding a module](adding-a-module.md) and [ADR 0002](adr/0002-private-assistant-modules.md) govern extension and routing. The [tracker spec](../.scratch/clickup/spec.md) defines the implementation work; the [interview record](../.scratch/clickup/interview.md) preserves the design history.
+ClickUp privately lists tasks directly assigned to your connected account in the configured Mayasquad Workspace. It is read-only and uses no AI. This document owns its feature contract; the [product specification](product-spec.md) owns assistant-wide safeguards. See the [module overview](../README.md#modules-and-project-structure) for other capabilities, [Adding a module](adding-a-module.md) and [ADR 0002](adr/0002-private-assistant-modules.md) for extension conventions, and the [tracker spec](../.scratch/clickup/spec.md) and [interview record](../.scratch/clickup/interview.md) for design history.
+
+## Availability and setup
+
+Include `clickup` in the deployment's `ENABLED_MODULES`. Follow [ClickUp setup](../README.md#clickup-setup) for OAuth credentials, the confirmed numeric Mayasquad Workspace ID, callback and the existing encryption key. Gmail and OpenAI credentials are unnecessary for this Module. Only the configured Workspace is used, even if OAuth authorizes others.
+
+## Quick start
+
+1. DM `clickup connecter` or open **Menu → ClickUp → Connecter ClickUp**.
+2. Follow the single-use link within 10 minutes, authorize Mayasquad in the original browser, then return to Slack.
+3. Review the displayed ClickUp identity and separately confirm it in the same private DM within 24 hours. Slack and ClickUp email addresses can differ; the ClickUp account must be yours and cannot already be connected by another Slack User.
+4. Send `clickup tâches` or choose **Mes tâches**. Review the linked task table and retrieval time.
+5. Use Previous/Next for that saved snapshot; choose **Actualiser** or send `clickup tâches` for a fresh retrieval. Disconnect through `clickup déconnecter` and its separate confirmation when needed.
+
+<a id="commands-and-menu-implementation-target"></a>
+
+## Commands and menu
+
+| Purpose | French shortcut | English shortcut |
+| --- | --- | --- |
+| Retrieve assigned tasks | `clickup tâches` (also `clickup taches`) | `clickup tasks` |
+| Choose personal status filters | `clickup statuts` | `clickup statuses` |
+| Obtain the OAuth invitation | `clickup connecter` | `clickup connect` |
+| Propose disconnecting | `clickup déconnecter` | `clickup disconnect` |
+| Show connection status and help | `clickup aide` | `clickup help` |
+
+Each typed request needs the `clickup` prefix. The menu shows connection status, Connect or confirmed Disconnect, Tasks and Choisir les statuts when connected, and Back to the main menu. Results offer Previous/Next, Refresh, Retry when incomplete, and Menu. These commands use deterministic routing; free-form natural-language requests are unsupported.
+
+## Reading results and recovering
+
+Results have eight tasks per page, with linked name, original status, Paris calendar due date, priority, Workspace and List. Overdue means a displayed date before today. Directly assigned subtasks and tasks shared with other assignees are included. The default excludes Done/Closed and individually archived tasks; [personal status filters](#personal-status-filters) permit explicitly selected completed statuses. See [Approved behavior](#approved-behavior) for exact assignment and archive rules.
+
+Paging retains the original snapshot and retrieval time while rechecking access. Snapshots expire after 24 hours; disconnect or account replacement invalidates them. Expired results need a fresh `clickup tâches` request. Lost/revoked access withholds cached task text and asks you to reconnect. Physical cleanup pauses while disabled, but logical expiry still applies.
+
+Partial or stalled retrieval is visibly incomplete. **Réessayer** starts fresh retrieval; an incomplete empty list is not proof you have no tasks. Overlapping starts/Refresh report the active request. Delivery checkpoints prevent blind duplicate sends; use `clickup aide` or a fresh menu to inspect current state after delivery trouble. Confirmed disconnect removes active credentials, pending authorizations and snapshots; provider grant revocation, already-posted Slack text and backups have separate lifecycles.
 
 ## Personal status filters
 
@@ -86,17 +120,6 @@ Additional status-discovery documentation was reviewed on 02/10/2026, without li
 - Saved snapshots contain only fields required for the approved listing and private controls. Task descriptions/comments/attachments are outside the first-release request. Local credential deletion does not promise deletion from historical backups or revocation of the provider's grant.
 - Expiry, lost access and disconnect block future snapshot rendering; they do not erase task text already delivered in Slack. Slack and backup retention remain separate from active application-record retention, as in the product specification.
 
-## Commands and menu (implementation target)
-
-- `clickup tasks` / `clickup tâches` (also accept `clickup taches`): retrieve assigned tasks.
-- `clickup statuts` / `clickup statuses`: choose personal status filters, then Enregistrer.
-- `clickup connect` / `clickup connecter`: obtain the private OAuth invitation.
-- `clickup disconnect` / `clickup déconnecter`: request separately confirmed disconnect.
-- `clickup help` / `clickup aide`: connection status and module guidance.
-- Module menu: connection status, Connect or confirmed Disconnect, Tasks and Choisir les statuts when connected, and Back to the main menu. Results offer Previous/Next as applicable, Refresh, Retry when incomplete, and Menu.
-
-These command spellings apply the existing deterministic routing and French-interface contract; they introduce no natural-language interpreter.
-
 ## Implementation and release verification
 
 Implementation exercises public routing/dispatch and module workflows with fake ClickUp providers in `tests/clickup.test.ts`. Coverage includes identity mismatch/ownership, single-Workspace enforcement, expired OAuth/browser state, account uniqueness, replaced/disconnected connections, Done/Closed exclusion, individually archived tasks, subtasks/multiple assignees, complete raw-provider pagination, duplicate starts, permission changes, persisted rate-limit cooldowns, partial failure, expiry and uncertain Slack delivery. `tests/postgres-clickup.test.ts` separately covers actual PostgreSQL concurrent external-account ownership. Check the active Node version before running project scripts; run `test`, `check` and `build` for runtime changes. Report actual PostgreSQL concurrency tests separately when `TEST_DATABASE_URL` is absent.
@@ -107,8 +130,8 @@ Live verification must establish task archive-flag availability, coverage of act
 
 ## Delivery and setup status
 
-The interview is complete and the User confirmed the full shared understanding, then requested implementation. The runtime Module is implemented locally under `src/modules/clickup/`, composed in `src/app/modules.ts` and enabled only with `ENABLED_MODULES` containing `clickup`. Its startup creates module-owned connection, authorization-generation, OAuth state, confirmation/effect-checkpoint, scan and rate-limit tables. Generation records contain no credentials and persist across disconnect to invalidate in-flight authorization attempts. No existing module tables or mailbox data are changed; no manual migration is needed. Implementation does not establish live API completeness, OAuth setup or production deployment.
+The original connection/task-listing interview is complete and the User confirmed the full shared understanding, then requested implementation. The runtime Module is implemented locally under `src/modules/clickup/`, composed in `src/app/modules.ts` and enabled only with `ENABLED_MODULES` containing `clickup`. Its startup creates module-owned connection, authorization-generation, OAuth state, confirmation/effect-checkpoint, scan and rate-limit tables. Generation records contain no credentials and persist across disconnect to invalidate in-flight authorization attempts. No existing module tables or mailbox data are changed; no manual migration is needed. Implementation does not establish live API completeness, OAuth setup or production deployment.
 
 The User reports the existing task command working well on 02/10/2026 and confirmed the complete [status-filter design](#personal-status-filters), then requested implementation. The extension is implemented locally with three additional module-owned tables: durable `clickup_status_preferences` keyed by Slack User and ClickUp Workspace, 30-minute `clickup_status_editors`, and 30-day `clickup_status_events` replay checkpoints. Startup creates them idempotently with no manual migration, new environment variable or permission. Preferences remain separate from credentials, connection generation and expiring task snapshots. Post-deploy provider checks remain necessary; see [the release procedure](deployment.md#clickup-release-candidate).
 
-The confirmed Mayasquad Workspace ID is still a setup input. No ID was found in nonsecret repository source/documentation; obtain it from the Workspace's normal ClickUp URL or authorized-Workspace response, rather than selecting by name. Live setup also requires the ClickUp OAuth application, client credentials and registered HTTPS callback. Module-specific configuration is read only when ClickUp is enabled, preserving independent startup without Gmail. Use [README setup](../README.md#clickup-setup) and the [release procedure](deployment.md#clickup-release-candidate).
+For a new installation, the confirmed Mayasquad Workspace ID is a setup input. No ID was found in nonsecret repository source/documentation; obtain it from the Workspace's normal ClickUp URL or authorized-Workspace response, rather than selecting by name. Live setup also requires the ClickUp OAuth application, client credentials and registered HTTPS callback. Module-specific configuration is read only when ClickUp is enabled, preserving independent startup without Gmail. Use [README setup](../README.md#clickup-setup) and the [release procedure](deployment.md#clickup-release-candidate).

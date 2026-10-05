@@ -74,6 +74,9 @@ it('pushes one tested commit to maintenance, preserves test, and resumes a compl
   expect(await h.runner.run({ ...h.work, attempts: 1 }, h.local, h.attempt)).toEqual(result);
   expect(h.count()).toEqual({ agents: 1, checks: 1, pushes: 1, attempts: 1 });
   expect(h.calls.some(argv => argv.includes('--force') && argv[0] === 'git')).toBe(false);
+  const prompt = await readFile(path.join(path.dirname(h.journalPath), 'prompt.txt'), 'utf8');
+  expect(prompt).toContain('Never run nvm use');
+  expect(prompt).toContain('PATH scoped to that child process only');
 });
 
 it.each([false, true])('returns a clarification after progress text without spending another attempt (fenced: %s)', async fenced => {

@@ -2,6 +2,10 @@
 
 Status: approved by the user after the design interview. An initial local implementation and automated tests are available; live integration and model-quality validation remain release requirements. Deployment and purchasing services are not authorized by this document.
 
+## Reading this specification
+
+This document owns shared routing, navigation, presentation, access and spending safeguards, plus the Mail Sorter contract. Start with the [module overview](../README.md#modules-and-project-structure) for setup and usage. Module-specific guides/contracts are [Mail Sorter](mail.md), [Slack Unanswered](slack-unanswered.md), [Documentation](documentation.md), [ClickUp](clickup.md), [Yousign](yousign.md) and [Development](development.md). Their implementation status does not establish successful production deployment.
+
 ## Approved module extension
 
 The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. Mail Sorter and Slack Unanswered are implemented locally. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
@@ -14,7 +18,7 @@ Slack Unanswered is implemented locally but disabled by default; live Slack acce
 
 The user approved a clickable interface for both existing modules, entirely within private DMs. The full target contract follows below. All four slices are implemented locally; live integration and deployment remain unverified.
 
-**Implemented locally (ticket 01):** `menu`, `help`, `hello` and `hi` open a private main menu. Enabled Modules, Budget and Help are clickable. Module menus and Back navigation update the clicked message; Mail Sorter exposes Gmail connection status, Connect Gmail and separately confirmed disconnect using the existing authorization flow. Mail workflow messages and routing guidance offer Menu buttons that open a separate menu. Other module actions remain documented commands until their tickets land. No menu browsing invokes AI or changes typed-message routing. Menu updates use owner/DM/message-bound records retained for 30 days; expired or unavailable menus instruct the User to send `menu`. Definite delivery rejection is retryable; uncertain navigation delivery is not blindly repeated.
+**Implemented locally (ticket 01):** `menu`, `help`, `hello` and `hi` open a private main menu. Enabled Modules, Budget and Help are clickable. Module menus and Back navigation update the clicked message; Mail Sorter exposes Gmail connection status, Connect Gmail and separately confirmed disconnect using the existing authorization flow. Mail workflow messages and routing guidance offer Menu buttons that open a separate menu. No menu browsing invokes AI or changes typed-message routing. Menu updates use owner/DM/message-bound records retained for 30 days; expired or unavailable menus instruct the User to send `menu`. Definite delivery rejection is retryable; uncertain navigation delivery is not blindly repeated.
 
 **Implemented locally (ticket 02):** Mail Sorter offers Manage rules, Latest report and Pending approvals when eligible items exist. Rule and pending-item lists paginate in place; long rule summaries are explicitly abbreviated. Add/Edit instructions identify the rule and require a `mail`-prefixed description. Starter rules and removal create separately approved Proposals. Reopening a saved Proposal, Preview or Report posts a separate Card with original identifiers and existing approval, Details and undo behavior. Pending approvals excludes expired rule Proposals, missing rule targets, and Previews with changed rules/connections or an expired 24-hour window. Reading saved items does not invoke AI, refresh validity, write conversation history or prune persisted domain records; delivery bookkeeping prevents blind resends after uncertain delivery.
 
@@ -35,6 +39,8 @@ The user approved a clickable interface for both existing modules, entirely with
 ### Interactive message presentation
 
 The User approved the [French-interface contract](../.scratch/french-interface/spec.md): all application-owned screens, help, errors, tables, confirmations, reports, generated explanations and Gmail connection responses use French. Original content and approved values are preserved. French command aliases coexist with English commands; structured JSON keys, stable machine identifiers, operator tools and technical documentation remain unchanged. Dates display as `DD/MM/YYYY HH:mm` in `Europe/Paris`, and numbers use French formatting without changing currencies or deadlines. Retained English generated text is labeled in French; it is not translated through paid work or used to renew approval. Previously posted messages are not bulk edited. This behavior is implemented locally; live integrations and production deployment remain unverified.
+
+ClickUp task deadlines use the date-only Paris presentation defined in [its feature contract](clickup.md#approved-behavior); retrieval timestamps keep the shared date/time format.
 
 Action buttons appear side by side in their existing order, with the record dropdown on its own row. Slack controls responsive wrapping. Presentation-specific action IDs distinguish buttons within a group and resolve to the same authenticated logical actions; old controls remain compatible. All actions remain available across continuation groups.
 
@@ -58,7 +64,9 @@ The User approved Documentation's target contract and ten-ticket breakdown. [Doc
 
 Documentation extends ownership to workspace-shared inventory and lifetime history while retaining private actor-owned confirmations, navigation and interaction metadata. It uses existing signed ingress and workspace validation without another membership check or permitted-user list. Existing Mail Sorter and Slack Unanswered isolation remains unchanged. Disabled Documentation retains inventory and pending state and pauses module cleanup. Project questions and private context are delivered in ticket 07; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline reviewed importer is delivered in ticket 10. Implementing the importer does not authorize real source review/import or switch spreadsheet authority. See [the ownership decision](adr/0004-authoritative-documentation-inventory.md); live Slack verification, deployment and actual import remain unverified.
 
-## ClickUp module (approved target)
+<a id="clickup-module-approved-target"></a>
+
+## ClickUp module
 
 The User approved [ClickUp's feature contract](clickup.md) on 01/10/2026 after the design interview. The `clickup` Module is implemented locally and opt-in: it connects each User's personal ClickUp account through OAuth and privately lists their directly assigned tasks in the configured Mayasquad Workspace. It is read-only and requires neither Gmail nor AI. The contract owns assignment/archive rules, the linked table, date-only due-date presentation, account confirmation, result expiry and access/recovery safeguards. Live connection, provider completeness and deployment remain unverified.
 
@@ -80,10 +88,16 @@ The User approved the [Development contract](development.md) on 03/10/2026 and a
 
 - One Slack workspace, serving the user's team of 10.
 - User interactions are private except Development's explicitly connected project channels. Yousign's approved automatic notifications post to selected channels under [its own contract](yousign.md); other Modules retain their existing private boundaries.
-- Each Mail Sorter user connects at most one personal-to-them Google Workspace Gmail account; connecting Gmail is not required to use the assistant's shared commands or future independent modules.
+- Each Mail Sorter user connects at most one personal-to-them Google Workspace Gmail account; connecting Gmail is not required to use the assistant's shared commands or other independent modules.
 - Each user has separate Gmail authorization, rules, project mappings, conversation history, previews, and action records.
 - No shared team rules in version one. Team administrators may manage availability and connection health through the product but cannot browse other users' mail, rules, or conversations through it.
 - Application-level isolation is required; this is not a promise that infrastructure operators or external platform administrators have no technical access.
+
+Documentation's explicitly approved workspace-shared inventory/history is described in [its own contract](documentation.md#spending-availability-and-private-state). That shared access does not grant access to another User's private Mail Sorter, Slack Unanswered or ClickUp state.
+
+## Mail Sorter module
+
+The next three sections define Mail Sorter's rules, sorting workflow and starter templates. Usage and provider-specific recovery are in the [Mail Sorter guide](mail.md). Shared retention and budget policies follow afterward, with Module-specific exceptions in each contract.
 
 ## Rules and conversation
 

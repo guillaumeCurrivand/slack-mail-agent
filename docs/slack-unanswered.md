@@ -1,6 +1,37 @@
-# Slack Unanswered module spec
+# Slack Unanswered module
 
 Status: approved feature spec; clickable channel selection, direct mention/name search, and contextual matching are implemented locally but disabled by default. Live Slack access and model-quality validation remain release work. It uses the existing assistant and works without connecting Gmail. The [product specification](product-spec.md) owns assistant-wide behavior and safeguards; this document owns the Slack Unanswered feature contract. Extension conventions are in [Adding a module](adding-a-module.md).
+
+Slack Unanswered (**Messages Slack sans réponse** in Slack) privately finds messages that may still need your reply in channels you select. It reads Slack on demand and does not send replies or create tasks. See the [module overview](../README.md#modules-and-project-structure) for the other capabilities.
+
+## Availability and setup
+
+Include `slack` in the deployment's `ENABLED_MODULES`. Follow [Slack setup](../README.md#slack-setup) for shared-channel, history and profile permissions, and invite the bot to the channels you want to select. A channel is eligible only when both you and the bot have access. Gmail and encryption credentials are unnecessary for this Module. OpenAI configuration is optional: it enables contextual matching through the shared AI allowance; direct mention/name results remain available without it.
+
+## Quick start
+
+1. DM `menu` and open **Messages Slack sans réponse → Choisir les canaux**, or send `slack canaux`. Your selection starts empty.
+2. Add the public/private channels to include. Add/Remove and page controls update the same private list; selecting channels does not read their history or use AI.
+3. Send `slack sans-réponse` or choose **Chercher les messages sans réponse**. The search uses the rolling 48 hours before your request and can use AI for contextual matching.
+4. Read the results grouped by channel. Open a source with **Ouvrir le message** and reply in its Slack thread. Any later reply from you clears earlier requests from future searches; a subsequent request can appear separately.
+
+## Commands and results
+
+| Purpose | French shortcut | English shortcut |
+| --- | --- | --- |
+| Choose or remove channels | `slack canaux` | `slack channels` |
+| Start a fresh unanswered search | `slack sans-réponse` | `slack unanswered` |
+| Show Module help | `slack aide` | `slack help` |
+
+Each typed request needs the `slack` prefix. Clear matches and **Vous concerne peut-être** (Possibly for you) are separate groups. Entries show an excerpt, author, Paris-local time and source link, with eight entries per page. The detailed matching rules are in [User Stories](#user-stories) and [Implementation Decisions](#implementation-decisions).
+
+Paging reads the saved result of that search; it does not fetch a fresh search or pay for classification again. Results can remain available for up to 30 days, with current selection/access checked before showing excerpts. Run `slack sans-réponse` again for current thread state. Overlapping starts report the existing request.
+
+## Access, incomplete results and recovery
+
+An inaccessible selected channel is skipped with an explanation and stays selected until you remove it. If your selection or shared access changes, saved result pages are withheld and you are directed to start a fresh search. If AI or budget is unavailable, direct matches remain and the response states that contextual matching and follow-up resolution were not fully checked; an empty incomplete result does not establish that nobody needs your reply.
+
+If delivery is uncertain and no result appears, repeat the command to request current state. Replaying saved work must not blindly repeat a paid attempt. Send `menu` to replace an unavailable menu. Selections/results belong to the requesting User; disabling the Module pauses jobs and physical cleanup while retaining its state. Provider and Slack retention are separate. See [Further Notes](#further-notes) for search latency and live-verification limits.
 
 ## Problem Statement
 

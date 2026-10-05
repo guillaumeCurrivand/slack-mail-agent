@@ -1,55 +1,51 @@
-# Private Slack Assistant
+# Mayassistant — private Slack assistant
 
-A private Slack assistant for a 10-person Google Workspace team, organized into independently enabled modules. Mail Sorter is the first module. Users connect their own Gmail account, approve personal rules, request a preview of their latest 100 inbox messages, and confirm before any messages are labeled, archived, or moved to Trash.
+Mayassistant is one Slack bot with six independently enabled Modules: Mail Sorter, Slack Unanswered, Documentation, ClickUp, Yousign and Development. Use private DMs to configure Modules and consult personal work. Development also reviews ClickUp links in connected project channels and delegates authorized maintenance fixes to a local Cursor worker.
 
-The application-owned interface is French. Original inventory values, approved rules, message excerpts and URLs remain literal. Dates display `DD/MM/YYYY HH:mm (Europe/Paris)` and numbers use French separators. Buttons share horizontal action rows; Slack can wrap them on narrow clients, and Documentation's record selector stays separate. English commands remain compatible alongside the French shortcuts below. See the [presentation contract](docs/product-spec.md#interactive-message-presentation).
+The application-owned interface is French. Original inventory values, approved rules, message excerpts and URLs remain literal. Timestamps display `DD/MM/YYYY HH:mm (Europe/Paris)`; ClickUp deadlines display the Paris calendar date only. Numbers use French separators. Buttons share horizontal action rows; Slack can wrap them on narrow clients, and Documentation's record selector stays separate. English commands remain compatible alongside the French shortcuts below. See the [presentation contract](docs/product-spec.md#interactive-message-presentation).
 
 The [approved product specification](docs/product-spec.md) describes the scope. The application is implemented locally; a real Slack/Google/OpenAI deployment and model-quality evaluation are still required before team rollout.
 
 ## Documentation map
 
-Start with [AGENTS.md](AGENTS.md) for contributor guidance. The [product specification](docs/product-spec.md) owns assistant-wide behavior and safeguards, [CONTEXT.md](CONTEXT.md) owns terminology, the [module guide](docs/adding-a-module.md) owns extension instructions, and [ADRs](docs/adr/) explain architectural choices. This README covers operation and usage. The [Slack Unanswered contract](docs/slack-unanswered.md) records its approved module behavior; [archived plans](docs/archive/) are historical records.
+For usage, start with the [module overview](#modules-and-project-structure) and follow the guide for the capability you need. This README owns installation, provider setup and shared operation.
 
-The [ClickUp feature contract](docs/clickup.md) records its approved behavior and local implementation. Live OAuth/API verification and deployment remain release checks.
-
-The [Yousign feature contract](docs/yousign.md) describes company webhook notifications to shared selected channels, with private configuration and delivery status.
-
-ClickUp's [personal status filters](docs/clickup.md#personal-status-filters) are implemented locally. Send `clickup statuts` / `clickup statuses`, or choose **Choisir les statuts** in its menu. **Ajouter/Retirer** and **Réinitialiser le filtre** save automatically; **Fermer** preserves changes. Each User keeps their own filter; new task requests and Refresh apply it. The default excludes Done/Closed, which explicit choices can include. During incomplete discovery, default-mode changes preserve undiscovered unfinished statuses and offer Retry; Personal List-specific discovery is deferred. See [deployment checks](docs/deployment.md#clickup-release-candidate) for live verification.
+For contributors, [AGENTS.md](AGENTS.md) points to the [product specification](docs/product-spec.md) for assistant-wide behavior and Mail Sorter safeguards, [CONTEXT.md](CONTEXT.md) for terminology, [Adding a module](docs/adding-a-module.md) for extension conventions, and [ADRs](docs/adr/) for architectural rationale. Each other Module's guide owns its feature contract. [Archived plans](docs/archive/) and dated verification records describe history; they do not establish current production status.
 
 ## What is included
 
-- Slack DMs, natural-language rule proposals, explicit rule approval, starter rules, and per-user conversation history.
-- Google Workspace OAuth with PKCE, nonce and browser-state checks, hosted-domain enforcement, encrypted credentials, and a final Slack confirmation of the mailbox address.
-- Persistent previews, explicit decisions for uncertain messages, individual-message actions, reports, and conservative undo.
+- Private Slack menus and prefixed commands for all enabled Modules.
+- Mail Sorter rule proposals and starter rules, Google Workspace OAuth with hosted-domain/browser checks and encrypted credentials, separately confirmed Previews, individual-message actions, Reports and conservative undo.
 - Durable PostgreSQL jobs, per-user and per-module serialization, active-operation admission, duplicate-event protection, and mutation checkpoints.
 - A shared $10/month OpenAI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Development uses separately billed local Cursor calls. Channel selection, approval, reports, and undo do not require AI; contextual Slack matching and mail interpretation do.
-- For enabled modules, hourly retention cleanup removes conversations and run records older than 30 days, as well as expired login states and rule proposals. See the [retention policy](docs/product-spec.md#memory-and-undo) for the disabled-module exception.
+- Startup and hourly cleanup follow each enabled Module's retention contract: [Mail Sorter](docs/mail.md#approvals-privacy-and-spending), [Slack Unanswered](docs/slack-unanswered.md#commands-and-results), [Documentation](docs/documentation.md#spending-availability-and-private-state), [ClickUp](docs/clickup.md#reading-results-and-recovering) and [Yousign](docs/yousign.md#receipt-recovery-and-alerts). Disabling a Module pauses its physical cleanup; Documentation inventory/history have lifetime retention.
 
 ## Modules and project structure
 
-- `src/app/`: configuration, built-in module composition, startup, and compatibility migrations.
-- `src/core/`: Slack transport, explicit routing, durable jobs, identity and locking, messaging, and shared AI budget.
-- `src/modules/mail/`: mail commands, Gmail/OAuth, rules, previews, undo, mail AI, state, and retention.
-- `src/modules/slack/`: per-user Slack channel choices, shared-channel discovery, and on-demand unanswered-message search with contextual AI matching.
-- `src/modules/documentation/`: workspace-shared Projects, Technologies, Components, Hosts/services, Hosting entries and Tools, lifetime history, structured creation/edits/archive/restore with private confirmations, and relationship navigation.
-- `src/modules/clickup/`: personal OAuth connections, Mayasquad-only assigned-task retrieval, private table snapshots, access checks and retention.
-- `src/modules/yousign/`: authenticated company webhook receipt, shared destinations and integration-owned notification delivery/recovery.
+All Modules use the same Slack bot and database. OpenAI calls share the existing allowance; Development uses separately approved Cursor billing. The Slack interface is French; technical Module IDs and English commands remain supported. Each guide below starts with setup and a quick start, then explains commands and safeguards.
 
-- `src/modules/development/`: shared project-channel investigations, frozen ClickUp authorizations, durable worker claims and local Cursor maintenance commits. See [Development](docs/development.md).
+| Module and guide | Enablement ID | What it does | Data ownership | Additional setup |
+| --- | --- | --- | --- | --- |
+| [Mail Sorter — Tri des e-mails](docs/mail.md) | `mail` | Preview and approve Gmail labels, archive and Trash actions | Personal mailbox, rules and runs | Google OAuth, encryption key and OpenAI |
+| [Slack Unanswered — Messages Slack sans réponse](docs/slack-unanswered.md) | `slack` | Find messages needing your reply in selected channels | Personal channel choices and results | Shared-channel/history/profile Slack scopes; OpenAI optional for contextual matching |
+| [Documentation](docs/documentation.md) | `documentation` | Browse, question and maintain Projects, Technologies, Components, Hosts/services, Hosting entries and Tools | Workspace-shared inventory/history; private confirmations and context | No extra credentials for structured operations; OpenAI optional for natural language |
+| [ClickUp](docs/clickup.md) | `clickup` | Read your directly assigned Mayasquad tasks | Personal OAuth connection and task snapshots | ClickUp OAuth, confirmed numeric Workspace ID and encryption key |
+| [Yousign](docs/yousign.md) | `yousign` | Post every event from the existing company webhook to selected channels | Shared destinations and integration-owned delivery checkpoints | Existing webhook secret/subscription/environment and operational alert recipient |
+| [Development — Développement](docs/development.md) | `development` | Review channel-linked ClickUp tickets and push tested maintenance commits after Ready for AI | Shared project mappings, frozen tickets and worker checkpoints | Dedicated ClickUp token, worker token, channel events and local Cursor/Git/checks |
 
-`ENABLED_MODULES=mail` is the default. An empty value starts only shared help, budget, and health endpoints; Gmail, encryption, and AI credentials are then unnecessary. Supported identifiers are `mail`, `slack`, `documentation`, `clickup`, `yousign` and `development`. Unknown or duplicate module identifiers fail startup. Availability is deployment-wide; each user still owns their connections and data. Restart to apply a module configuration change.
+ClickUp's [personal status filters](docs/clickup.md#personal-status-filters) are implemented locally. Send `clickup statuts` / `clickup statuses`, or choose **Choisir les statuts** in its menu. **Ajouter/Retirer** and **Réinitialiser le filtre** save automatically; **Fermer** preserves changes. Each User keeps their own filter; new task requests and Refresh apply it. The default excludes Done/Closed, which explicit choices can include. During incomplete discovery, default-mode changes preserve undiscovered unfinished statuses and offer Retry; Personal List-specific discovery is deferred. See [deployment checks](docs/deployment.md#clickup-release-candidate) for live verification.
 
-Documentation tickets 01–10 are implemented locally and opt-in: add `documentation` to the existing `ENABLED_MODULES` value, or use it alone. Structured operations need no AI or Gmail credentials. Project questions use the existing optional OpenAI credentials and shared budget. Inventory/history are shared within the configured Slack workspace; confirmations and navigation remain private. Send `documentation help`, `documentation projects`, `documentation project <identifier, exact name or alias>`, or `documentation history [identifier, exact name or alias]` (omit the target for shared history). To create one record, send `documentation create project {"name":"Alpha"}`. To edit selected fields, send `documentation edit project Alpha {"description":"Replacement","notes":null}`. Browse Technologies with `documentation technologies` and Project Components with `documentation components Alpha`. Create a Technology with `documentation create technology {"name":"React"}`, then create a Component with `documentation create component {"name":"Web client","projectId":"<Project identifier>","type":"frontend","technologies":["React"]}`. Browse shared services with `documentation hosts`. Create one with `documentation create host {"name":"OVH"}`, then add an entry with `documentation create hosting {"componentId":"<Component identifier>","serviceId":"OVH","environment":"production"}`. Inspect entries with `documentation hosting <Component identifier>` and `documentation hosting-entry <entry identifier>`. Browse Tools with `documentation tools`; create with `documentation create tool {"name":"Slack","usage":"Company chat","companyWide":true,"projects":["Alpha"]}`. Inspect `documentation tool <identifier or exact name>` and edit selected fields with `documentation edit tool <identifier> {"referent":null}`. Project details offer linked Tools; missing Projects require separate confirmed creation. Each record needs separate confirmation; a missing Technology is never silently created. Review the separate Card and confirm within 24 hours. Edits overwrite selected fields despite intervening edits, preserve unrelated fields, and record actual before/after history. Structured paths use no AI. Project-question interpretation uses the existing optional OpenAI credentials and shared budget; see ticket 07 in the linked contract. See [Documentation](docs/documentation.md) for all commands, fields, clearing, constraints and recovery. Archive/Restore controls and `documentation archived [page]` retain identifiers, relationships and history. Typed shortcuts are `documentation archive <kind> <identifier or exact name>` and `documentation restore <kind> <identifier or exact name>`, each separately confirmed within 24 hours. Archived targets require restoration before editing; Project questions and private context are delivered in ticket 07; inventory filters/counts are delivered in ticket 08; natural-language mutations are delivered in ticket 09; the offline operator import is delivered in ticket 10.
+`ENABLED_MODULES=mail` is the default. To enable all six, set `ENABLED_MODULES=mail,slack,documentation,clickup,yousign,development` after completing their setup. An empty value runs shared menus/help, budget and health endpoints without Module-specific credentials. Unknown or duplicate IDs fail startup. Preserve existing IDs when enabling another Module, then restart to apply the change.
 
-Conversational individual-record changes also enter the same saved confirmation path: `documentation please create a project named Alpha with description Team app`; `documentation please set this project description to Updated`; `documentation please archive the tool Tracker`. Exact targets and existing references are resolved before approval; missing catalog records require separate confirmed creation. Interpretation uses the shared budget, while confirmation and result/history controls remain free. See [ticket 09](docs/documentation.md#delivered-locally--ticket-09) and the [synthetic evaluation cases](docs/testing/documentation-natural-language-changes.md).
+Availability is deployment-wide. Disabled Modules expose no routes, execute no queued work and pause their own retention cleanup; pending jobs and state remain for re-enablement. Re-enabling does not renew expired approvals or result controls. Modules are trusted built-in code deployed together.
 
-Disabled modules expose no routes and execute no queued work. Their pending jobs and state are retained for re-enablement, and their module-specific retention cleanup is paused while disabled. Other modules and shared commands continue processing. Modules are trusted code deployed together, not sandboxed plugins.
+The implementation is organized as follows:
 
-Slack Unanswered is implemented locally but disabled by default. Set `ENABLED_MODULES=mail,slack` (or `slack` without Mail Sorter) to offer its private menu, `slack channels` and `slack unanswered`. Each user first selects shared public and private channels through Slack Unanswered → Choose channels or `slack channels`; list pagination and Add/Remove update the same message. The module does not read channel history until `slack unanswered` is requested. That command privately lists direct @mentions, profile-name matches, and contextually directed requests posted in the preceding 48 hours if the user has not replied later in the thread. Plausible but uncertain matches appear under **Possibly for you**. The module uses `OPENAI_API_KEY` and the pinned `OPENAI_MODEL` for contextual matching through the shared AI budget; without a key or available budget, it still shows direct matches and discloses that contextual results were not checked. If Slack does not show a response after a delivery error, repeat the command to see current state. See the [feature contract](docs/slack-unanswered.md) and the [architecture decision](docs/adr/0002-private-assistant-modules.md).
+- `src/app/`: configuration, Module composition, startup and compatibility migrations.
+- `src/core/`: Slack transport, routing, durable jobs, identity/locking, navigation and shared AI budget.
+- `src/modules/mail/`, `src/modules/slack/`, `src/modules/documentation/`, `src/modules/clickup/`, `src/modules/yousign/`, `src/modules/development/`: each Module's behavior, providers, state and retention.
 
-Documentation also offers free exact `documentation search {"target":"project","filters":[{"kind":"technology","selector":"React"}]}` and `documentation count` with the same JSON. Natural-language inventory questions use the shared budget; saved result pages need no repeated interpretation. Combined Technology/Host questions clarify Component scope, counts cover all distinct matches, and changed inventory restarts paging visibly. See [ticket 08](docs/documentation.md#delivered-locally--ticket-08) for qualifiers, company-wide Tools, fields, archival and coverage semantics.
-
-The one-time spreadsheet transition is available through the [offline operator import procedure](docs/documentation-import.md), using a complete frozen JSON cell snapshot, explicit reviewed mappings and separate User approval. Review never changes inventory; apply/reconcile retain restart checkpoints and initial history before establishing database authority. Deploying the importer does not authorize real source review/import. See the [release procedure](docs/deployment.md#documentation-import-release-candidate).
+Documentation's one-time spreadsheet transition has a separate [operator import procedure](docs/documentation-import.md). Shipping the importer does not switch source authority; the real snapshot and mapping require separate review, approval and verified reconciliation.
 
 ### Upgrading an existing installation
 
@@ -57,7 +53,7 @@ Stop the old process before starting this version; do not run old and new worker
 
 ## Requirements for the host
 
-Use your preferred provider. The app needs Node.js 24 or later (or Docker), PostgreSQL, persistent storage, backups, secret configuration, a public HTTPS origin, and outbound HTTPS access to Slack, Google and OpenAI. Background processing runs in the app process; no Redis, GPU or separate worker host is required initially.
+Use your preferred provider. The app needs Node.js 24 or later (or Docker), PostgreSQL, persistent storage, backups, secret configuration, a public HTTPS origin, and outbound HTTPS access to Slack and the providers used by enabled Modules (Google, OpenAI and/or ClickUp). Background processing runs in the app process; no Redis, GPU or separate worker host is required initially.
 
 For a single server running both app and database, start with 1 vCPU, 2 GB RAM and 10 GB persistent storage, then measure usage. These are initial sizing estimates. The provider's price is outside the $10 AI budget. Configure your reverse proxy with TLS and disable/redact request-URL logging on `/auth/google*`, since URLs contain short-lived login codes.
 
@@ -66,7 +62,7 @@ For a single server running both app and database, start with 1 vCPU, 2 GB RAM a
 1. Install Node.js 24+ and PostgreSQL, or use the Docker configuration below.
 2. Run `npm ci`.
 3. Copy `.env.example` to `.env` and fill in the values. Do not commit credentials or paste them into chat.
-4. Generate the encryption key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`. Store it securely as `ENCRYPTION_KEY`; losing it makes stored Google credentials unreadable.
+4. If enabling Mail Sorter or ClickUp for a new installation, generate the encryption key with `node -e "console.log(require('node:crypto').randomBytes(32).toString('base64'))"`. Store it securely as `ENCRYPTION_KEY`; losing it makes stored credentials unreadable. Preserve the existing key when upgrading or enabling another Module.
 5. Set `DATABASE_URL` to your PostgreSQL connection string. The app initializes its tables at startup. For managed databases, use the provider's TLS configuration; do not disable certificate verification.
 6. Build with `npm run build`, then run `node --env-file=.env dist/main.js`. For development use `node --env-file=.env --import tsx --watch src/main.ts`.
 
@@ -104,11 +100,7 @@ https://YOUR_HOST/auth/clickup/callback
 
 Configure your HTTPS proxy to omit/redact request-URL logging for `/auth/clickup*`, because callback URLs contain short-lived authorization codes. ClickUp's documented OAuth permissions are broader than a read-only scope; the Module only reads tasks. See [ClickUp authentication](https://developer.clickup.com/docs/authentication) and the [feature contract's provider constraints](docs/clickup.md#verified-provider-constraints).
 
-DM `clickup connecter` (English `clickup connect`) or open Menu → ClickUp → Connecter ClickUp. Authorize Mayasquad in the original browser, return to Slack and separately confirm the displayed ClickUp identity within 24 hours. The OAuth link/login state lasts 10 minutes. Extra authorized Workspaces are ignored. Account email need not match Slack; one ClickUp account cannot be active for two Slack Users in the configured workspace.
-
-DM `clickup tâches` (`clickup tasks`, or `clickup taches`) or click Mes tâches. The free, read-only table lists direct personal assignments, including subtasks/multiple assignees, with eight rows per page. It excludes Done/Closed and individually archived tasks; an archived parent or location does not independently exclude a task. Deadline dates use Europe/Paris; today's tasks are not overdue. Previous/Next uses the saved snapshot and rechecks access. Actualiser/Réessayer retrieves fresh data; overlapping starts report the active request. Incomplete retrieval is labeled, rather than presented as a complete empty list. Results expire after 24 hours.
-
-`clickup aide`/`clickup help` shows connection status. `clickup déconnecter`/`clickup disconnect` requests a separately confirmed disconnect, removing credentials, pending authorizations and snapshots. Replacing the account invalidates old snapshots only after the new identity is approved. Already-posted Slack text and historical backups have separate retention; disconnect does not revoke the grant at ClickUp. Revoked access asks for reconnect without showing cached task text. See the [release checks](docs/deployment.md#clickup-release-candidate) before rollout; no live ClickUp deployment has been observed.
+After configuring the provider, follow the [ClickUp quick start](docs/clickup.md#quick-start) for browser authorization, separate Slack identity confirmation and task retrieval. The guide explains snapshot expiry, access checks and confirmed disconnect. Use the [release checks](docs/deployment.md#clickup-release-candidate) before rollout; live ClickUp deployment remains unverified.
 
 ## Google Workspace setup
 
@@ -136,37 +128,24 @@ The limit governs this app's recorded generation usage at its configured prices.
 
 ## Using it
 
-Send `menu`, `aide`, `bonjour` or `salut` to open a private menu; `help`, `hello` and `hi` remain compatible. Click an enabled Module, Budget or Aide; Retour navigation updates that same message. Tri des e-mails → Connexion Gmail shows connection status and offers Connecter Gmail or confirmed disconnect. Google sign-in still opens externally, and the resulting mailbox still needs your approval in Slack. Mail workflow Cards include Menu buttons that open separate navigation without replacing the Card.
+Send `menu`, `aide`, `bonjour` or `salut` in a private DM with the bot (`help`, `hello` and `hi` also work). Choose an enabled Module. Navigation updates its menu message; results and approvals remain separate Cards. If a menu is unavailable, send `menu` for a fresh one.
 
-Tri des e-mails also offers Gérer les règles, Dernier rapport and Approbations en attente when needed. Rule lists paginate in place and summarize long fields. Add/Edit gives instructions for a `courrier`-prefixed description; starter rules and removal still need separate approval. Saved Proposals, Previews and Reports reopen as separate Cards without new AI work or extended validity. Old generated text keeps its original language with a French notice; approved values and posted messages are not rewritten. Expired or invalidated approvals cannot be reopened as current work.
+Every typed Module request, including a natural-language follow-up, needs its prefix. Opening a menu does not select a destination for later unprefixed messages. `mail` and its French alias `courrier` address the same Module.
 
-Tri des e-mails → Trier la boîte de réception and Messages Slack sans réponse → Chercher les messages sans réponse start their existing work immediately. The corresponding `courrier trier` and `slack sans-réponse` shortcuts, and their English forms, use the same active-operation admission: another request received while that User's operation is queued, running or retrying reports the original request. After completion or terminal failure, a deliberate new request can start. A Preview still requires separate approval before Gmail changes. Slack search still uses the original request time for its 48-hour window; paging its saved result does not rerun classification or spend AI, and checks current channel access before showing excerpts. Menus do not use AI or remember an active Module. If an older button cannot be updated, send `menu` for a fresh menu; menu update identities expire after 30 days. Navigation and the other Module can continue during a long provider call.
+| Start here | French command | English command |
+| --- | --- | --- |
+| [Connect Gmail, approve rules, then sort](docs/mail.md#quick-start) | `courrier connecter`, then `courrier trier` | `mail connect`, then `mail sort` |
+| [Choose Slack channels, then search](docs/slack-unanswered.md#quick-start) | `slack canaux`, then `slack sans-réponse` | `slack channels`, then `slack unanswered` |
+| [Browse shared inventory](docs/documentation.md#quick-start) | `documentation projets` | `documentation projects` |
+| [Connect ClickUp, then read tasks](docs/clickup.md#quick-start) | `clickup connecter`, then `clickup tâches` | `clickup connect`, then `clickup tasks` |
+| [Yousign destinations and status](docs/yousign.md#commands-and-status) | `yousign canaux`, `yousign statut` | `yousign channels`, `yousign status` |
+| Read shared recorded/reserved AI usage | `budget` | `budget` |
 
-Send these in a private conversation with the bot. Every module request, including natural-language follow-ups, needs its prefix; the assistant does not remember an active module:
-
-- `courrier connecter`: connect Gmail.
-- `courrier modèles`: review Urgent and Lettres d’information templates; describe project names and exact sender addresses separately.
-- `courrier règles`: inspect approved rules and their IDs.
-- `courrier trier`: scan the latest 100 inbox messages and receive a preview.
-- `courrier rapport`: inspect the latest run, open detailed pages, or undo a completed run.
-- `courrier détails <run-id> <page>`: open a retained run's details (page numbers start at zero).
-- `aide`: list enabled modules; `courrier aide` shows mail commands.
-- `budget`: see shared recorded and reserved AI usage without paying for a model call.
-- `courrier déconnecter`: propose disconnecting Gmail.
-- `slack canaux` / `slack sans-réponse`: choose sources, then search their unanswered messages.
-- `documentation aide` / `documentation projets` / `documentation projet <cible>`: browse shared inventory. Use `documentation créer projet {"name":"Alpha"}` or `documentation modifier projet Alpha {"notes":null}` for separately confirmed changes. JSON keys remain English. See [Documentation](docs/documentation.md) for all French aliases and compatible English commands.
-
-Natural-language examples: “courrier Applique le libellé Projects/Alpha aux messages de alex@example.com et conserve-les dans ma boîte de réception.” “courrier Modifie ma règle de lettres d’information pour exclure les annonces de produits.” “courrier Pour le message `<message-id>` du traitement `<run-id>`, retire le libellé Urgent et conserve-le dans ma boîte de réception.” Corrections have their own confirmation preview; a future-rule change requires separate approval.
-
-Previews show proposed label creation, archive and Trash counts, and paginated message explanations. Uncertain messages are excluded until explicitly included using their individual proposal button. Confirmation applies only the saved run. Changing rules or reconnecting Gmail invalidates old previews, which also expire after 24 hours.
+Menus and saved-result navigation use no AI. Work-start buttons and commands can start paid interpretation/classification where their Module supports it; approval of changes remains separate. Overlapping starts report the existing request. Module guides explain result freshness, expiry and recovery.
 
 ## Failure and undo behavior
 
-The app checks labels and Gmail history IDs immediately before a write, then journals the exact label additions/removals before calling Gmail. Trash and archive are represented as individual-message system-label changes. A process interruption or ambiguous network failure marks the action unknown; it is not replayed or automatically undone. Inspect Gmail for these cases.
-
-Undo reverses this agent's recorded deltas only when the message still matches the state returned by its write. If another client edits or marks a message read, undo can conservatively skip it rather than overwrite that edit. Newly created empty labels are not deleted by undo. Messages permanently deleted by Gmail or a user cannot be recovered.
-
-Gmail does not provide conditional mutation with a history-ID compare-and-swap. An external client can still race between the precheck and mutation. Application serialization prevents this app from racing with itself, but cannot eliminate Gmail's external-client race. See [integration contracts](docs/research/integration-contracts.md).
+Mailbox failure handling and conservative undo are documented in [Mail Sorter](docs/mail.md#failure-and-undo-behavior). Slack Unanswered, Documentation, ClickUp and Yousign describe their own access and recovery behavior in their guides. A delivery error can occur after a result or mutation was saved; inspect current state through the relevant Module before assuming it failed.
 
 ## Tests
 
@@ -185,6 +164,8 @@ Set `POSTGRES_PASSWORD` in `.env` to a strong URL-safe random value. `docker com
 For an existing production server, pull `main` and run `bash scripts/deploy.sh`. Follow [Updating production](docs/deployment.md) for prerequisites, database backups, readiness checks, and release-specific migration notes. Production uses Docker Compose; preserve the existing checkout's `.env` and Compose project settings.
 
 ## Remaining release checks
+
+Follow each enabled Module's guide and the [deployment guide](docs/deployment.md) for its live checks. The list below covers shared operation and Mail Sorter; Slack contextual matching, Documentation answers/import and ClickUp OAuth/API completeness have additional checks in their contracts.
 
 - Configure the real Slack app, Google OAuth client, allowed Workspace domains, and OpenAI project.
 - Run a live smoke test with a dedicated test mailbox, including Gmail Trash/restore and reconnection.

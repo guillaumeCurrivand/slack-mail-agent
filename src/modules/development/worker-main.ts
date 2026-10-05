@@ -14,6 +14,9 @@ export const workerConfigSchema = z.object({
 }).strict().refine(value => new Set(value.projects.map(project => project.id)).size === value.projects.length, 'Duplicate local project.');
 
 export async function runWorker(filename: string, once = false) {
+  if (Number(process.versions.node.split('.')[0]) < 24 || typeof fetch !== 'function') {
+    throw new Error(`Le worker Mayassistant exige Node 24+ (version actuelle : ${process.version}). Sous Windows, utilisez scripts/start-development-worker.ps1 ; le runtime du projet reste séparé.`);
+  }
   const config = workerConfigSchema.parse(JSON.parse(await readFile(filename, 'utf8')));
   const token = process.env.DEVELOPMENT_WORKER_TOKEN;
   if (!token || token.length < 32) throw new Error('DEVELOPMENT_WORKER_TOKEN manquant.');
