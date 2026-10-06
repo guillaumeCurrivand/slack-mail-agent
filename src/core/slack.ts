@@ -24,6 +24,8 @@ export interface Messenger {
   postThread?(destination: { team: string; channel: string; thread?: string }, message: AgentMessage): Promise<string>;
 }
 export const menuButton: Button = { label: 'Menu', action: 'menu', value: '', scope: 'core' };
+// Slack accepts more elements per actions block but may hide extras behind "+N autres".
+const VISIBLE_ACTION_BUTTONS = 5;
 /** Slack explicitly rejected the message, so delivery can be retried. */
 export class SlackDeliveryRejected extends Error {
   constructor(message = 'Slack delivery was rejected.', readonly code?: string, readonly retryAfter?: number) { super(message); }
@@ -161,7 +163,7 @@ export class Slack implements Messenger {
       actionElements = [];
     };
     for (const [index, button] of buttons.entries()) {
-      if (actionElements.length === 25) flushActions();
+      if (actionElements.length === VISIBLE_ACTION_BUTTONS) flushActions();
       if (logicalAction(button.action) !== button.action) throw new SlackDeliveryRejected('Invalid logical button action.');
       const label = buttonDisplayLabel(button);
       actionElements.push({ type: 'button', text: { type: 'plain_text', text: label.slice(0, 75) }, action_id: `${button.action}~button-${index}`,

@@ -163,13 +163,13 @@ it.each([['Messages sans réponse', 'Ouvrir le message'], ['Unanswered for you',
   expect(card(body).child_blocks.some((block: any) => block.type === 'actions')).toBe(false);
 });
 
-it('groups repeated logical actions horizontally and preserves order across the 25-control limit', async () => {
+it('keeps every action visible in short rows while preserving order across many controls', async () => {
   const buttons = Array.from({ length: 28 }, (_, index) => ({ label: `Ajouter ${index}`, action: 'channel_select', value: `C${index}` }));
   const body = await post({ kind: "Canaux Slack", text: 'Choose channels.', buttons });
   expect(body.blocks.map((block: any) => block.type)).toEqual(['container']);
   expect(body.blocks.every((block: any) => block.width === 'full' && block.child_blocks.length <= 10)).toBe(true);
   const rows = body.blocks.flatMap((block: any) => block.child_blocks).filter((block: any) => block.type === 'actions');
-  expect(rows.map((row: any) => row.elements.length)).toEqual([25, 3]);
+  expect(rows.map((row: any) => row.elements.length)).toEqual([5, 5, 5, 5, 5, 3]);
   const controls = rows.flatMap((row: any) => row.elements);
   expect(controls.map((control: any) => control.value)).toEqual(buttons.map(button => button.value));
   expect(new Set(controls.map((control: any) => control.action_id)).size).toBe(28);

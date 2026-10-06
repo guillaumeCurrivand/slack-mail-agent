@@ -19,7 +19,7 @@ const TEXT_PAGE_SIZE = 10_000;
 // Slack determines the actual wrap from the client width. Budget for a compact
 // desktop action row while keeping every choice reachable on narrower clients.
 const ACTION_ROW_WIDTH = 90;
-const ACTION_ROW_BUTTONS = 8;
+const ACTION_ROW_BUTTONS = 5;
 const previousActions = '◀ Actions';
 const nextActions = 'Actions ▶';
 const buttonWidth = (button: Button) => Math.min(30, [...buttonDisplayLabel(button)].length) + 5;

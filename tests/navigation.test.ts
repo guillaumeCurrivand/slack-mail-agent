@@ -125,7 +125,7 @@ it('shows every enabled destination on the main menu without action paging', asy
       '🔵 Messages Slack sans réponse', ...names.map(name => `🔵 ${name}`), '🔵 Budget', '🔵 Aide',
     ]);
     expect(findButton(menu, 'Actions ▶')).toBeUndefined();
-    expect(blocks(menu).filter((block: any) => block.type === 'actions')).toHaveLength(1);
+    expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 5]);
     const opened = await h.click(menu, names.at(-1)!);
     expect(opened.method).toBe('chat.update');
     expect(opened.ts).toBe(menu.ts);
@@ -133,7 +133,7 @@ it('shows every enabled destination on the main menu without action paging', asy
   } finally { await h.close(); }
 });
 
-it('packs short workflow controls together and reaches every wide control with navigation buttons', async () => {
+it('keeps workflow controls in visible rows and reaches every wide control with navigation buttons', async () => {
   const compact: AssistantModule = { id: 'compact', description: 'Compact controls fixture',
     async handle(actor, _payload, _eventId, context) {
       await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
@@ -147,8 +147,10 @@ it('packs short workflow controls together and reaches every wide control with n
   const h = await harness(env, [compact, wide]);
   try {
     const short = await h.dm('compact');
-    expect(buttons(short).map((item: any) => item.text.text)).toEqual(Array.from({ length: 6 }, (_, index) => `Choix ${index + 1}`));
-    expect(blocks(short).filter((block: any) => block.type === 'actions')).toHaveLength(1);
+    expect(buttons(short).map((item: any) => item.text.text)).toEqual([...Array.from({ length: 4 }, (_, index) => `Choix ${index + 1}`), '🔵 Actions ▶']);
+    expect(blocks(short).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5]);
+    const remaining = await h.click(short, 'Actions ▶');
+    expect(buttons(remaining).map((item: any) => item.text.text)).toEqual(['Choix 5', 'Choix 6', '🔵 ◀ Actions']);
     const first = await h.dm('wide');
     let page = first;
     const labels: string[] = [];
