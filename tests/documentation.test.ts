@@ -109,7 +109,7 @@ async function harness(enabled = 'documentation', team = 'TTEAM', aiEnv: NodeJS.
   const click = async (message: Posted, label: string, actor = alice) => {
     let current = message;
     for (let page = 0; page < 30 && !findButton(current, label); page++) {
-      const next = findButton(current, 'Actions suivantes');
+      const next = findButton(current, 'Actions ▶');
       expect(next, `Action ${label} unavailable; visible: ${buttons(current).map(item => item.text.text).join(', ')}; kind: ${kind(current)}`).toBeTruthy();
       expect((await enqueueClick(current, next, actor)).statusCode).toBe(200);
       current = await drain();

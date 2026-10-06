@@ -95,8 +95,8 @@ async function harness() {
   const click = async (post: (typeof posts)[number], label: string, actor = alice, timestamp = post.ts) => {
     let current = post;
     for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^🔵 /, '') === label); page++) {
-      expect(buttons(current).some(button => button.text?.text.replace(/^🔵 /, '') === 'Actions suivantes'), label).toBe(true);
-      current = await click(current, 'Actions suivantes', actor, timestamp);
+      expect(buttons(current).some(button => button.text?.text.replace(/^🔵 /, '') === 'Actions ▶'), label).toBe(true);
+      current = await click(current, 'Actions ▶', actor, timestamp);
     }
     const button = buttons(current).find(button => button.text?.text.replace(/^🔵 /, '') === label); expect(button, label).toBeDefined();
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel },

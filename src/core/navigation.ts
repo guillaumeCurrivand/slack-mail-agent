@@ -1,5 +1,5 @@
 import { ownerKey, uid, type Actor } from './identity.js';
-import { sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Messenger } from './slack.js';
+import { buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger } from './slack.js';
 import type { Sql } from './store.js';
 
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
@@ -16,6 +16,43 @@ export async function boundMenuTarget(sql: Sql, actor: Actor, value: unknown, ti
 }
 
 const TEXT_PAGE_SIZE = 10_000;
+// Slack determines the actual wrap from the client width. Budget for a compact
+// desktop action row while keeping every choice reachable on narrower clients.
+const ACTION_ROW_WIDTH = 90;
+const ACTION_ROW_BUTTONS = 8;
+const previousActions = '◀ Actions';
+const nextActions = 'Actions ▶';
+const buttonWidth = (button: Button) => Math.min(30, [...buttonDisplayLabel(button)].length) + 5;
+const pagingButton = (label: string): Button => ({ label, action: 'core:controls', value: '', scope: 'core' });
+
+function controlPages(buttons: Button[], textPaged = false): { pages: Button[][]; pinned: Button[] } {
+  const menu = buttons.findLast(button => button.action === 'core:menu' || /^Retour au menu$/i.test(button.label));
+  const pinned = menu ? [menu] : [];
+  const choices = buttons.filter(button => button !== menu);
+  const textWidth = textPaged ? buttonWidth(pagingButton('Précédent')) + buttonWidth(pagingButton('Suivant')) : 0;
+  const pages: Button[][] = [];
+  for (let start = 0; start < choices.length;) {
+    const page: Button[] = [];
+    let width = pinned.reduce((sum, button) => sum + buttonWidth(button), textWidth);
+    if (start) width += buttonWidth(pagingButton(previousActions));
+    while (start + page.length < choices.length) {
+      const next = choices[start + page.length]!;
+      const hasNextPage = start + page.length + 1 < choices.length;
+      const controls = page.length + 1 + pinned.length + Number(start > 0) + Number(hasNextPage) + (textPaged ? 2 : 0);
+      const rowWidth = width + page.reduce((sum, button) => sum + buttonWidth(button), 0)
+        + buttonWidth(next) + (hasNextPage ? buttonWidth(pagingButton(nextActions)) : 0);
+      if (page.length && (controls > ACTION_ROW_BUTTONS || rowWidth > ACTION_ROW_WIDTH)) break;
+      page.push(next);
+      if (controls >= ACTION_ROW_BUTTONS || rowWidth >= ACTION_ROW_WIDTH) break;
+    }
+    pages.push(page);
+    start += page.length;
+  }
+  return { pages: pages.length ? pages : [[]], pinned };
+}
+
+export const needsControlPaging = (buttons: Button[] = []) => controlPages(buttons).pages.length > 1;
+
 const splitText = (value: string, reply: boolean): string[] => {
   const size = (part: string) => reply ? sanitizeReply(part).length : part.length;
   const pages = [''];
@@ -46,19 +83,14 @@ const splitText = (value: string, reply: boolean): string[] => {
 function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0): AgentMessage {
   const textPages = splitText(message.text, !message.kind);
   const textPage = Math.max(0, Math.min(requestedText, textPages.length - 1));
-  const allButtons = message.buttons ?? [];
-  const pagedControls = allButtons.length > 6;
-  const pinned = pagedControls ? allButtons.filter(button => /^(?:Précédent|Suivant|Retour|Menu)(?:\b|$)/i.test(button.label)) : [];
-  const choices = pagedControls ? allButtons.filter(button => !pinned.includes(button)) : allButtons;
-  const controlSize = pagedControls ? Math.max(1, 6 - pinned.length - 2) : 6;
-  const controlPages = Math.max(1, Math.ceil(choices.length / controlSize));
-  const controlPage = Math.max(0, Math.min(requestedControl, controlPages - 1));
+  const { pages, pinned } = controlPages(message.buttons ?? [], textPages.length > 1);
+  const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
   const pageButton = (label: string, nextControl: number, nextText: number) => ({ label, action: 'core:controls', value: `${id}|${nextControl}|${nextText}`, scope: 'core' as const });
   return { ...message, text: textPages.length > 1 ? `Réponse — page ${textPage + 1}/${textPages.length}\n${textPages[textPage]}` : message.text,
     ...(textPage && message.table ? { table: undefined } : {}),
-    buttons: [...choices.slice(controlPage * controlSize, (controlPage + 1) * controlSize), ...pinned,
-      ...(controlPage ? [pageButton('Actions précédentes', controlPage - 1, textPage)] : []),
-      ...(controlPage + 1 < controlPages ? [pageButton('Actions suivantes', controlPage + 1, textPage)] : []),
+    buttons: [...pages[controlPage]!, ...pinned,
+      ...(controlPage ? [pageButton(previousActions, controlPage - 1, textPage)] : []),
+      ...(controlPage + 1 < pages.length ? [pageButton(nextActions, controlPage + 1, textPage)] : []),
       ...(textPage ? [pageButton('Précédent', controlPage, textPage - 1)] : []),
       ...(textPage + 1 < textPages.length ? [pageButton('Suivant', controlPage, textPage + 1)] : [])] };
 }

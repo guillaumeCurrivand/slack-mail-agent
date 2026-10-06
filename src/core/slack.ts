@@ -11,6 +11,10 @@ export const validResourceUrl = (value: string) => {
   catch { return false; }
 };
 export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
+export const buttonDisplayLabel = (button: Button) => {
+  const navigation = button.action === 'core:navigate' || button.scope === 'core' || /^(?:Précédent|Suivant|Retour|Menu|Valeurs précédentes|Valeurs suivantes|Fermer)(?:\b|$)/i.test(button.label);
+  return navigation ? `🔵 ${button.label}` : button.label;
+};
 export interface Messenger {
   prepare?(message: AgentMessage): AgentMessage;
   send(actor: Actor, message: AgentMessage): Promise<void>;
@@ -159,8 +163,7 @@ export class Slack implements Messenger {
     for (const [index, button] of buttons.entries()) {
       if (actionElements.length === 25) flushActions();
       if (logicalAction(button.action) !== button.action) throw new SlackDeliveryRejected('Invalid logical button action.');
-      const navigation = button.action === 'core:navigate' || button.scope === 'core' || /^(?:Précédent|Suivant|Retour|Menu|Valeurs précédentes|Valeurs suivantes|Fermer)(?:\b|$)/i.test(button.label);
-      const label = navigation ? `🔵 ${button.label}` : button.label;
+      const label = buttonDisplayLabel(button);
       actionElements.push({ type: 'button', text: { type: 'plain_text', text: label.slice(0, 75) }, action_id: `${button.action}~button-${index}`,
         ...(button.value ? { value: button.value } : {}), ...(button.style ? { style: button.style } : {}) });
     }

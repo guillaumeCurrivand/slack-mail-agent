@@ -3,7 +3,7 @@ import type { Pool } from 'pg';
 import { budgetReport, type Budget } from './budget.js';
 import type { Actor, IntegrationActor } from './identity.js';
 import { sanitizeReply, type Messenger } from './slack.js';
-import { Navigation, type MenuPage } from './navigation.js';
+import { Navigation, needsControlPaging, type MenuPage } from './navigation.js';
 import type { Sql } from './store.js';
 import { logicalAction } from './presentation.js';
 
@@ -111,11 +111,12 @@ export class ModuleRegistry {
     const namespace = (message: MenuPage): MenuPage => ({ ...message,
       ...(message.buttons ? { buttons: message.buttons.map(button => ({ ...button, action: button.action.includes(':') ? button.action : `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })) } : {}),
     });
-    let longMessageIndex = 0;
+    let pagedMessageIndex = 0;
     const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
       const prepared = namespace(message);
-      if ((prepared.text.length > 10_000 || (!prepared.kind && sanitizeReply(prepared.text).length > 10_000)) && context.messenger.post && context.messenger.update)
-        return new Navigation(context.sql, context.messenger).show(recipient, `${eventId}:answer:${longMessageIndex++}`, prepared);
+      if ((prepared.text.length > 10_000 || (!prepared.kind && sanitizeReply(prepared.text).length > 10_000)
+        || needsControlPaging(prepared.buttons)) && context.messenger.post && context.messenger.update)
+        return new Navigation(context.sql, context.messenger).show(recipient, `${eventId}:answer:${pagedMessageIndex++}`, prepared);
       return context.messenger.send(recipient, prepared);
     },
       ...(context.messenger.post ? { post: (recipient: Actor, message: MenuPage) => context.messenger.post!(recipient, namespace(message)) } : {}),

@@ -39,6 +39,7 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
   for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
   const app = createServer(config, new JobStore(sql), modules);
   const messages: Posted[] = [];
+  const selectedControls = new WeakMap<Posted, Map<string, any>>();
   let failure: 'reject' | 'uncertain' | undefined;
   const slack = new Slack('token', (async (url, options) => {
     const method = String(url).split('/').at(-1)!;
@@ -71,16 +72,25 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
   };
   const seek = async (source: Posted, label: string, actor = alice) => {
     let current = source;
-    for (let step = 0; step < 30 && !findButton(current, label); step++) {
-      const next = button(current, 'Actions suivantes');
-      current = await submit(current, next, actor, current.ts, randomUUID());
+    for (let step = 0; step < 40 && !findButton(current, label) && findButton(current, 'Actions ▶'); step++) {
+      current = await submit(current, button(current, 'Actions ▶'), actor, current.ts, randomUUID());
+    }
+    for (let step = 0; step < 40 && !findButton(current, label) && findButton(current, '◀ Actions'); step++) {
+      current = await submit(current, button(current, '◀ Actions'), actor, current.ts, randomUUID());
     }
     button(current, label);
     return current;
   };
   const click = async (source: Posted, label: string, actor = alice, ts = source.ts, clickId = randomUUID()) => {
-    const current = await seek(source, label, actor);
-    return submit(current, button(current, label), actor, ts, clickId);
+    let selected = selectedControls.get(source)?.get(label);
+    if (!selected) {
+      const current = await seek(source, label, actor);
+      selected = button(current, label);
+      const cached = selectedControls.get(source) ?? new Map<string, any>();
+      cached.set(label, selected);
+      selectedControls.set(source, cached);
+    }
+    return submit(source, selected, actor, ts, clickId);
   };
   return { dm, click, seek, messages, post, drain, get: (url: string, cookie?: string) => app.inject({ method: 'GET', url, headers: cookie ? { cookie } : {} }), failNext: (outcome: 'reject' | 'uncertain') => { failure = outcome; }, close: () => app.close() };
 }
@@ -100,6 +110,38 @@ it('discovers enabled modules and shared commands in a private main menu without
     const guidance = await h.dm('sort');
     expect(guidance.body.text).toContain("préfixe");
     button(guidance, 'Menu');
+  } finally { await h.close(); }
+});
+
+it('packs short workflow controls together and reaches every wide control with navigation buttons', async () => {
+  const compact: AssistantModule = { id: 'compact', description: 'Compact controls fixture',
+    async handle(actor, _payload, _eventId, context) {
+      await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
+        buttons: Array.from({ length: 6 }, (_, index) => ({ label: `Choix ${index + 1}`, action: 'choose', value: String(index) })) });
+    } };
+  const wide: AssistantModule = { id: 'wide', description: 'Wide controls fixture',
+    async handle(actor, _payload, _eventId, context) {
+      await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
+        buttons: Array.from({ length: 7 }, (_, index) => ({ label: `Examiner le dossier ${index + 1}`, action: 'choose', value: String(index) })) });
+    } };
+  const h = await harness(env, [compact, wide]);
+  try {
+    const short = await h.dm('compact');
+    expect(buttons(short).map((item: any) => item.text.text)).toEqual(Array.from({ length: 6 }, (_, index) => `Choix ${index + 1}`));
+    expect(blocks(short).filter((block: any) => block.type === 'actions')).toHaveLength(1);
+    const first = await h.dm('wide');
+    let page = first;
+    const labels: string[] = [];
+    for (let index = 0; index < 8; index++) {
+      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^🔵 /, '')).filter((label: string) => label.startsWith('Examiner')));
+      if (!findButton(page, 'Actions ▶')) break;
+      page = await h.click(page, 'Actions ▶');
+      expect(page.method).toBe('chat.update');
+      expect(page.ts).toBe(first.ts);
+      button(page, '◀ Actions');
+    }
+    expect(labels).toEqual(Array.from({ length: 7 }, (_, index) => `Examiner le dossier ${index + 1}`));
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(2);
   } finally { await h.close(); }
 });
 

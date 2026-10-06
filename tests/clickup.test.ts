@@ -163,7 +163,7 @@ it('keeps module actions executable after paging the visible button group', asyn
   const h = await connected(provider([]));
   await h.text('clickup statuts');
   const first = h.messages.at(-1)!;
-  const next = first.buttons?.find(button => button.label === 'Actions suivantes');
+  const next = first.buttons?.find(button => button.label === 'Actions ▶');
   expect(next).toBeDefined();
   const navigation = h.modules.action(next!.action, next!.value);
   await h.run({ ...navigation, payload: { ...navigation.payload, timestamp: first.timestamp } }, alice, 'visible-controls-next');

@@ -94,11 +94,22 @@ async function harness(runtimeEnv: NodeJS.ProcessEnv = env, sendThroughSlack = f
     expect((await post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
   };
   const click = async (button: NonNullable<AgentMessage['buttons']>[number], actor = alice) => { await postAction(button, actor); return receive(); };
+  const seek = async (source: (typeof messages)[number], matches: (button: NonNullable<AgentMessage['buttons']>[number]) => boolean) => {
+    let current = source;
+    for (let page = 0; page < 30; page++) {
+      const found = current.message.buttons?.find(matches);
+      if (found) return found;
+      const next = current.message.buttons?.find(button => button.action === 'core:controls' && button.label === 'Actions ▶');
+      expect(next, 'Action unavailable after the final action page').toBeDefined();
+      current = await click(next!);
+    }
+    throw new Error('Action pagination did not finish.');
+  };
   const drain = async () => {
     const stop = worker(pool, { ...runtimeConfig, WORKER_CONCURRENCY: 1 }, modules, messenger);
     try { await new Promise(resolve => setTimeout(resolve, 650)); } finally { await stop(); }
   };
-  return { dm, postDm, click, postAction, drain, messages, failNextDelivery: () => { failAfterDelivery = true; },
+  return { dm, postDm, click, seek, postAction, drain, messages, failNextDelivery: () => { failAfterDelivery = true; },
     rejectNextDelivery: () => { rejectBeforeDelivery = true; }, close: () => app.close() };
 }
 
@@ -106,13 +117,15 @@ it('lists only shared public and private channels from a signed Slack DM without
   fakeChannels();
   const h = await harness();
   try {
-    const { actor, message } = await h.dm('slack channels');
+    const { actor, message, ts } = await h.dm('slack channels');
     expect(actor).toEqual(alice);
     expect(message.text).toContain('general');
     expect(message.text).toContain('planning');
     expect(message.text).toContain('newplanning');
     expect(message.text).not.toContain('group-dm');
-    expect(message.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select', 'slack:channel_select', 'core:navigate']);
+    const saved = (await sql.query('SELECT content FROM core_navigation_menus WHERE timestamp=$1', [ts])).rows[0].content as AgentMessage;
+    expect(saved.buttons?.map(button => button.action)).toEqual(['slack:channel_select', 'slack:channel_select', 'slack:channel_select', 'core:navigate']);
+    expect((await h.seek(h.messages[0]!, button => button.value.includes('|CPRIVATE|'))).action).toBe('slack:channel_select');
   } finally { await h.close(); }
 });
 
@@ -246,13 +259,11 @@ it('paginates long channel lists and keeps page controls private to the requesti
     const first = await h.dm('slack channels');
     expect(first.message.text).toContain('page 1/2');
     expect(first.message.text).not.toContain('channel-11');
-    const next = first.message.buttons!.find(button => button.action === 'slack:channel_page' && button.label === "Suivant")!;
+    const next = await h.seek(first, button => button.action === 'slack:channel_page' && button.label === "Suivant");
     const second = await h.click(next);
     expect(second.actor).toEqual(alice);
     expect(second.message.text).toContain('page 2/2');
-    expect(second.message.buttons?.some(button => button.label.includes('channel-11'))).toBe(true);
-    expect(second.message.buttons).toHaveLength(4);
-    const selected = await h.click(second.message.buttons!.find(button => button.value.includes('|CCHANNEL11|'))!);
+    const selected = await h.click(await h.seek(second, button => button.value.includes('|CCHANNEL11|')));
     expect(selected.message.text).toContain("Canaux sélectionnés : 1");
     expect(selected.message.text).toContain('page 2/2');
   } finally { await h.close(); }
