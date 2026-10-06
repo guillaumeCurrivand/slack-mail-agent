@@ -119,20 +119,23 @@ it('keeps existing buttons with the Card content', async () => {
   });
 });
 
-it('marks navigation with a compass while preserving work and destructive button styles', async () => {
+it('marks structural navigation without marking page choices or changing action styles', async () => {
   const body = await post({ kind: 'Choix', text: 'Choisissez une action.', buttons: [
     { label: 'Retour au menu', action: 'core:navigate', value: 'bound|main' },
+    { label: 'Budget', action: 'core:navigate', value: 'bound|budget' },
+    { label: 'Actions ▶', action: 'core:controls', value: 'bound|1|0' },
     { label: 'Lancer', action: 'start', value: 'run', style: 'primary' },
     { label: 'Supprimer', action: 'delete', value: 'item', style: 'danger' },
   ] });
   const controls = card(body).child_blocks.find((block: any) => block.type === 'actions').elements;
   expect(controls.map((button: any) => [button.text.text, button.style])).toEqual([
-    ['🧭 Retour au menu', undefined], ['Lancer', 'primary'], ['Supprimer', 'danger'],
+    ['🧭 Retour au menu', undefined], ['Budget', undefined], ['🧭 Actions ▶', undefined],
+    ['Lancer', 'primary'], ['Supprimer', 'danger'],
   ]);
   const table = await post({ kind: 'Inventaire', text: 'Fiches', table: {
     columns: ['Nom'], rows: [['Alpha']], rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|alpha' }],
   } });
-  expect(table.blocks[1].rows[1][1].element.text.text).toBe('🧭 Ouvrir');
+  expect(table.blocks[1].rows[1][1].element.text.text).toBe('Ouvrir');
 });
 
 it.each(['Connexion', 'Connect'])('makes all displayed %s URLs clickable', async kind => {

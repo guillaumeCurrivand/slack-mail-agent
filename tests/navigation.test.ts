@@ -102,7 +102,7 @@ it('discovers enabled modules and shared commands in a private main menu without
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
       expect(menu.body.blocks[0].width).toBe('full');
-      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["🧭 Messages Slack sans réponse", '🧭 Budget', "🧭 Aide"]);
+      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["Messages Slack sans réponse", 'Budget', "Aide"]);
       expect(buttons(menu).every((item: any) => item.style === undefined)).toBe(true);
       expect(blocks(menu).filter((block: any) => block.type === 'actions')).toHaveLength(1);
       expect(new Set(buttons(menu).map((item: any) => item.action_id)).size).toBe(3);
@@ -122,7 +122,7 @@ it('shows every enabled destination on the main menu without action paging', asy
   try {
     const menu = await h.dm('menu');
     expect(buttons(menu).map((item: any) => item.text.text)).toEqual([
-      '🧭 Messages Slack sans réponse', ...names.map(name => `🧭 ${name}`), '🧭 Budget', '🧭 Aide',
+      'Messages Slack sans réponse', ...names, 'Budget', 'Aide',
     ]);
     expect(findButton(menu, 'Actions ▶')).toBeUndefined();
     expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 5]);
@@ -530,7 +530,7 @@ it('keeps old menus recoverable across a restart, disablement and an idempotent 
   const h = await harness({ ...env, ENABLED_MODULES: '' });
   try {
     const fresh = await h.dm('menu');
-    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['🧭 Budget', "🧭 Aide"]);
+    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['Budget', "Aide"]);
     const unavailable = await h.click(old, "Messages Slack sans réponse");
     expect(unavailable.method).toBe('chat.update');
     expect(unavailable.ts).toBe(old.ts);
