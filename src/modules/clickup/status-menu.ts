@@ -7,7 +7,7 @@ import { ClickupAPI, ClickupError } from './api.js';
 import { formatDate, formatNumber } from '../../core/presentation.js';
 import { ClickupStatusStore } from './status-store.js';
 import { discoverStatuses } from './statuses.js';
-import { changeStatus, filterNames, filterSummary, matchesStatus } from './status-filter.js';
+import { filterNames, filterSummary, matchesStatus } from './status-filter.js';
 
 const choiceKey = (name: string) => createHash('sha256').update(name).digest('hex');
 const editorChoices = (editor: StatusEditor) => {
@@ -73,6 +73,18 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
   }
   if (!editor || !parsed) return unavailable();
   if (await context.store.handled(actor, eventId, editor.id)) return show(statusPage(editor, page, 'Cette action a déjà été traitée. Aucune modification n’a été répétée.'));
+  if (command === 'status_reset' || command === 'status_add' || command === 'status_remove') {
+    const choice = command === 'status_reset' ? undefined : editorChoices(editor).find(choice => choiceKey(choice.name) === parsed[3]);
+    if (command !== 'status_reset' && !choice) return unavailable();
+    const result = await context.store.change(actor, editor.id, context.connectionId, eventId, command === 'status_reset'
+      ? { type: 'reset' } : { type: command === 'status_add' ? 'add' : 'remove', name: choice!.name });
+    if (result.outcome === 'unavailable') return unavailable();
+    if (result.outcome === 'conflict') return show({ kind: 'Statuts ClickUp', bindButtons: true, text: 'Ce sélecteur est périmé après une autre sauvegarde. Votre filtre actuel est conservé ; rouvrez le sélecteur.', buttons: [{ label: 'Choisir les statuts', action: 'statuses', value: 'statuses' }] });
+    return show(statusPage(result.editor, page, result.outcome === 'duplicate'
+      ? 'Cette action a déjà été traitée. Aucune modification n’a été répétée.'
+      : result.outcome === 'last_choice' ? 'Gardez au moins un statut sélectionné ou réinitialisez le filtre. Ce retrait n’a pas été enregistré.'
+        : command === 'status_reset' ? 'Filtre par défaut enregistré.' : 'Modification enregistrée. Elle s’appliquera à la prochaine commande clickup tâches ou à Actualiser.'));
+  }
   const data = structuredClone(editor.data);
   let notice = '';
   if (command === 'status_page') return show(statusPage(editor, page));
@@ -82,24 +94,6 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
   } else if (command === 'status_cancel') {
     await context.store.edit(actor, editor, eventId, data, 'cancelled');
     return show({ kind: 'Statuts ClickUp', text: 'Sélecteur fermé. Vos modifications enregistrées sont conservées.' });
-  } else if (command === 'status_reset') {
-    data.filter = { mode: 'default' };
-    await context.store.apply(actor, editor, eventId, data);
-    notice = 'Filtre par défaut enregistré.';
-  } else if (command === 'status_add' || command === 'status_remove') {
-    const choice = editorChoices(editor).find(choice => choiceKey(choice.name) === parsed[3]);
-    if (!choice || (command === 'status_add' && !choice.available)) return unavailable();
-    // Old posted editors may contain unsaved drafts; apply only this explicit change.
-    const preference = await context.store.preference(actor);
-    data.filter = changeStatus(preference.filter, data.catalogue, choice, command === 'status_add');
-    if (data.filter.mode === 'custom' && !data.filter.names.length && preference.version === editor.version) {
-      data.filter = preference.filter;
-      notice = 'Gardez au moins un statut sélectionné ou réinitialisez le filtre. Ce retrait n’a pas été enregistré.';
-      await context.store.edit(actor, editor, eventId, data);
-    } else {
-      await context.store.apply(actor, editor, eventId, data);
-      notice = 'Modification enregistrée. Elle s’appliquera à la prochaine commande clickup tâches ou à Actualiser.';
-    }
   } else if (command === 'status_save') {
     if (!data.catalogue.complete) notice = 'La liste des statuts est incomplète. Réessayez avant d’enregistrer.';
     else if (data.filter.mode === 'custom' && !data.filter.names.length) notice = 'Sélectionnez au moins un statut ou réinitialisez le filtre.';

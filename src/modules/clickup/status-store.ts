@@ -1,6 +1,11 @@
 import { ownerKey, uid, type Actor } from '../../core/identity.js';
 import type { Sql } from '../../core/store.js';
 import type { StatusCatalogue, StatusEditor, StatusFilter } from './domain.js';
+import { changeStatus, filterNames } from './status-filter.js';
+
+type StatusChange = { type: 'reset' } | { type: 'add' | 'remove'; name: string };
+type StatusChangeResult = { outcome: 'unavailable' } | { outcome: 'conflict' }
+  | { outcome: 'applied' | 'last_choice' | 'duplicate'; editor: StatusEditor };
 
 export const statusSchema = `
 CREATE TABLE IF NOT EXISTS clickup_status_preferences (
@@ -46,14 +51,41 @@ export class ClickupStatusStore {
   async handled(actor: Actor, eventId: string, editorId: string): Promise<boolean> {
     return !!(await this.sql.query('SELECT event_id FROM clickup_status_events WHERE owner=$1 AND event_id=$2 AND editor_id=$3', [ownerKey(actor), eventId, editorId])).rows.length;
   }
-  async edit(actor: Actor, editor: StatusEditor, eventId: string, data: StatusEditor['data'], state: 'editing' | 'cancelled' = 'editing'): Promise<void> {
-    await this.sql.query(`WITH target AS (
+  /** One attempted autosave owns calculation, rejection checkpoints and persisted outcomes. */
+  async change(actor: Actor, editorId: string, connectionId: string, eventId: string, change: StatusChange): Promise<StatusChangeResult> {
+    const editor = await this.editor(actor, editorId);
+    if (!editor || editor.connectionId !== connectionId || editor.state !== 'editing') return { outcome: 'unavailable' };
+    if (await this.handled(actor, eventId, editor.id)) return { outcome: 'duplicate', editor };
+    const data = structuredClone(editor.data);
+    let lastChoice = false;
+    if (change.type === 'reset') data.filter = { mode: 'default' };
+    else {
+      const available = data.catalogue.choices.find(choice => choice.name === change.name);
+      const choice = available ?? (filterNames(data.filter).includes(change.name) ? { name: change.name, unfinished: false } : undefined);
+      if (!choice || (change.type === 'add' && !available)) return { outcome: 'unavailable' };
+      // Legacy editors may contain unsaved drafts. Only this explicit change is applied.
+      const preference = await this.preference(actor);
+      data.filter = changeStatus(preference.filter, data.catalogue, choice, change.type === 'add');
+      lastChoice = data.filter.mode === 'custom' && !data.filter.names.length && preference.version === editor.version;
+      if (lastChoice) data.filter = preference.filter;
+    }
+    // Even a rejected removal claims its event: replay cannot apply it after a later Add.
+    const persisted = lastChoice ? await this.edit(actor, editor, eventId, data) : await this.apply(actor, editor, eventId, data);
+    if (!persisted) return { outcome: 'unavailable' };
+    const current = await this.editor(actor, editor.id);
+    if (!current) return { outcome: 'unavailable' };
+    if (current.state === 'conflict') return { outcome: 'conflict' };
+    return { outcome: lastChoice ? 'last_choice' : 'applied', editor: current };
+  }
+  async edit(actor: Actor, editor: StatusEditor, eventId: string, data: StatusEditor['data'], state: 'editing' | 'cancelled' = 'editing'): Promise<boolean> {
+    const result = await this.sql.query(`WITH target AS (
       SELECT id FROM clickup_status_editors WHERE id=$1 AND owner=$2 AND channel=$3 AND workspace=$4 AND connection_id=$5 AND state='editing' AND expires_at>now()
       AND EXISTS(SELECT 1 FROM clickup_connections WHERE owner=$2 AND connection_id=$5) FOR UPDATE
     ), claimed AS (
       INSERT INTO clickup_status_events(owner,event_id,editor_id) SELECT $2,$6,id FROM target ON CONFLICT DO NOTHING RETURNING editor_id
-    ) UPDATE clickup_status_editors SET data=$7,state=$8 WHERE id IN(SELECT editor_id FROM claimed)`,
+    ) UPDATE clickup_status_editors SET data=$7,state=$8 WHERE id IN(SELECT editor_id FROM claimed) RETURNING id`,
     [editor.id, ownerKey(actor), actor.channel, this.workspace, editor.connectionId, eventId, JSON.stringify(data), state]);
+    return result.rows.length > 0;
   }
   async save(actor: Actor, editor: StatusEditor, eventId: string): Promise<void> {
     await this.sql.query(`WITH target AS (
@@ -69,8 +101,8 @@ export class ClickupStatusStore {
     ) UPDATE clickup_status_editors SET state=CASE WHEN EXISTS(SELECT 1 FROM changed) THEN 'saved' ELSE 'conflict' END WHERE id IN(SELECT editor_id FROM claimed)`,
     [editor.id, ownerKey(actor), actor.channel, this.workspace, editor.connectionId, eventId, uid()]);
   }
-  async apply(actor: Actor, editor: StatusEditor, eventId: string, data: StatusEditor['data']): Promise<void> {
-    await this.sql.query(`WITH target AS (
+  private async apply(actor: Actor, editor: StatusEditor, eventId: string, data: StatusEditor['data']): Promise<boolean> {
+    const result = await this.sql.query(`WITH target AS (
       SELECT * FROM clickup_status_editors WHERE id=$1 AND owner=$2 AND channel=$3 AND workspace=$4 AND connection_id=$5 AND state='editing' AND expires_at>now()
       AND EXISTS(SELECT 1 FROM clickup_connections WHERE owner=$2 AND connection_id=$5) FOR UPDATE
     ), claimed AS (
@@ -81,8 +113,9 @@ export class ClickupStatusStore {
       RETURNING clickup_status_preferences.version
     ) UPDATE clickup_status_editors SET data=CASE WHEN EXISTS(SELECT 1 FROM changed) THEN $7::jsonb ELSE data END,
       version=COALESCE((SELECT version FROM changed),version),state=CASE WHEN EXISTS(SELECT 1 FROM changed) THEN 'editing' ELSE 'conflict' END
-      WHERE id IN(SELECT editor_id FROM claimed)`,
+      WHERE id IN(SELECT editor_id FROM claimed) RETURNING id`,
     [editor.id, ownerKey(actor), actor.channel, this.workspace, editor.connectionId, eventId, JSON.stringify(data), uid(), editor.version]);
+    return result.rows.length > 0;
   }
   async cleanup(actor: Actor) {
     await this.sql.query(`DELETE FROM clickup_status_editors e WHERE owner=$1 AND expires_at<=now()

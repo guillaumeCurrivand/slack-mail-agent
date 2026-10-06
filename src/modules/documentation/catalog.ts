@@ -1,21 +1,16 @@
 import { formatDate } from '../../core/presentation.js';
-import { stateLabel, sourceLabel } from './presentation.js';
+import { sourceLabel } from './presentation.js';
 import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
-import { recordSchemas, recordTitle, recordName, validSavedFields, parseEditRequest, type InventoryRecord, type InventoryValues, type RecordKind } from './domain.js';
-import { lifecycleButton, statusText, referenceLabel, outcomeButtons } from './lifecycle.js';
+import { recordTitle, recordName, type RecordKind } from './domain.js';
+import { catalogHelp, componentHelp, hostHelp, hostingHelp, toolHelp, helpFor } from './help.js';
+import { lifecycleButton, statusText, referenceLabel } from './lifecycle.js';
 import type { DocumentationStore } from './store.js';
 import { InventoryPresentation } from './presentation.js';
 
 const literal = escapeCardValue;
-export const catalogHelp = "Consultez documentation technologies [page], documentation technologie <identifiant ou nom exact> et documentation historique technologie <identifiant ou nom exact>. Créez avec documentation créer technologie {\"name\":\"React\",\"category\":\"Interface\",\"notes\":\"Exemple\"}. Modifiez avec documentation modifier technologie <cible> {\"category\":null,\"notes\":\"Remplacement\"}. Champs : name (obligatoire, une ligne, 120 caractères), category (120), notes (1 500). Les champs facultatifs acceptent null (inconnu) ou une valeur vide. Chaque modification exige votre confirmation séparée dans cette conversation privée, sous 24 heures. Seuls les champs choisis sont remplacés, même après des modifications intermédiaires ; les autres champs sont conservés. Aucun appel IA ni Gmail pour les commandes structurées.";
-export const componentHelp = "Consultez documentation composants <projet> [page], documentation composant <identifiant ou nom exact> et documentation historique composant <cible>. Créez avec documentation créer composant {\"name\":\"Interface\",\"projectId\":\"<identifiant du projet>\",\"type\":\"interface\",\"technologies\":[\"<technologie existante>\"]}. Champs : name (obligatoire, une ligne, 120 caractères), type (facultatif, 120), technologies (jusqu’à 50 technologies existantes, par identifiant ou nom exact). projectId doit être un identifiant stable de projet ; le parent ne peut pas changer. Modifiez avec documentation modifier composant <cible> {\"type\":\"API\",\"technologies\":null}. null signifie inconnu ; [] signifie aucune technologie. Une référence ambiguë exige un identifiant stable. Créez toute technologie manquante séparément avec confirmation. Les modifications de relations ne créent pas de fiches. Consultez les hébergements avec le bouton Hébergements ou documentation hébergements <composant>. Chaque modification exige votre confirmation séparée dans cette conversation privée, sous 24 heures. Seuls les champs choisis sont remplacés, même après des modifications intermédiaires ; les autres champs sont conservés. Aucun appel IA ni Gmail pour les commandes structurées.";
-export const hostHelp = "Consultez documentation hébergeurs [page], documentation hébergeur <cible> et documentation historique hébergeur <cible>. Créez avec documentation créer hébergeur {\"name\":\"OVH\",\"role\":\"Calcul\",\"monthlyCost\":12.5,\"currency\":\"EUR\",\"notes\":\"Exemple\"}. Modifiez avec documentation modifier hébergeur <cible> {\"role\":null,\"monthlyCost\":null}. Champs : name (obligatoire, une ligne, 120 caractères), role (120), monthlyCost (nombre fini de 0 à 1 000 milliards), currency (code de 3 lettres, normalisé en majuscules), notes (1 500). Un coût connu exige une devise ; un coût inconnu ne vaut pas zéro. Le coût appartient au service partagé. Aucune opération auprès d’un fournisseur d’hébergement. Chaque modification exige votre confirmation séparée dans cette conversation privée, sous 24 heures. Seuls les champs choisis sont remplacés, même après des modifications intermédiaires ; les autres champs sont conservés. Aucun appel IA ni Gmail pour les commandes structurées.";
-export const hostingHelp = "Consultez documentation hébergements <composant> [page], documentation hébergement <identifiant> et documentation historique hébergement <identifiant>. Créez avec documentation créer hébergement {\"componentId\":\"<identifiant du composant>\",\"serviceId\":\"<hébergeur existant>\",\"environment\":\"production\",\"accountReference\":\"Compte équipe\",\"urls\":[\"https://example.com\"],\"accessInstructions\":\"Voir le gestionnaire de mots de passe\",\"notes\":\"Exemple\"}. Modifiez avec documentation modifier hébergement <identifiant> {\"environment\":\"préproduction\",\"serviceId\":\"<hébergeur existant>\",\"notes\":null}. Le parent componentId est fixe. environment : une ligne, 120 caractères ; serviceId : référence existante requise ; accountReference, accessInstructions et notes : 1 500 caractères chacun ; urls : 10 URL HTTP(S) au maximum, 400 caractères chacune, sans identifiants de connexion. Création et remplacements : 5 000 caractères JSON maximum. Champs facultatifs : null ou valeur vide. Fournissez des références et liens de gestionnaire de mots de passe, jamais des mots de passe ou clés API. Créez tout service manquant séparément avec confirmation ; les références ambiguës exigent un identifiant stable. Chaque modification exige votre confirmation séparée dans cette conversation privée, sous 24 heures. Seuls les champs choisis sont remplacés, même après des modifications intermédiaires ; les autres champs sont conservés. Aucun appel IA ni Gmail pour les commandes structurées.";
-export const toolHelp = "Consultez documentation outils [page], documentation outil <cible> et documentation historique outil <cible>. Créez avec documentation créer outil {\"name\":\"Slack\",\"category\":\"Communication\",\"usage\":\"Messagerie équipe\",\"referent\":\"Contact équipe\",\"companyWide\":true,\"projects\":[\"<projet existant>\"],\"notes\":\"Exemple\"}. name est obligatoire : une ligne, 120 caractères ; category : 120 ; usage, referent, notes : 1 500 chacun ; projects : 20 projets existants au maximum, par identifiant, nom exact ou alias. companyWide accepte true, false ou null. Usage pour toute l’entreprise et relations de projets peuvent coexister. Les valeurs omises/null restent inconnues ; les valeurs vides restent vides. Modifiez avec documentation modifier outil <cible> {\"usage\":\"Remplacement\",\"referent\":null}. Création et remplacements : 5 000 caractères JSON maximum. Créez les projets manquants séparément avec confirmation ; le texte d’utilisation ne crée aucune relation. Le référent est descriptif, n’accorde aucun droit et ne reçoit aucune notification. Les métadonnées et l’historique ne sont pas modifiables. Chaque modification exige votre confirmation séparée dans cette conversation privée, sous 24 heures. Seuls les champs choisis sont remplacés, même après des modifications intermédiaires ; les autres champs sont conservés. Aucun appel IA ni Gmail pour les commandes structurées.";
 const title = recordTitle;
-const helpFor = (kind: RecordKind) => ({ technology: catalogHelp, component: componentHelp, host: hostHelp, hosting: hostingHelp, tool: toolHelp })[kind];
 const pluralFor = (kind: RecordKind) => ({ technology: "Technologies", component: "Composants", host: "Hébergeurs/services", hosting: "Hébergements", tool: "Outils" })[kind];
 const exampleFor = (kind: RecordKind) => ({ technology: '{"notes":"Replacement"}', component: '{"type":"API","technologies":[]}', host: '{"role":"Compute"}', hosting: '{"environment":"staging","notes":null}', tool: '{"usage":"Replacement","referent":null}' })[kind];
 const pages = (prefix: string, page: number, count: number) => [
@@ -33,17 +28,6 @@ async function pagedLookup<T extends { total: number }>(input: string, lookup: (
 // recovery. Every selector is re-read within the actor's workspace.
 export class Catalog {
   constructor(private store: DocumentationStore) {}
-  private async resolveReferences(actor: Actor, kind: 'project' | 'technology', selectors: string[]): Promise<string[] | AgentMessage> {
-    const ids: string[] = [], label = title(kind);
-    for (const selector of selectors) {
-      const result = kind === 'project' ? await this.store.lookup(actor, selector) : await this.store.lookupRecord(actor, kind, selector);
-      if (result.total !== 1) return { kind: result.total ? `Référence ambiguë : ${label}` : `${label} introuvable`,
-        text: result.total ? `${label} ${literal(selector)} est ambiguë. Consultez documentation ${kind} ${literal(selector)} et répétez avec un identifiant stable. Rien n’a été proposé.`
-          : `${label} ${literal(selector)} est introuvable dans cet espace de travail. Créez cette fiche avec documentation créer ${kind} dans une opération séparée confirmée, puis répétez cette demande. Rien n’a été proposé.` };
-      ids.push('projects' in result ? result.projects[0]!.id : result.records[0]!.id);
-    }
-    return [...new Set(ids)];
-  }
   async page(actor: Actor, destination: string): Promise<MenuPage | undefined> {
     const presentation = new InventoryPresentation(this.store, actor);
     if (destination === 'addtechnology') return { kind: "Ajouter une technologie", text: catalogHelp, links: [{ label: "Retour", page: 'technologies_0' }] };
@@ -122,83 +106,9 @@ export class Catalog {
     return undefined;
   }
   async handle(actor: Actor, payload: Record<string, unknown>, eventId: string,
-    deliver: (message: AgentMessage) => Promise<void>, show: (destination: string) => Promise<void>, source = 'Slack structured'): Promise<boolean> {
-    const presentation = new InventoryPresentation(this.store, actor);
-    const action = /^confirm_(create|edit)_(technology|component|host|hosting|tool)$/.exec(String(payload.action));
-    if (payload.type === 'action' && action) {
-      const operation = action[1] as 'create' | 'edit', kind = action[2] as RecordKind, label = title(kind);
-      const saved = typeof payload.value === 'string' ? await this.store.confirmRecord(actor, payload.value, kind, operation) : undefined;
-      if (!saved || saved.record_kind !== kind || saved.operation !== operation) await deliver({ kind: "Confirmation indisponible", text: "Cette confirmation est indisponible ou n’appartient pas à cet utilisateur et à cette conversation privée." });
-      else if (saved.outcome === 'archived') await deliver({ kind: "Restauration nécessaire avant modification", text: `${label} ${literal(await presentation.name(kind, saved.target_id))} est archivé. Restaurez-le explicitement, puis réessayez cette confirmation dans son délai d’origine de 24 heures.` });
-      else if (!saved.applied_at) await deliver({ kind: "Confirmation expirée", text: `Envoyez une nouvelle demande documentation ${stateLabel(operation)} ${kind}.` });
-      else await deliver({ kind: saved.outcome === 'missing' || saved.outcome === 'invalid' ? `${label} : échec de l’opération ${stateLabel(operation)}` : saved.outcome === 'satisfied' ? "Modification déjà satisfaite" : `${label} : ${operation === 'create' ? 'création enregistrée' : 'modification enregistrée'}`,
-        buttons: outcomeButtons(saved.id),
-        table: await presentation.values(saved.fields), text: `${label}: ${literal(await presentation.name(kind, saved.target_id))}\n${saved.outcome === 'missing' || saved.outcome === 'invalid' ? "La cible, les champs ou les références étaient invalides ou indisponibles à la confirmation. Rien n’a été modifié." : saved.outcome === 'satisfied' ? "Les champs sélectionnés correspondaient déjà ; aucune modification ni entrée d’historique n’a été ajoutée." : "Les valeurs approuvées ont été enregistrées une seule fois. Des modifications ultérieures peuvent avoir changé les valeurs actuelles."}\nOuvrez Détails de la fiche pour consulter les valeurs actuelles.` });
-      return true;
-    }
+    deliver: (message: AgentMessage) => Promise<void>, show: (destination: string) => Promise<void>): Promise<boolean> {
     if (payload.type !== 'text') return false;
     const text = String(payload.text ?? '').trim();
-    const mutation = /^(create|edit) (technology|component|host|hosting|tool)\s+([\s\S]+)$/i.exec(text);
-    if (mutation) {
-      const operation = mutation[1]!.toLowerCase();
-      const kind = mutation[2]!.toLowerCase() as RecordKind, label = title(kind);
-      let proposal = await this.store.request(actor, eventId);
-      if (!proposal) {
-        let fields: InventoryValues, target: InventoryRecord | undefined, selector: string | undefined;
-        try {
-          if (operation === 'create') fields = recordSchemas[kind].create.parse(JSON.parse(mutation[3]!));
-          else {
-            const request = parseEditRequest(mutation[3]!); fields = recordSchemas[kind].edit.parse(request.value); selector = request.selector;
-          }
-        } catch { await deliver({ kind: `Valeur invalide : ${label}${operation === 'edit' ? ' — modification' : ''}`, text: `Choisissez une fiche et un objet JSON valide de champs autorisés.\n${helpFor(kind)}` }); return true; }
-        if (selector !== undefined) {
-          const result = await this.store.lookupRecord(actor, kind, selector);
-          if (result.total !== 1) {
-            await deliver({ kind: result.total ? `Référence ambiguë : ${label} — modification` : `${label} introuvable`, text: result.total ? `Consultez documentation ${kind} <nom exact> et répétez avec un identifiant stable. Rien n’a été proposé.` : `Aucune fiche : ${label} ne correspond exactement à cet identifiant ou nom.` }); return true;
-          }
-          target = result.records[0]!;
-          if (target.archived) { await deliver({ kind: "Restauration nécessaire avant modification", text: `Cette fiche ${label} est archivée. Restaurez-la explicitement avant de la modifier.` }); return true; }
-        }
-        for (const [field, referenceKind] of [['projects', 'project'], ['technologies', 'technology']] as const) {
-          if (!Array.isArray(fields[field])) continue;
-          const resolved = await this.resolveReferences(actor, referenceKind, fields[field]);
-          if (!Array.isArray(resolved)) { await deliver(resolved); return true; }
-          fields[field] = resolved;
-        }
-        if (kind === 'component') {
-          if (operation === 'create' && !await this.store.project(actor, String(fields.projectId))) {
-            await deliver({ kind: "Projet introuvable", text: "Utilisez l’identifiant d’un projet existant dans cet espace. Créez un projet manquant dans une opération séparée confirmée." }); return true;
-          }
-        }
-        if (kind === 'hosting') {
-          if (operation === 'create' && !await this.store.record(actor, 'component', String(fields.componentId))) {
-            await deliver({ kind: "Composant introuvable", text: "Utilisez l’identifiant d’un composant existant dans cet espace. Créez un composant manquant dans une opération séparée confirmée." }); return true;
-          }
-          if (typeof fields.serviceId === 'string') {
-            const result = await this.store.lookupRecord(actor, 'host', fields.serviceId);
-            if (result.total !== 1) {
-              await deliver({ kind: result.total ? "Référence d’hébergeur/service ambiguë" : "Hébergeur/service introuvable", text: result.total ? "Consultez documentation hébergeur <nom exact> et répétez avec un identifiant stable. Rien n’a été proposé." : "Créez l’hébergeur/service manquant avec documentation créer hébergeur dans une opération séparée confirmée, puis répétez cette demande. Rien n’a été proposé." }); return true;
-            }
-            fields.serviceId = result.records[0]!.id;
-          }
-        }
-        if (kind === 'host' && !recordSchemas.host.create.safeParse({ ...target?.fields, ...fields }).success) {
-          await deliver({ kind: "Modification d’hébergeur/service invalide", text: `Un coût mensuel connu nécessite une devise explicite.\n${hostHelp}` }); return true;
-        }
-        if (!validSavedFields(kind, operation as 'create' | 'edit', fields)) {
-          await deliver({ kind: `Valeur invalide : ${label}${operation === 'edit' ? ' — modification' : ''}`, text: `Les champs normalisés et les identifiants résolus dépassent les contraintes autorisées.\n${helpFor(kind)}` }); return true;
-        }
-        try { proposal = await this.store.proposeRecord(actor, eventId, kind, fields, target, source); }
-        catch (error) {
-          if (!(error instanceof Error) || !error.message.startsWith("La cible ou les références d’inventaire ont changé")) throw error;
-          await deliver({ kind: "Relations indisponibles", text: error.message }); return true;
-        }
-      }
-      const preview = await presentation.confirmation(proposal);
-      const name = operation === 'create' ? recordName({ fields: proposal.fields } as InventoryRecord) : await presentation.name(kind, proposal.target_id);
-      await deliver({ ...preview, kind: `${operation === 'create' ? "Créer" : "Modifier"} ${label} — confirmation`, text: `${operation === 'create' ? "Créer" : "Modifier"} partagé — ${label}: ${literal(name)}\n${preview.text}\nSeuls les champs approuvés changent ; les modifications intermédiaires sont remplacées et les autres champs sont conservés. Vous seul pouvez confirmer dans cette conversation privée. Expiration : ${formatDate(new Date(proposal.created_at).getTime() + 24 * 3600_000)}. Rien n’est enregistré avant votre confirmation.`, buttons: [{ label: operation === 'create' ? "Confirmer la création" : "Confirmer la modification", action: `confirm_${operation}_${kind}`, value: proposal.id, style: 'primary' }, ...(operation === 'edit' || !preview.table ? [{ label: "Examiner les valeurs", action: 'open_confirmation_values', value: proposal.id }] : [])] });
-      return true;
-    }
     const list = /^(technologies|hosts|tools)(?:\s+(\d{1,6}))?$/i.exec(text);
     if (list) { await show(`${list[1]!.toLowerCase()}_${list[2] ?? '0'}`); return true; }
     const hosting = /^hosting\s+([\s\S]+)$/i.exec(text);

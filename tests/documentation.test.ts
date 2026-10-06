@@ -1943,24 +1943,27 @@ it('validates one-record edits, optional clearing, alias ambiguity and stable id
   } finally { await h.app.close(); }
 });
 
-it('binds edit confirmations to actor, DM, workspace and operation, with fixed expiry', async () => {
+it.each(['project', 'technology'] as const)('binds %s edit confirmations to actor, DM, workspace, kind and operation, with fixed expiry', async recordKind => {
   const h = await harness(), foreign = await harness('documentation', 'TOTHER');
   try {
-    const creation = await h.dm('documentation create project {"name":"Private edit"}');
-    await h.enqueueClick(creation, { ...button(creation, "Confirmer la création"), action_id: 'documentation:confirm_edit' });
+    const suffix = recordKind === 'project' ? '' : '_technology';
+    const creation = await h.dm(`documentation create ${recordKind} {"name":"Private edit"}`);
+    await h.enqueueClick(creation, { ...button(creation, "Confirmer la création"), action_id: `documentation:confirm_edit${suffix}` });
+    expect(kind(await h.drain())).toBe("Confirmation indisponible");
+    await h.enqueueClick(creation, { ...button(creation, "Confirmer la création"), action_id: `documentation:confirm_create${recordKind === 'project' ? '_technology' : ''}` });
     expect(kind(await h.drain())).toBe("Confirmation indisponible");
     await h.click(creation, "Confirmer la création");
-    const pending = await h.dm('documentation edit project Private edit {"notes":"Secret replacement"}');
+    const pending = await h.dm(`documentation edit ${recordKind} Private edit {"notes":"Secret replacement"}`);
     expect(kind(await h.click(pending, "Confirmer la modification", bob))).toBe("Confirmation indisponible");
     expect(kind(await h.click(pending, "Confirmer la modification", { ...alice, channel: 'DOTHER' }))).toBe("Confirmation indisponible");
     expect(kind(await foreign.click(pending, "Confirmer la modification", { ...alice, team: 'TOTHER' }))).toBe("Confirmation indisponible");
-    await h.enqueueClick(pending, { ...button(pending, "Confirmer la modification"), action_id: 'documentation:confirm_create' });
+    await h.enqueueClick(pending, { ...button(pending, "Confirmer la modification"), action_id: `documentation:confirm_create${suffix}` });
     expect(kind(await h.drain())).toBe("Confirmation indisponible");
     await sql.query("UPDATE documentation_confirmations SET created_at=now()-interval '24 hours' WHERE id=$1", [button(pending, "Confirmer la modification").value]);
     await h.restart();
     expect(kind(await h.click(pending, "Confirmer la modification"))).toBe("Confirmation expirée");
-    expect(bodyText(await h.dm('documentation project Private edit'))).toContain("Notes: Inconnu");
-    expect(bodyText(await h.dm('documentation history Private edit'))).toContain("Historique — page 1/1");
+    expect(bodyText(await h.dm(`documentation ${recordKind} Private edit`))).toContain("Notes: Inconnu");
+    expect(bodyText(await h.dm(`documentation history ${recordKind === 'project' ? '' : 'technology '}Private edit`))).toContain("Historique — page 1/1");
   } finally { await h.app.close(); await foreign.app.close(); }
 });
 

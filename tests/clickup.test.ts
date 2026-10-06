@@ -340,6 +340,24 @@ it('retains explicit saving through a legacy Enregistrer control', async () => {
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Ajouter In progress']));
 });
 
+it('never saves a rejected legacy Save when the same event retries after access returns', async () => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
+  await sql.query(`UPDATE clickup_status_editors SET data=jsonb_set(data,'{filter}',$1::jsonb)`, [JSON.stringify({ mode: 'custom', names: ['Finished'] })]);
+  const legacy = h.modules.action('clickup:status_save', picker.buttons!.find(button => button.action === 'clickup:status_reset')!.value);
+  const route = { ...legacy, payload: { ...legacy.payload, timestamp: picker.timestamp } };
+  const update = h.messenger.update;
+  p.failures.set('/api/v2/user', 403);
+  h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
+  await expect(h.run(route, alice, 'rejected-legacy-save')).rejects.toThrow('rejected');
+  h.messenger.update = update;
+  p.failures.clear();
+  await h.run(route, alice, 'rejected-legacy-save');
+  expect(h.messages.at(-1)!.text).toContain('déjà été traitée');
+  await h.text('clickup statuts');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Finished', 'Retirer In progress', 'Retirer Unused']));
+});
+
 it('saves a personal completed-status filter without changing an earlier task snapshot', async () => {
   const p = provider([[...Array.from({ length: 9 }, (_, index) => task(`active${index}`)), task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Closed', type: 'closed' } })]]), h = await connected(p);
   await h.text('clickup tasks'); const original = h.messages.at(-1)!;
@@ -393,6 +411,19 @@ it('rejects an outdated editor instead of overwriting a newer saved filter', asy
   await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false);
   await chooseStatus(h, 'Finished', true, older);
   expect(h.messages.at(-1)!.text).toContain('autre sauvegarde');
+  await h.text('clickup statuses');
+  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
+});
+
+it.each(['remove', 'reset'] as const)('rejects an outdated %s without changing the current filter or calling ClickUp', async change => {
+  const p = provider([]), h = await connected(p);
+  await h.text('clickup statuses'); const older = h.messages.at(-1)!;
+  await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false);
+  const reads = p.calls.length;
+  if (change === 'reset') await h.click('status_reset', older);
+  else await chooseStatus(h, 'In progress', false, older);
+  expect(h.messages.at(-1)!.text).toContain('autre sauvegarde');
+  expect(p.calls).toHaveLength(reads);
   await h.text('clickup statuses');
   expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
 });
