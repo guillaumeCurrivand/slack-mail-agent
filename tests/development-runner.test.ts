@@ -44,6 +44,10 @@ async function fixture(options: { baseBranch?: string; failChecks?: boolean; bro
     calls.push(argv);
     if (argv[0] === 'fake-cursor') {
       agents++;
+      const rule = await readFile(path.join(cwd, '.cursor/rules/mayassistant-ponytail.mdc'), 'utf8');
+      expect(rule).toContain('alwaysApply: true');
+      expect(rule).toContain('# Ponytail');
+      expect(rule).toContain('controller\'s required JSON report');
       if (argv.includes('--force')) await writeFile(path.join(cwd, 'fix.txt'), `Fix ${agents}`);
       return { code: 0, stdout: JSON.stringify({ type: 'result', is_error: false, result: options.cursorResult ?? JSON.stringify({ actionable: true, summary: 'Menu corrigé.', browserRequired: options.browser ?? false, ...(options.commitTitle === null ? {} : { commitTitle: options.commitTitle ?? 'Repair menu' }), ...(options.browserScenario ? { browserScenario: options.browserScenario } : {}) }) }), stderr: '' };
     }
@@ -70,6 +74,7 @@ it('pushes one tested commit to maintenance, preserves test, and resumes a compl
   expect(await h.git(h.remote, 'rev-parse', 'maintenance')).toBe(result.commit);
   expect(await h.git(h.remote, 'rev-parse', 'test')).toBe(base);
   expect(await h.git(h.remote, 'rev-list', '--count', 'test..maintenance')).toBe('1');
+  expect(await h.git(h.remote, 'ls-tree', '-r', '--name-only', 'maintenance')).not.toContain('mayassistant-ponytail.mdc');
   expect(await h.git(h.remote, 'log', '-1', '--format=%B', 'maintenance')).toContain('fix(clickup:abc123): Repair menu');
   expect(await h.runner.run({ ...h.work, attempts: 1 }, h.local, h.attempt)).toEqual(result);
   expect(h.count()).toEqual({ agents: 1, checks: 1, pushes: 1, attempts: 1 });
@@ -77,6 +82,7 @@ it('pushes one tested commit to maintenance, preserves test, and resumes a compl
   const prompt = await readFile(path.join(path.dirname(h.journalPath), 'prompt.txt'), 'utf8');
   expect(prompt).toContain('Never run nvm use');
   expect(prompt).toContain('PATH scoped to that child process only');
+  expect(prompt).toContain('Read and apply .cursor/rules/mayassistant-ponytail.mdc');
 });
 
 it.each([false, true])('returns a clarification after progress text without spending another attempt (fenced: %s)', async fenced => {
@@ -86,6 +92,41 @@ it.each([false, true])('returns a clarification after progress text without spen
   const h = await fixture({ cursorResult });
   const result = await h.runner.run({ ...h.work, kind: 'review' }, h.local, h.attempt);
   expect(result).toEqual({ outcome: 'needs_information', summary, tests: [] });
+  expect(h.count()).toEqual({ agents: 1, checks: 0, pushes: 0, attempts: 1 });
+});
+
+it.each([false, true])('preserves conflicting Ponytail rules before spending an attempt (tracked: %s)', async tracked => {
+  const h = await fixture();
+  const seed = path.join(h.directory, 'seed');
+  const rulePath = '.cursor/rules/mayassistant-ponytail.mdc';
+  await mkdir(path.join(seed, '.cursor/rules'), { recursive: true });
+  if (tracked) {
+    await writeFile(path.join(seed, rulePath), 'Project-owned rule');
+  } else {
+    await writeFile(path.join(seed, '.gitignore'), `/${rulePath}\n`);
+    h.local.setup = [[process.execPath, '-e', "require('fs').mkdirSync('.cursor/rules',{recursive:true});require('fs').writeFileSync('.cursor/rules/mayassistant-ponytail.mdc','Project-owned rule')"]];
+  }
+  await h.git(seed, 'add', '.'); await h.git(seed, 'commit', '-m', 'Project rules');
+  await h.git(seed, 'push', h.remote, 'test');
+  const result = await h.runner.run(h.work, h.local, h.attempt);
+  expect(result.outcome).toBe('blocked');
+  expect(result.summary).toContain(rulePath);
+  expect(await readFile(path.join(path.dirname(h.journalPath), 'checkout', rulePath), 'utf8')).toBe('Project-owned rule');
+  expect(h.count()).toEqual({ agents: 0, checks: 0, pushes: 0, attempts: 0 });
+});
+
+it('adds the local rule for read-only reviews without changing existing project rules', async () => {
+  const h = await fixture();
+  const seed = path.join(h.directory, 'seed');
+  await mkdir(path.join(seed, '.cursor/rules'), { recursive: true });
+  await writeFile(path.join(seed, '.cursor/rules/project.mdc'), 'Existing project guidance');
+  await h.git(seed, 'add', '.'); await h.git(seed, 'commit', '-m', 'Project guidance');
+  await h.git(seed, 'push', h.remote, 'test');
+  const result = await h.runner.run({ ...h.work, kind: 'review' }, h.local, h.attempt);
+  expect(result.outcome).toBe('actionable');
+  const checkout = path.join(path.dirname(h.journalPath), 'checkout');
+  expect(await h.git(checkout, 'status', '--porcelain')).toBe('');
+  expect(await readFile(path.join(checkout, '.cursor/rules/project.mdc'), 'utf8')).toBe('Existing project guidance');
   expect(h.count()).toEqual({ agents: 1, checks: 0, pushes: 0, attempts: 1 });
 });
 

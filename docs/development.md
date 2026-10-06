@@ -81,6 +81,14 @@ The worker launches trusted repository code and a powerful coding agent on your 
 
 On 04/10/2026 the User explicitly authorized Development to read and use all existing local `.env` files on their computer as needed for this workflow, including the complete frontend environment; this supersedes the earlier restriction to selected frontend keys. This is permission to use local configuration, not an instruction to load every file into every process. Keep backend configuration with the backend and frontend configuration with the frontend. Values remain local and must not appear in commits, Slack/ClickUp reports or documentation. The worker does not discover or import these files automatically; configure the relevant setup commands as described in the [EOA environment instructions](development-eoa.md#local-environment-files).
 
+### Cursor CLI coding rules
+
+Before starting Cursor for a review or implementation, the worker installs the approved [Ponytail rule](../skills/development-maintenance/ponytail.mdc) as `.cursor/rules/mayassistant-ponytail.mdc` inside that run's checkout, with `alwaysApply: true`. [Cursor CLI reads project rules from `.cursor/rules`](https://docs.cursor.com/en/cli/using); a rule only in the Mayassistant repository or original developer checkout would not reach these separate clones. The prompt also explicitly directs Cursor to read the rule.
+
+The template preserves the supplied Ponytail text and adds a worker integration section: required JSON, French summaries, English commit titles, read-only investigation, verification and controller-owned publication remain authoritative. Existing test frameworks and configured Jest/build/browser checks still apply. This is agent guidance, not an enforcement sandbox or a guarantee of model compliance.
+
+The worker adds only this path to the clone's `.git/info/exclude`, keeping it out of the maintenance commit without changing the project's `.gitignore` or other rules. A tracked file at the reserved path, an unexpected existing local rule, or a symlink in its folder path blocks preparation before a paid attempt; existing content is preserved for human review. An identical local copy can be reused. Keep the `skills/development-maintenance/ponytail.mdc` asset alongside the worker repository when running compiled code; compiling TypeScript alone does not copy this asset. Updating the template affects the next prepared run; it does not restart completed or interrupted work.
+
 ### Browser MCP and replay configuration
 
 In a local project entry, configure:

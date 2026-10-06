@@ -61,6 +61,10 @@ Post-update: check the [worker process](development-eoa.md#check-whether-the-wor
 
 The Windows runtime-separation follow-up adds `scripts/start-development-worker.ps1`. Stop the existing local worker normally, run `.\scripts\start-development-worker.ps1 -Check`, verify the installed Node 25 executable, then run `.\scripts\start-development-worker.ps1`. Pin the local browser MCP to the same physical Node 25 executable while EOA child commands retain Node 16. Follow the [runtime separation procedure](development-eoa.md#keep-the-worker-and-project-node-versions-separate); do not run `nvm use` globally. No server environment, schema, manifest or restart changes are required. The direct worker entry point now rejects Node below 24 before taking a lock. A fresh Cursor run with the updated prompt remains a separate live check.
 
+### Development Cursor rules — 06/10/2026
+
+The local worker now prepares the approved Ponytail rule in each run's `.cursor/rules/` folder before starting Cursor. Follow the [rule contract](development.md#cursor-cli-coding-rules). Stop the existing worker normally, update the local checkout, keep the versioned rule asset alongside the source/compiled worker, and restart with `.\scripts\start-development-worker.ps1`. No dependencies, server rebuild/restart, environment variables, migrations or Slack manifest changes are required. The server checkout may pull the reviewed commit using the worker-only commands above. Post-update, verify the rule in the next run's checkout and its absence from the maintenance commit; model adherence and a complete live ticket run need separate observation.
+
 ### Development repository URL validation fix — 04/10/2026
 
 The follow-up production failure points to `new URL` in the repository validation refinement. Malformed URLs, including Slack-formatted repository links, reproduced the same uncaught `TypeError` locally even through `safeParse`. The fix accepts Slack link wrappers only in the configuration DM's repository field and uses non-throwing URL validation. Invalid values produce a French error without saving; credential-free HTTPS restrictions remain enforced.
