@@ -113,6 +113,26 @@ it('discovers enabled modules and shared commands in a private main menu without
   } finally { await h.close(); }
 });
 
+it('shows every enabled destination on the main menu without action paging', async () => {
+  const names = Array.from({ length: 7 }, (_, index) => `Module de démonstration ${index + 1}`);
+  const modules: AssistantModule[] = names.map((name, index) => ({
+    id: `fixture_${index + 1}`, name, description: name, async handle() {},
+  }));
+  const h = await harness(env, modules);
+  try {
+    const menu = await h.dm('menu');
+    expect(buttons(menu).map((item: any) => item.text.text)).toEqual([
+      '🔵 Messages Slack sans réponse', ...names.map(name => `🔵 ${name}`), '🔵 Budget', '🔵 Aide',
+    ]);
+    expect(findButton(menu, 'Actions ▶')).toBeUndefined();
+    expect(blocks(menu).filter((block: any) => block.type === 'actions')).toHaveLength(1);
+    const opened = await h.click(menu, names.at(-1)!);
+    expect(opened.method).toBe('chat.update');
+    expect(opened.ts).toBe(menu.ts);
+    expect(title(opened)).toBe(names.at(-1));
+  } finally { await h.close(); }
+});
+
 it('packs short workflow controls together and reaches every wide control with navigation buttons', async () => {
   const compact: AssistantModule = { id: 'compact', description: 'Compact controls fixture',
     async handle(actor, _payload, _eventId, context) {

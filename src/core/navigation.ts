@@ -83,7 +83,10 @@ const splitText = (value: string, reply: boolean): string[] => {
 function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0): AgentMessage {
   const textPages = splitText(message.text, !message.kind);
   const textPage = Math.max(0, Math.min(requestedText, textPages.length - 1));
-  const { pages, pinned } = controlPages(message.buttons ?? [], textPages.length > 1);
+  // The main menu is an inventory of enabled modules: keep every destination visible.
+  const { pages, pinned } = message.kind === 'Menu'
+    ? { pages: [message.buttons ?? []], pinned: [] as Button[] }
+    : controlPages(message.buttons ?? [], textPages.length > 1);
   const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
   const pageButton = (label: string, nextControl: number, nextText: number) => ({ label, action: 'core:controls', value: `${id}|${nextControl}|${nextText}`, scope: 'core' as const });
   return { ...message, text: textPages.length > 1 ? `Réponse — page ${textPage + 1}/${textPages.length}\n${textPages[textPage]}` : message.text,
