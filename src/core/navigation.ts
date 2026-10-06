@@ -16,6 +16,7 @@ export async function boundMenuTarget(sql: Sql, actor: Actor, value: unknown, ti
 }
 
 const TEXT_PAGE_SIZE = 10_000;
+const VISIBLE_BUTTON_LIMIT = 20;
 // Slack determines the actual wrap from the client width. Budget for a compact
 // desktop action row while keeping every choice reachable on narrower clients.
 const ACTION_ROW_WIDTH = 90;
@@ -51,7 +52,7 @@ function controlPages(buttons: Button[], textPaged = false): { pages: Button[][]
   return { pages: pages.length ? pages : [[]], pinned };
 }
 
-export const needsControlPaging = (buttons: Button[] = []) => controlPages(buttons).pages.length > 1;
+export const needsControlPaging = (message: AgentMessage) => message.buttonPaging === true || (message.buttons?.length ?? 0) > VISIBLE_BUTTON_LIMIT;
 
 const splitText = (value: string, reply: boolean): string[] => {
   const size = (part: string) => reply ? sanitizeReply(part).length : part.length;
@@ -83,10 +84,10 @@ const splitText = (value: string, reply: boolean): string[] => {
 function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0): AgentMessage {
   const textPages = splitText(message.text, !message.kind);
   const textPage = Math.max(0, Math.min(requestedText, textPages.length - 1));
-  // The main menu is an inventory of enabled modules: keep every destination visible.
-  const { pages, pinned } = message.kind === 'Menu'
-    ? { pages: [message.buttons ?? []], pinned: [] as Button[] }
-    : controlPages(message.buttons ?? [], textPages.length > 1);
+  // Ordinary screens keep all choices visible in short Slack action rows.
+  const { pages, pinned } = needsControlPaging(message)
+    ? controlPages(message.buttons ?? [], textPages.length > 1)
+    : { pages: [message.buttons ?? []], pinned: [] as Button[] };
   const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
   const pageButton = (label: string, nextControl: number, nextText: number) => ({ label, action: 'core:controls', value: `${id}|${nextControl}|${nextText}`, scope: 'core' as const });
   return { ...message, text: textPages.length > 1 ? `Réponse — page ${textPage + 1}/${textPages.length}\n${textPages[textPage]}` : message.text,

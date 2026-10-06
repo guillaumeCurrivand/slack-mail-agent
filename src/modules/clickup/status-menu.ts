@@ -30,7 +30,7 @@ export function statusPage(editor: StatusEditor, requestedPage = 0, notice = '')
   if (!catalogue.complete) buttons.push({ label: 'Réessayer', action: 'status_retry', value: `${editor.id}|${page}` });
   if (catalogue.complete) buttons.push({ label: 'Actualiser les statuts', action: 'status_retry', value: `${editor.id}|${page}` });
   buttons.push({ label: 'Réinitialiser le filtre', action: 'status_reset', value: `${editor.id}|${page}` }, { label: 'Fermer', action: 'status_cancel', value: `${editor.id}|${page}` });
-  return { kind: 'Statuts ClickUp', bindButtons: true, buttons, text: [
+  return { kind: 'Statuts ClickUp', bindButtons: true, buttonPaging: true, buttons, text: [
     notice, filter.mode === 'default' ? `Filtre par défaut : ${filterSummary(filter)}.` : `Sélection personnelle : ${formatNumber(names.length)} statuts.`,
     'Chaque ajout, retrait ou réinitialisation est enregistré automatiquement. Ce sélecteur expire après 30 minutes.',
     catalogue.complete ? `Statuts disponibles · Page ${formatNumber(page + 1)}/${formatNumber(pages)}.` : 'Liste des statuts incomplète. Les modifications sont enregistrées ; Réessayer poursuit la découverte.',

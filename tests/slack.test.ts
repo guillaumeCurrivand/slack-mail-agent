@@ -176,6 +176,22 @@ it('keeps every action visible in short rows while preserving order across many 
   expect(controls.map((control: any) => control.action_id)).toEqual(buttons.map((_, index) => `channel_select~button-${index}`));
 });
 
+it('uses visible button rows on Replies, Cards and table pages', async () => {
+  const buttons = Array.from({ length: 8 }, (_, index) => ({ label: `Choix ${index + 1}`, action: 'choose', value: String(index) }));
+  const pages: AgentMessage[] = [
+    { text: 'Réponse', buttons },
+    { kind: 'Choix', text: 'Carte', buttons },
+    { kind: 'Inventaire', text: 'Fiches', table: { columns: ['Nom'], rows: [['Alpha']] }, buttons },
+  ];
+  for (const page of pages) {
+    const body = await post(page);
+    const rows = body.blocks.flatMap((block: any) => block.child_blocks ?? [block]).filter((block: any) => block.type === 'actions');
+    expect(rows.map((row: any) => row.elements.length)).toEqual([5, 3]);
+    expect(rows.flatMap((row: any) => row.elements.map((element: any) => element.text.text))).toEqual(buttons.map(button => button.label));
+    expect(rows.flatMap((row: any) => row.elements).every((element: any) => element.type === 'button')).toBe(true);
+  }
+});
+
 it('keeps surrounding punctuation outside clickable bare URLs', async () => {
   const reply = await post({ text: 'See (https://example.com/a(b)) and https://example.com/next.' });
   expect(reply.blocks[0].text).toContain('[https://example.com/a(b)](https://example.com/a(b))');

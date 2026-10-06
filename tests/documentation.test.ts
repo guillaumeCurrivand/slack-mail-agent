@@ -148,8 +148,10 @@ it('uses French commands and presentation through signed routing while preservin
     expect(bodyText(details)).toContain(fields.description);
     expect(visibleLinks(details)).toEqual(fields.repositories);
     const actions = parts(details).filter(block => block.type === 'actions');
-    expect(actions).toHaveLength(1);
-    expect(new Set(actions[0].elements.map((element: any) => element.action_id)).size).toBe(actions[0].elements.length);
+    expect(actions.length).toBeGreaterThan(1);
+    expect(actions.every(block => block.elements.length <= 5)).toBe(true);
+    const controls = actions.flatMap(block => block.elements);
+    expect(new Set(controls.map((element: any) => element.action_id)).size).toBe(controls.length);
     const edit = await h.dm('documentation modifier projet aide {"notes":"Valeur approuvée"}');
     await h.click(edit, 'Confirmer la modification');
     expect((await sql.query('SELECT fields FROM documentation_projects WHERE id=$1', [id])).rows[0].fields).toMatchObject({ ...fields, notes: 'Valeur approuvée' });

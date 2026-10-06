@@ -5,7 +5,7 @@ export type Button = { label: string; action: string; value: string; style?: 'pr
 export type TableCell = string | Array<{ text: string; url?: string }>;
 export type MessageTable = { columns: string[]; rows: TableCell[][]; rowButtons?: Button[] };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; selects?: MessageSelect[] };
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; selects?: MessageSelect[] };
 export const validResourceUrl = (value: string) => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>\\]/.test(value); }
   catch { return false; }

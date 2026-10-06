@@ -115,7 +115,7 @@ export class ModuleRegistry {
     const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
       const prepared = namespace(message);
       if ((prepared.text.length > 10_000 || (!prepared.kind && sanitizeReply(prepared.text).length > 10_000)
-        || needsControlPaging(prepared.buttons)) && context.messenger.post && context.messenger.update)
+        || needsControlPaging(prepared)) && context.messenger.post && context.messenger.update)
         return new Navigation(context.sql, context.messenger).show(recipient, `${eventId}:answer:${pagedMessageIndex++}`, prepared);
       return context.messenger.send(recipient, prepared);
     },

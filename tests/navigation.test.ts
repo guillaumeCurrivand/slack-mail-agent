@@ -133,7 +133,7 @@ it('shows every enabled destination on the main menu without action paging', asy
   } finally { await h.close(); }
 });
 
-it('keeps workflow controls in visible rows and reaches every wide control with navigation buttons', async () => {
+it('shows ordinary workflow controls together and pages only unusually large choice sets', async () => {
   const compact: AssistantModule = { id: 'compact', description: 'Compact controls fixture',
     async handle(actor, _payload, _eventId, context) {
       await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
@@ -144,26 +144,41 @@ it('keeps workflow controls in visible rows and reaches every wide control with 
       await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
         buttons: Array.from({ length: 7 }, (_, index) => ({ label: `Examiner le dossier ${index + 1}`, action: 'choose', value: String(index) })) });
     } };
-  const h = await harness(env, [compact, wide]);
+  const many: AssistantModule = { id: 'many', description: 'Large controls fixture',
+    async handle(actor, _payload, _eventId, context) {
+      await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
+        buttons: Array.from({ length: 21 }, (_, index) => ({ label: `Choix ${index + 1}`, action: 'choose', value: String(index) })) });
+    } };
+  const twenty: AssistantModule = { id: 'twenty', description: 'Visible controls fixture',
+    async handle(actor, _payload, _eventId, context) {
+      await context.messenger.send(actor, { kind: 'Choix', text: 'Choisissez une action.',
+        buttons: Array.from({ length: 20 }, (_, index) => ({ label: `Choix ${index + 1}`, action: 'choose', value: String(index) })) });
+    } };
+  const h = await harness(env, [compact, wide, twenty, many]);
   try {
     const short = await h.dm('compact');
-    expect(buttons(short).map((item: any) => item.text.text)).toEqual([...Array.from({ length: 4 }, (_, index) => `Choix ${index + 1}`), '🔵 Actions ▶']);
-    expect(blocks(short).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5]);
-    const remaining = await h.click(short, 'Actions ▶');
-    expect(buttons(remaining).map((item: any) => item.text.text)).toEqual(['Choix 5', 'Choix 6', '🔵 ◀ Actions']);
-    const first = await h.dm('wide');
+    expect(buttons(short).map((item: any) => item.text.text)).toEqual(Array.from({ length: 6 }, (_, index) => `Choix ${index + 1}`));
+    expect(blocks(short).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 1]);
+    const widePage = await h.dm('wide');
+    expect(buttons(widePage).map((item: any) => item.text.text)).toEqual(Array.from({ length: 7 }, (_, index) => `Examiner le dossier ${index + 1}`));
+    expect(blocks(widePage).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 2]);
+    const visible = await h.dm('twenty');
+    expect(buttons(visible).map((item: any) => item.text.text)).toEqual(Array.from({ length: 20 }, (_, index) => `Choix ${index + 1}`));
+    expect(blocks(visible).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 5, 5, 5]);
+    expect(findButton(visible, 'Actions ▶')).toBeUndefined();
+    const first = await h.dm('many');
     let page = first;
     const labels: string[] = [];
-    for (let index = 0; index < 8; index++) {
-      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^🔵 /, '')).filter((label: string) => label.startsWith('Examiner')));
+    for (let index = 0; index < 20; index++) {
+      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^🔵 /, '')).filter((label: string) => label.startsWith('Choix')));
       if (!findButton(page, 'Actions ▶')) break;
       page = await h.click(page, 'Actions ▶');
       expect(page.method).toBe('chat.update');
       expect(page.ts).toBe(first.ts);
       button(page, '◀ Actions');
     }
-    expect(labels).toEqual(Array.from({ length: 7 }, (_, index) => `Examiner le dossier ${index + 1}`));
-    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(2);
+    expect(labels).toEqual(Array.from({ length: 21 }, (_, index) => `Choix ${index + 1}`));
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(4);
   } finally { await h.close(); }
 });
 
