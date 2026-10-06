@@ -25,10 +25,10 @@ afterAll(async () => db.close());
 
 type Posted = { method: string; body: any; ts: string; controls?: any[] };
 function parts(message: Posted): any[] { return message.body.blocks.flatMap((block: any) => block.child_blocks ?? [block]); }
-function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^🔵 /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: cellValue(row[0]) } }))) : []); }
+function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^🧭 /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: cellValue(row[0]) } }))) : []); }
 function rowName(columns: string[], row: any[]): string { return cellValue(row[Math.max(0, columns.indexOf('Nom'))]); }
 function findButton(message: Posted, label: string) {
-  const direct = buttons(message).find(item => item.text.text.replace(/^🔵 /, '') === label)
+  const direct = buttons(message).find(item => item.text.text.replace(/^🧭 /, '') === label)
     ?? buttons(message).find(item => item.type === 'static_select' && item.text.text.replace(/^\d+\. /, '').split(' / ').includes(label));
   if (direct) return direct;
   const table = parts(message).find(block => block.type === 'data_table');

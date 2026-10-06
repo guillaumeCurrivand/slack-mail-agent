@@ -32,7 +32,7 @@ function blocks(message: Posted) { return message.body.blocks.flatMap((block: an
 function buttons(message: Posted) { return blocks(message).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements); }
 function title(message: Posted) { return message.body.blocks[0]?.title?.text; }
 function richParts(message: Posted) { return blocks(message).filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements.flatMap((section: any) => section.elements)); }
-function findButton(message: Posted, label: string) { return buttons(message).find((item: any) => item.text.text.replace(/^🔵 /, '') === label); }
+function findButton(message: Posted, label: string) { return buttons(message).find((item: any) => item.text.text.replace(/^🧭 /, '') === label); }
 function button(message: Posted, label: string) { const found = findButton(message, label); expect(found, `${label}; available: ${buttons(message).map((item: any) => item.text.text).join(', ')}`).toBeTruthy(); return found; }
 async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: AssistantModule[] = []) {
   const config = readConfig(overrides), modules = new ModuleRegistry([...createModules(config, sql, overrides).all(), ...additionalModules]);
@@ -102,7 +102,7 @@ it('discovers enabled modules and shared commands in a private main menu without
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
       expect(menu.body.blocks[0].width).toBe('full');
-      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["🔵 Messages Slack sans réponse", '🔵 Budget', "🔵 Aide"]);
+      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["🧭 Messages Slack sans réponse", '🧭 Budget', "🧭 Aide"]);
       expect(buttons(menu).every((item: any) => item.style === undefined)).toBe(true);
       expect(blocks(menu).filter((block: any) => block.type === 'actions')).toHaveLength(1);
       expect(new Set(buttons(menu).map((item: any) => item.action_id)).size).toBe(3);
@@ -122,7 +122,7 @@ it('shows every enabled destination on the main menu without action paging', asy
   try {
     const menu = await h.dm('menu');
     expect(buttons(menu).map((item: any) => item.text.text)).toEqual([
-      '🔵 Messages Slack sans réponse', ...names.map(name => `🔵 ${name}`), '🔵 Budget', '🔵 Aide',
+      '🧭 Messages Slack sans réponse', ...names.map(name => `🧭 ${name}`), '🧭 Budget', '🧭 Aide',
     ]);
     expect(findButton(menu, 'Actions ▶')).toBeUndefined();
     expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 5]);
@@ -170,7 +170,7 @@ it('shows ordinary workflow controls together and pages only unusually large cho
     let page = first;
     const labels: string[] = [];
     for (let index = 0; index < 20; index++) {
-      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^🔵 /, '')).filter((label: string) => label.startsWith('Choix')));
+      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^🧭 /, '')).filter((label: string) => label.startsWith('Choix')));
       if (!findButton(page, 'Actions ▶')) break;
       page = await h.click(page, 'Actions ▶');
       expect(page.method).toBe('chat.update');
@@ -530,7 +530,7 @@ it('keeps old menus recoverable across a restart, disablement and an idempotent 
   const h = await harness({ ...env, ENABLED_MODULES: '' });
   try {
     const fresh = await h.dm('menu');
-    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['🔵 Budget', "🔵 Aide"]);
+    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['🧭 Budget', "🧭 Aide"]);
     const unavailable = await h.click(old, "Messages Slack sans réponse");
     expect(unavailable.method).toBe('chat.update');
     expect(unavailable.ts).toBe(old.ts);

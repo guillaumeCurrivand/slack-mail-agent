@@ -11,9 +11,10 @@ export const validResourceUrl = (value: string) => {
   catch { return false; }
 };
 export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
+export const navigationCue = '🧭';
 export const buttonDisplayLabel = (button: Button) => {
   const navigation = button.action === 'core:navigate' || button.scope === 'core' || /^(?:Précédent|Suivant|Retour|Menu|Valeurs précédentes|Valeurs suivantes|Fermer)(?:\b|$)/i.test(button.label);
-  return navigation ? `🔵 ${button.label}` : button.label;
+  return navigation ? `${navigationCue} ${button.label}` : button.label;
 };
 export interface Messenger {
   prepare?(message: AgentMessage): AgentMessage;
@@ -204,7 +205,7 @@ export class Slack implements Messenger {
         return parts.some(part => part.type === 'link') ? { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: parts }] } : { type: 'raw_text', text: cellText(cell) || ' ' };
       };
       const dataRows = table.rows.map((row, index) => [...row.map(cellBlock), ...(table.rowButtons?.[index] ? [{ type: 'action_cell', element: {
-        type: 'button', text: { type: 'plain_text', text: `🔵 ${table.rowButtons[index]!.label}`.slice(0, 75) },
+        type: 'button', text: { type: 'plain_text', text: `${navigationCue} ${table.rowButtons[index]!.label}`.slice(0, 75) },
         action_id: `${table.rowButtons[index]!.action}~button-${index + buttons.length}`, value: table.rowButtons[index]!.value,
       }, fallback: { type: 'raw_text', text: 'Rechercher la fiche dans le DM' } }] : [])]);
       blocks.push({ type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),

@@ -94,11 +94,11 @@ async function harness() {
   const buttons = (post: (typeof posts)[number]) => post.blocks.flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements : []);
   const click = async (post: (typeof posts)[number], label: string, actor = alice, timestamp = post.ts) => {
     let current = post;
-    for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^🔵 /, '') === label); page++) {
-      expect(buttons(current).some(button => button.text?.text.replace(/^🔵 /, '') === 'Actions ▶'), label).toBe(true);
+    for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^🧭 /, '') === label); page++) {
+      expect(buttons(current).some(button => button.text?.text.replace(/^🧭 /, '') === 'Actions ▶'), label).toBe(true);
       current = await click(current, 'Actions ▶', actor, timestamp);
     }
-    const button = buttons(current).find(button => button.text?.text.replace(/^🔵 /, '') === label); expect(button, label).toBeDefined();
+    const button = buttons(current).find(button => button.text?.text.replace(/^🧭 /, '') === label); expect(button, label).toBeDefined();
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel },
       message: { ts: timestamp }, actions: [{ action_id: button.action_id, value: button.value, action_ts: String(++counter) }] }) }).toString();
     const response = await slackRequest('/slack/actions', raw, 'application/x-www-form-urlencoded'); expect(response.statusCode).toBe(200);
