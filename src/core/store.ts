@@ -15,9 +15,10 @@ CREATE TABLE IF NOT EXISTS core_operation_slots (
  active boolean NOT NULL DEFAULT true, updated_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(owner,module,operation)
 );
 CREATE TABLE IF NOT EXISTS core_navigation_menus (
- id text PRIMARY KEY, owner text NOT NULL, channel text NOT NULL, timestamp text,
+ id text PRIMARY KEY, owner text NOT NULL, channel text NOT NULL, timestamp text, content jsonb,
  created_at timestamptz NOT NULL DEFAULT now()
 );
+ALTER TABLE core_navigation_menus ADD COLUMN IF NOT EXISTS content jsonb;
 CREATE TABLE IF NOT EXISTS core_navigation_deliveries (
  event_id text PRIMARY KEY, owner text NOT NULL, created_at timestamptz NOT NULL DEFAULT now()
 );

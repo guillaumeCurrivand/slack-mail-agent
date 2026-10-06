@@ -68,7 +68,7 @@ export class InventoryPresentation {
     const table = await this.values(saved.fields, saved.operation === 'edit' ? saved.before_values : undefined, true);
     if (saved.operation === 'edit' && saved.before_values === null) table.rows = table.rows.map(row => [row[0]!, "Indisponible (valeurs d’origine non enregistrées)", row[2]!]);
     const text = saved.operation === 'edit' && saved.before_values === null ? "Avant : indisponible pour cette ancienne confirmation ; les valeurs d’origine n’ont pas été enregistrées." : '';
-    return tableSize(table) > 8500 ? { text: `${text}\nLes valeurs enregistrées occupent plusieurs pages. Ouvrez Examiner les valeurs pour les consulter avant de confirmer.`.trim() } : { table, text };
+    return tableSize(table) > 18_000 ? { text: `${text}\nLes valeurs enregistrées occupent plusieurs pages. Ouvrez Examiner les valeurs pour les consulter avant de confirmer.`.trim() } : { table, text };
   }
   async list(records: RecordView[], destinations?: string[], archived = false): Promise<Pick<MenuPage, 'table' | 'recordChoices'>> {
     if (!records.length) return { recordChoices: [] };
@@ -90,9 +90,10 @@ export class InventoryPresentation {
         return typeof value === 'string' ? abbreviation(value) + ((field === 'name' || field === 'environment') && record.archived ? " [Archivé]" : '') : value;
       }));
     }));
-    // Cap list summaries while keeping all eight records and every destination available.
+    // Keep every record and row action while fitting Slack's data-table character budget.
     const table: MessageTable = { columns, rows };
-    if (tableSize(table) > 8500) table.rows = rows.map(row => row.map(cell => typeof cell === 'string' ? abbreviation(cell, 100) : cell));
+    if (tableSize(table) > 17_000) table.rows = rows.map(row => row.map(cell => typeof cell === 'string' ? abbreviation(cell, 70) : cell.map(part => ({ ...part, text: abbreviation(part.text, 70) }))));
+    if (tableSize(table) > 19_000) table.rows = table.rows.map(row => row.map(cell => typeof cell === 'string' ? abbreviation(cell, 40) : "Liens : ouvrir la fiche"));
     const names = await Promise.all(records.map(record => this.name(record.kind, record.id)));
     const choices = names.map((name, index) => ({ label: `${index + 1}. ${name}`.slice(0, 75), page: destinations?.[index] ?? `${records[index]!.kind}_${records[index]!.id}` }));
     return { table, recordChoices: choices };
@@ -124,7 +125,7 @@ export function valuePages(content: MenuPage): MenuPage[] {
     const count = Math.max(...chunks.map(parts => parts.length));
     for (let i = 0; i < count; i++) {
       const piece = chunks.map((parts, index) => parts[i] ?? (index === 0 ? `${cellText(row[0]!)} (suite)` : ''));
-      if (tableSize({ ...tables.at(-1)!, rows: [...tables.at(-1)!.rows, piece] }) > 8500) tables.push({ columns: content.table.columns, rows: [] });
+      if (tableSize({ ...tables.at(-1)!, rows: [...tables.at(-1)!.rows, piece] }) > 18_000) tables.push({ columns: content.table.columns, rows: [] });
       tables.at(-1)!.rows.push(piece);
     }
   }

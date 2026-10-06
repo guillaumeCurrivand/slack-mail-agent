@@ -51,7 +51,10 @@ async function slackRead(command: string, team = 'TTEAM') {
   await dispatchJob(sql, { AI_MONTHLY_LIMIT_USD: 0, AI_USER_MONTHLY_LIMIT_USD: 0, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' }, modules, messenger,
     { ...modules.text(command), actor: { team, user: 'UALICE', channel: 'DALICE' }, id: randomUUID() });
   const message = messages.at(-1)!;
-  return { ...message, text: [message.text, ...(message.table?.rows.map(row => row.map(cellText).join(': ')) ?? [])].join('\n') };
+  const bound = [...(message.buttons ?? []), ...(message.table?.rowButtons ?? [])].map(button => button.value.split('|')[0]).find(value => /^[0-9a-f-]{36}$/.test(value));
+  const saved = bound ? (await sql.query('SELECT content FROM core_navigation_menus WHERE id=$1', [bound])).rows[0]?.content as AgentMessage | undefined : undefined;
+  return { ...message, buttons: saved?.buttons ?? message.buttons, table: saved?.table ?? message.table,
+    text: [message.text, ...(message.table?.rows.map(row => row.map(cellText).join(': ')) ?? [])].join('\n') };
 }
 const identity = (message: AgentMessage) => message.buttons!.find(button => /request_(archive|restore)$/.test(button.action))!.value.split('|')[1]!.split(':')[1]!;
 
@@ -104,7 +107,7 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     expect(project.text).toContain("Description: Inconnu");
     const hosts = await slackRead('documentation hosts');
     expect(hosts.text).toContain('2 Hébergeurs/services');
-    const hostIds = hosts.selects!.flatMap(select => select.options.map(option => option.value.split('host_')[1]!));
+    const hostIds = hosts.table!.rowButtons!.map(button => button.value.split('host_')[1]!);
     expect(hostIds).toHaveLength(2);
     for (const id of hostIds) {
       expect((await slackRead(`documentation host ${id}`)).text).toContain("Nom: Cloud");
@@ -118,7 +121,7 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     expect(component.buttons?.some(button => button.label.includes('Node'))).toBe(true);
     const hosting = await slackRead('documentation hosting Web');
     expect(hosting.text).toContain('production');
-    const hostingId = hosting.selects![0]!.options[0]!.value.split('hosting_')[1]!;
+    const hostingId = hosting.table!.rowButtons![0]!.value.split('hosting_')[1]!;
     expect((await slackRead(`documentation hosting-entry ${hostingId}`)).text).toContain('Composant: Alpha / Web');
     expect((await slackRead(`documentation history hosting-entry ${hostingId}`)).text).toContain("Import de feuille de calcul");
     for (const command of ['technology React', 'component Web', 'host Cloud', 'tool Tracker']) {

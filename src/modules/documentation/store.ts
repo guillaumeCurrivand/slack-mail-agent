@@ -105,9 +105,9 @@ export class DocumentationStore {
     const source = `(SELECT team,id,'project'::text kind,fields,archived FROM documentation_projects
       UNION ALL SELECT team,id,kind,fields,archived FROM documentation_records) inventory`;
     const total = Number((await this.sql.query(`SELECT count(*) total FROM ${source} WHERE team=$1 AND archived`, [actor.team])).rows[0].total);
-    const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
+    const pages = Math.max(1, Math.ceil(total / 40)), page = Math.min(requestedPage, pages - 1);
     const records: { id: string; kind: 'project' | RecordKind; fields: InventoryValues }[] = (await this.sql.query(`SELECT id,kind,fields FROM ${source}
-      WHERE team=$1 AND archived ORDER BY kind,lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 8 OFFSET $2`, [actor.team, page * 8])).rows;
+      WHERE team=$1 AND archived ORDER BY kind,lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 40 OFFSET $2`, [actor.team, page * 40])).rows;
     return { records, total, pages, page };
   }
   async propose(actor: Actor, eventId: string, fields: ProjectFields, source = 'Slack structured'): Promise<Confirmation> {
@@ -287,9 +287,9 @@ export class DocumentationStore {
     const filter = `team=$1 AND ($2::text IS NOT NULL OR NOT archived) AND ($2::text IS NULL OR id=$2 OR lower(fields->>'name')=lower($2)
       OR EXISTS(SELECT 1 FROM jsonb_array_elements_text(COALESCE(NULLIF(fields->'aliases','null'::jsonb),'[]'::jsonb)) alias WHERE lower(alias)=lower($2)))`;
     const total = Number((await this.sql.query(`SELECT count(*) AS total FROM documentation_projects WHERE ${filter}`, [actor.team, selector])).rows[0].total);
-    const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
+    const pages = Math.max(1, Math.ceil(total / 40)), page = Math.min(requestedPage, pages - 1);
     const projects = (await this.sql.query(`SELECT id,fields,archived,created_at FROM documentation_projects
-      WHERE ${filter} ORDER BY lower(fields->>'name'),id LIMIT 8 OFFSET $3`, [actor.team, selector, page * 8])).rows;
+      WHERE ${filter} ORDER BY lower(fields->>'name'),id LIMIT 40 OFFSET $3`, [actor.team, selector, page * 40])).rows;
     return { projects, total, page, pages };
   }
   async project(actor: Actor, id: string): Promise<Project | undefined> {
@@ -310,10 +310,10 @@ export class DocumentationStore {
       AND ($4::text IS NULL OR parent_id=$4 OR component_id=$4) AND ($5::text IS NULL OR fields->'technologies' @> jsonb_build_array($5::text) OR fields->>'serviceId'=$5 OR fields->'projects' @> jsonb_build_array($5::text))`;
     const values = [actor.team, kind, selector, parentId, referenceId];
     const total = Number((await this.sql.query(`SELECT count(*) total FROM documentation_records WHERE ${filter}`, values)).rows[0].total);
-    const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
+    const pages = Math.max(1, Math.ceil(total / 40)), page = Math.min(requestedPage, pages - 1);
     const records: InventoryRecord[] = (await this.sql.query(`SELECT id,kind,fields,archived,created_at FROM documentation_records WHERE ${filter}
       ORDER BY CASE WHEN lower(fields->>'environment')='production' THEN 0 ELSE 1 END,
-        lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 8 OFFSET $6`, [...values, page * 8])).rows;
+        lower(COALESCE(fields->>'name',fields->>'environment')),id LIMIT 40 OFFSET $6`, [...values, page * 40])).rows;
     return { records, total, page, pages };
   }
   async record(actor: Actor, kind: RecordKind, id: string): Promise<InventoryRecord | undefined> {
@@ -325,11 +325,11 @@ export class DocumentationStore {
       LEFT JOIN documentation_records s ON s.team=h.team AND s.kind='host' AND s.id=h.fields->>'serviceId'
       WHERE c.team=$1 AND c.kind='component' AND c.parent_id=$2`;
     const total = Number((await this.sql.query(`SELECT count(*) total ${from}`, [actor.team, projectId])).rows[0].total);
-    const pages = Math.max(1, Math.ceil(total / 8)), page = Math.min(requestedPage, pages - 1);
+    const pages = Math.max(1, Math.ceil(total / 40)), page = Math.min(requestedPage, pages - 1);
     const entries: { component_id: string; component_name: string; hosting_id: string | null; fields: InventoryValues | null; service_name: string | null; component_archived: boolean; hosting_archived: boolean | null; service_archived: boolean | null }[] =
       (await this.sql.query(`SELECT c.id component_id,c.fields->>'name' component_name,h.id hosting_id,h.fields,s.fields->>'name' service_name,c.archived component_archived,h.archived hosting_archived,s.archived service_archived ${from}
         ORDER BY CASE WHEN lower(h.fields->>'environment')='production' THEN 0 ELSE 1 END,
-          lower(c.fields->>'name'),c.id,lower(h.fields->>'environment'),h.id LIMIT 8 OFFSET $3`, [actor.team, projectId, page * 8])).rows;
+          lower(c.fields->>'name'),c.id,lower(h.fields->>'environment'),h.id LIMIT 40 OFFSET $3`, [actor.team, projectId, page * 40])).rows;
     return { entries, total, page, pages };
   }
   async lookupRecord(actor: Actor, kind: RecordKind, selector: string) {

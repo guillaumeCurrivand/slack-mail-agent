@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { budgetReport, type Budget } from './budget.js';
 import type { Actor, IntegrationActor } from './identity.js';
-import type { Messenger } from './slack.js';
+import { sanitizeReply, type Messenger } from './slack.js';
 import { Navigation, type MenuPage } from './navigation.js';
 import type { Sql } from './store.js';
 import { logicalAction } from './presentation.js';
@@ -78,6 +78,7 @@ export class ModuleRegistry {
     action = normalized;
     if (action === 'core:menu') return { module: 'core', payload: { type: 'text', text: 'menu' } };
     if (action === 'core:navigate') return { module: 'core', payload: { type: 'navigation', value } };
+    if (action === 'core:controls') return { module: 'core', payload: { type: 'control_navigation', value } };
     const separator = action.indexOf(':');
     const id = separator > 0 ? action.slice(0, separator) : this.legacyActions.get(action);
     const name = separator > 0 ? action.slice(separator + 1) : action;
@@ -96,6 +97,7 @@ export class ModuleRegistry {
         if (!destination) return navigation.show(actor, eventId, { kind: "Menu indisponible", text: "Ce menu est indisponible. Envoyez menu pour en ouvrir un nouveau.", buttons: [{ label: 'Menu', action: 'core:menu', value: '' }] });
         return navigation.show(actor, eventId, await this.page(destination.page, actor, context), destination.target);
       }
+      if (job.payload.type === 'control_navigation') return navigation.controls(actor, eventId, job.payload.value, job.payload.timestamp);
       if (job.payload.type === 'text' && String(job.payload.text).toLowerCase() === 'budget') {
         return context.messenger.send(actor, { text: await budgetReport(context.budget) });
       }
@@ -107,9 +109,15 @@ export class ModuleRegistry {
     const module = this.modules.get(job.module);
     if (!module) throw new Error('Module is not enabled.');
     const namespace = (message: MenuPage): MenuPage => ({ ...message,
-      ...(message.buttons ? { buttons: message.buttons.map(button => ({ ...button, action: button.action.startsWith('core:') ? button.action : `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })) } : {}),
+      ...(message.buttons ? { buttons: message.buttons.map(button => ({ ...button, action: button.action.includes(':') ? button.action : `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })) } : {}),
     });
-    const messenger: Messenger = { send: (recipient, message) => context.messenger.send(recipient, namespace(message)),
+    let longMessageIndex = 0;
+    const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
+      const prepared = namespace(message);
+      if ((prepared.text.length > 10_000 || (!prepared.kind && sanitizeReply(prepared.text).length > 10_000)) && context.messenger.post && context.messenger.update)
+        return new Navigation(context.sql, context.messenger).show(recipient, `${eventId}:answer:${longMessageIndex++}`, prepared);
+      return context.messenger.send(recipient, prepared);
+    },
       ...(context.messenger.post ? { post: (recipient: Actor, message: MenuPage) => context.messenger.post!(recipient, namespace(message)) } : {}),
       ...(context.messenger.update ? { update: (recipient: Actor, timestamp: string, message: MenuPage) => context.messenger.update!(recipient, timestamp, namespace(message)) } : {}),
     };

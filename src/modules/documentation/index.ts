@@ -32,7 +32,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
   const lifecycle = new Lifecycle(store);
   const questions = new DocumentationQuestions(sql, aiConfig);
   async function deliver(actor: Actor, eventId: string, message: AgentMessage, context: ModuleContext) {
-    if (message.table && tableSize(message.table) > 8500) {
+    if (message.table && tableSize(message.table) > 18_000) {
       const confirmation = message.buttons?.find(button => button.action === 'open_confirmation_record' || button.action.startsWith('confirm_'))?.value;
       if (!confirmation) throw new Error('Large inventory values require a saved review destination.');
       message = { ...message, table: undefined, text: `${message.text}\nLes valeurs enregistrées occupent plusieurs pages. Ouvrez Examiner les valeurs pour les consulter.`, buttons: [...(message.buttons ?? []), { label: "Examiner les valeurs", action: 'open_confirmation_values', value: confirmation }] };

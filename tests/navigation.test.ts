@@ -32,7 +32,8 @@ function blocks(message: Posted) { return message.body.blocks.flatMap((block: an
 function buttons(message: Posted) { return blocks(message).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements); }
 function title(message: Posted) { return message.body.blocks[0]?.title?.text; }
 function richParts(message: Posted) { return blocks(message).filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements.flatMap((section: any) => section.elements)); }
-function button(message: Posted, label: string) { const found = buttons(message).find((item: any) => item.text.text === label); expect(found, label).toBeTruthy(); return found; }
+function findButton(message: Posted, label: string) { return buttons(message).find((item: any) => item.text.text.replace(/^🔵 /, '') === label); }
+function button(message: Posted, label: string) { const found = findButton(message, label); expect(found, `${label}; available: ${buttons(message).map((item: any) => item.text.text).join(', ')}`).toBeTruthy(); return found; }
 async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: AssistantModule[] = []) {
   const config = readConfig(overrides), modules = new ModuleRegistry([...createModules(config, sql, overrides).all(), ...additionalModules]);
   for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
@@ -63,13 +64,25 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
     expect((await post('/slack/events', JSON.stringify({ type: 'event_callback', team_id: actor.team, event_id: randomUUID(), event: { type: 'message', channel_type: 'im', user: actor.user, channel: actor.channel, text } }), 'application/json')).statusCode).toBe(200);
     return drain();
   };
-  const click = async (source: Posted, label: string, actor = alice, ts = source.ts, clickId = randomUUID()) => {
-    const selected = button(source, label);
+  const submit = async (source: Posted, selected: any, actor: typeof alice, ts: string, clickId: string) => {
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts }, actions: [{ action_id: selected.action_id, value: selected.value, action_ts: clickId }] }) }).toString();
     expect((await post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
     return drain();
   };
-  return { dm, click, messages, post, drain, get: (url: string, cookie?: string) => app.inject({ method: 'GET', url, headers: cookie ? { cookie } : {} }), failNext: (outcome: 'reject' | 'uncertain') => { failure = outcome; }, close: () => app.close() };
+  const seek = async (source: Posted, label: string, actor = alice) => {
+    let current = source;
+    for (let step = 0; step < 30 && !findButton(current, label); step++) {
+      const next = button(current, 'Actions suivantes');
+      current = await submit(current, next, actor, current.ts, randomUUID());
+    }
+    button(current, label);
+    return current;
+  };
+  const click = async (source: Posted, label: string, actor = alice, ts = source.ts, clickId = randomUUID()) => {
+    const current = await seek(source, label, actor);
+    return submit(current, button(current, label), actor, ts, clickId);
+  };
+  return { dm, click, seek, messages, post, drain, get: (url: string, cookie?: string) => app.inject({ method: 'GET', url, headers: cookie ? { cookie } : {} }), failNext: (outcome: 'reject' | 'uncertain') => { failure = outcome; }, close: () => app.close() };
 }
 
 it('discovers enabled modules and shared commands in a private main menu without Gmail or AI', async () => {
@@ -79,7 +92,7 @@ it('discovers enabled modules and shared commands in a private main menu without
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
       expect(menu.body.blocks[0].width).toBe('full');
-      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["Messages Slack sans réponse", 'Budget', "Aide"]);
+      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["🔵 Messages Slack sans réponse", '🔵 Budget', "🔵 Aide"]);
       expect(buttons(menu).every((item: any) => item.style === undefined)).toBe(true);
       expect(blocks(menu).filter((block: any) => block.type === 'actions')).toHaveLength(1);
       expect(new Set(buttons(menu).map((item: any) => item.action_id)).size).toBe(3);
@@ -438,7 +451,7 @@ it('keeps old menus recoverable across a restart, disablement and an idempotent 
   const h = await harness({ ...env, ENABLED_MODULES: '' });
   try {
     const fresh = await h.dm('menu');
-    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['Budget', "Aide"]);
+    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['🔵 Budget', "🔵 Aide"]);
     const unavailable = await h.click(old, "Messages Slack sans réponse");
     expect(unavailable.method).toBe('chat.update');
     expect(unavailable.ts).toBe(old.ts);
@@ -588,12 +601,13 @@ it('offers starter rules and removal as separately approved Proposals, then reop
     const saved = await h.click(mail, "Gérer les règles");
     expect(saved.body.text).toContain('Urgent');
     expect((await h.click(reopened, "Approuver les règles")).body.text).toContain('déjà traitée');
-    const remove = await h.click(saved, "Retirer 1");
+    const savedWithRemove = await h.seek(saved, "Retirer 1");
+    const remove = await h.click(savedWithRemove, "Retirer 1");
     expect(remove.body.text).toContain('Supprimer la règle Urgent');
     expect((await h.click(mail, "Gérer les règles")).body.text).toContain('Urgent');
     await h.click(remove, "Approuver les règles");
     expect((await h.click(mail, "Gérer les règles")).body.text).not.toContain('Urgent');
-    expect((await h.click(saved, "Retirer 1")).body.text).toContain('n’est plus disponible');
+    expect((await h.click(savedWithRemove, "Retirer 1")).body.text).toContain('n’est plus disponible');
     expect((await h.click(pending, "Ouvrir 1")).body.text).toContain('indisponible');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
@@ -725,10 +739,56 @@ it('bounds long rule summaries while retaining every page and action', async () 
       expect(text.length).toBeLessThan(12_000);
       expect(text).toContain(`Long rule ${n * 3}`);
       expect(text).toContain("résumés");
-      button(page, "Modifier 1"); button(page, "Retirer 1"); button(page, "Retour au menu");
+      button(await h.seek(page, "Modifier 1"), "Modifier 1"); button(await h.seek(page, "Retirer 1"), "Retirer 1"); button(page, "Retour au menu");
       if (n < 13) page = await h.click(page, "Suivant");
     }
-    expect(buttons(page).some((item: any) => item.text.text === "Suivant")).toBe(false);
+    expect(findButton(page, "Suivant")).toBeUndefined();
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('keeps a long answer in one Slack message with bound in-place text pages', async () => {
+  const answer = `${'A'.repeat(9_500)}\n${'B'.repeat(9_500)}\n${'C'.repeat(9_500)}`;
+  const probe: AssistantModule = { id: 'probe', description: 'Long answer fixture',
+    async handle(actor, _payload, _eventId, context) { await context.messenger.send(actor, { text: answer }); } };
+  const h = await harness(env, [probe]);
+  try {
+    const first = await h.dm('probe answer');
+    expect(first.method).toBe('chat.postMessage');
+    expect(first.body.blocks[0].text).toContain('Réponse — page 1/3');
+    expect(first.body.blocks[0].text).toContain('A'.repeat(9_500));
+    const second = await h.click(first, 'Suivant');
+    expect(second.method).toBe('chat.update');
+    expect(second.ts).toBe(first.ts);
+    expect(second.body.blocks[0].text).toContain('Réponse — page 2/3');
+    expect(second.body.blocks[0].text).toContain('B'.repeat(9_500));
+    const third = await h.click(second, 'Suivant');
+    expect(third.ts).toBe(first.ts);
+    expect(third.body.blocks[0].text).toContain('Réponse — page 3/3');
+    expect(third.body.blocks[0].text).toContain('C'.repeat(9_500));
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
+  } finally { await h.close(); }
+});
+
+it('pages replies by rendered link length without losing clickable destinations', async () => {
+  const urls = Array.from({ length: 70 }, (_, index) => `https://example.com/${String(index).padStart(2, '0')}/${'a'.repeat(85)}`);
+  const probe: AssistantModule = { id: 'probe', description: 'Link answer fixture',
+    async handle(actor, _payload, _eventId, context) { await context.messenger.send(actor, { text: urls.join('\n') }); } };
+  const h = await harness(env, [probe]);
+  try {
+    let page = await h.dm('probe answer');
+    const timestamp = page.ts;
+    const displayed: string[] = [];
+    for (let index = 0; index < 10; index++) {
+      const body = page.body.blocks[0].text as string;
+      expect(body.length).toBeLessThanOrEqual(12_000);
+      displayed.push(body);
+      if (!findButton(page, 'Suivant')) break;
+      page = await h.click(page, 'Suivant');
+      expect(page.ts).toBe(timestamp);
+    }
+    for (const url of urls) expect(displayed.join('\n')).toContain(`[${url}](${url})`);
+    expect(displayed.length).toBeGreaterThan(1);
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
   } finally { await h.close(); }
 });

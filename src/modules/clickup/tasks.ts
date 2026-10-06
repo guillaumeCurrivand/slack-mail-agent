@@ -57,8 +57,8 @@ export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor:
 }
 
 export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connection, workspaceId: string, sourceId: string, requestedPage: number): Promise<MenuPage> {
-  const count = Math.max(1, Math.ceil(scan.tasks.length / 8)), page = Math.min(requestedPage, count - 1);
-  const visible = scan.tasks.slice(page * 8, (page + 1) * 8), accessible: Task[] = [];
+  const count = Math.max(1, Math.ceil(scan.tasks.length / 40)), page = Math.min(requestedPage, count - 1);
+  const visible = scan.tasks.slice(page * 40, (page + 1) * 40), accessible: Task[] = [];
   let accessNotice = '';
   try {
     const identity = await api.identity();

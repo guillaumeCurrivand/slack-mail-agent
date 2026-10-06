@@ -5,7 +5,7 @@ import { createModules } from '../src/app/modules.js';
 import { readConfig } from '../src/app/config.js';
 import { schema } from '../src/app/schema.js';
 import { dispatchJob } from '../src/core/dispatch.js';
-import type { AgentMessage } from '../src/core/slack.js';
+import type { AgentMessage, Button } from '../src/core/slack.js';
 import { JobStore } from '../src/core/store.js';
 import { createServer } from '../src/core/server.js';
 import { ModuleRegistry, type RoutedJob } from '../src/core/modules.js';
@@ -28,19 +28,30 @@ beforeEach(async () => {
 function harness(fetcher: typeof fetch) {
   const module = createClickupModule({ ...env }, sql, { fetcher });
   const modules = new ModuleRegistry([{ ...module, normalizeText: text => frenchCommand('clickup', text) }]);
-  const messages: Array<AgentMessage & { timestamp: string }> = [];
+  const messages: Array<AgentMessage & { timestamp: string; allButtons?: Button[] }> = [];
+  const snapshot = async (message: AgentMessage, timestamp: string) => {
+    const id = message.buttons?.map(button => button.value.split('|')[0]).find(value => /^[0-9a-f-]{36}$/.test(value));
+    const saved = id ? (await sql.query('SELECT content FROM core_navigation_menus WHERE id=$1', [id])).rows[0]?.content as AgentMessage | undefined : undefined;
+    messages.push({ ...message, timestamp, allButtons: saved?.buttons ?? message.buttons });
+  };
   const messenger = {
-    async send(_actor: unknown, message: AgentMessage) { messages.push({ ...message, timestamp: `${messages.length + 1}.000` }); },
-    async post(_actor: unknown, message: AgentMessage) { const timestamp = `${messages.length + 1}.000`; messages.push({ ...message, timestamp }); return timestamp; },
-    async update(_actor: unknown, timestamp: string, message: AgentMessage) { messages.push({ ...message, timestamp }); },
+    async send(_actor: unknown, message: AgentMessage) { await snapshot(message, `${messages.length + 1}.000`); },
+    async post(_actor: unknown, message: AgentMessage) { const timestamp = `${messages.length + 1}.000`; await snapshot(message, timestamp); return timestamp; },
+    async update(_actor: unknown, timestamp: string, message: AgentMessage) { await snapshot(message, timestamp); },
   };
   const run = (route: RoutedJob, actor = alice, id = `event-${messages.length}`) => dispatchJob(sql, { ...runtime, AI_ALERT_USD: 8 }, modules, messenger, { ...route, actor, id });
   const text = (value: string, actor = alice, id?: string) => run(modules.text(value), actor, id);
-  const click = (action: string, message = messages.at(-1)!, actor = alice, id?: string) => {
-    const button = message.buttons!.find(button => button.action === `clickup:${action}`)!;
-    return run({ ...modules.action(button.action, button.value), payload: { ...modules.action(button.action, button.value).payload, timestamp: message.timestamp } }, actor, id);
+  const controls = async (message: AgentMessage & { timestamp: string; allButtons?: Button[] }) => {
+    if (message.allButtons) return message.allButtons;
+    const saved = (await sql.query('SELECT content FROM core_navigation_menus WHERE timestamp=$1', [message.timestamp])).rows[0]?.content as AgentMessage | undefined;
+    return (saved?.buttons ?? message.buttons ?? []).map(button => ({ ...button, action: button.action.includes(':') ? button.action : `clickup:${button.action}` }));
   };
-  return { module, modules, messages, messenger, run, text, click };
+  const click = async (action: string, message = messages.at(-1)!, actor = alice, id?: string) => {
+    const button = (await controls(message)).find(button => button.action === `clickup:${action}`);
+    expect(button, `${action} unavailable`).toBeDefined();
+    return run({ ...modules.action(button!.action, button!.value), payload: { ...modules.action(button!.action, button!.value).payload, timestamp: message.timestamp } }, actor, id);
+  };
+  return { module, modules, messages, messenger, run, text, click, controls };
 }
 
 async function connect(h: ReturnType<typeof harness>, actor = alice) {
@@ -143,9 +154,27 @@ it('opens the private French status picker with unused configured statuses and c
   expect(picker.text).toContain('Unused');
   expect(picker.text).toContain('Finished');
   expect(picker.text).toContain('Personal List');
-  expect(picker.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Fermer', 'Réinitialiser le filtre']));
+  expect((await h.controls(picker)).map(button => button.label)).toEqual(expect.arrayContaining(['Fermer', 'Réinitialiser le filtre']));
   await h.click('status_reset', picker, { ...alice, user: 'UBOB', channel: 'DBOB' });
   expect(h.messages.at(-1)!.text).toContain('indisponible');
+});
+
+it('keeps module actions executable after paging the visible button group', async () => {
+  const h = await connected(provider([]));
+  await h.text('clickup statuts');
+  const first = h.messages.at(-1)!;
+  const next = first.buttons?.find(button => button.label === 'Actions suivantes');
+  expect(next).toBeDefined();
+  const navigation = h.modules.action(next!.action, next!.value);
+  await h.run({ ...navigation, payload: { ...navigation.payload, timestamp: first.timestamp } }, alice, 'visible-controls-next');
+  const second = h.messages.at(-1)!;
+  expect(second.timestamp).toBe(first.timestamp);
+  const choice = second.buttons?.find(button => /^clickup:status_(add|remove)$/.test(button.action));
+  expect(choice).toBeDefined();
+  const selection = h.modules.action(choice!.action, choice!.value);
+  await h.run({ ...selection, payload: { ...selection.payload, timestamp: second.timestamp } }, alice, 'visible-controls-select');
+  expect(h.messages.at(-1)!.kind).toBe('Statuts ClickUp');
+  expect(h.messages.at(-1)!.text).toContain('enregistré');
 });
 
 it('loads a twelve-page catalogue without serializing independent List reads', async () => {
@@ -166,7 +195,7 @@ it('loads a twelve-page catalogue without serializing independent List reads', a
   const h = harness(fetcher), proposal = await connect(h); await h.click('confirm', proposal);
   await h.text('clickup statuts');
   expect(h.messages.at(-1)!.text).toContain('Page 1/12');
-  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Fermer')).toBe(true);
+  expect((await h.controls(h.messages.at(-1)!)).some(button => button.label === 'Fermer')).toBe(true);
   expect(reads).toBe(120); expect(peak).toBeGreaterThan(1); expect(peak).toBeLessThanOrEqual(4);
   const calls = p.calls.length;
   await h.click('status_page'); await chooseStatus(h, 'Status 010', false); await h.click('status_reset');
@@ -178,14 +207,14 @@ it('lets Retirer save immediately during a ClickUp cooldown without provider cal
   await h.text('clickup statuts'); const picker = h.messages.at(-1)!, calls = p.calls.length;
   await sql.query("INSERT INTO clickup_limits(owner,connection_id,retry_at) SELECT owner,connection_id,now()+interval '2 minutes' FROM clickup_connections");
   await chooseStatus(h, 'Unused', false, picker);
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Ajouter Unused');
   expect(h.messages.at(-1)!.text).toContain('Sélection personnelle');
   expect(p.calls).toHaveLength(calls);
   await h.click('status_cancel'); expect(h.messages.at(-1)!.text).toContain('enregistrées');
   expect(p.calls).toHaveLength(calls);
   await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
   await h.text('clickup statuts');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Ajouter Unused');
 });
 
 it('reuses a recent complete catalogue across restart and explicitly refreshes or expires it', async () => {
@@ -213,7 +242,7 @@ it('returns a partial catalogue promptly instead of waiting inside a provider ra
     expect(limited.messages.at(-1)!.text).toContain('incomplète');
     expect(timers.mock.calls.filter(([, delay]) => Number(delay) === 1000)).toHaveLength(0);
     await chooseStatus(limited, 'Unused', false);
-    expect(limited.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+    expect((await limited.controls(limited.messages.at(-1)!)).map(button => button.label)).toContain('Ajouter Unused');
   } finally { timers.mockRestore(); }
 });
 
@@ -233,7 +262,7 @@ it('checkpoints a stalled discovery at its time limit and resumes it with Retry'
     const loading = stalled.text('clickup statuts', alice, 'stalled-catalogue'); await started;
     await vi.advanceTimersByTimeAsync(8000); await loading;
     const partial = stalled.messages.at(-1)!;
-    expect(partial.text).toContain('incomplète'); expect(partial.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+    expect(partial.text).toContain('incomplète'); expect((await stalled.controls(partial)).some(button => button.label === 'Enregistrer')).toBe(false);
     vi.useRealTimers();
     await base.click('status_retry', partial, alice, 'resume-stalled');
     expect(base.messages.at(-1)!.text).toContain('Statuts disponibles');
@@ -275,12 +304,12 @@ it('does not repeat an autosaved Remove during cooldown after a later Add', asyn
   await chooseStatus(h, 'Unused', true);
   await sql.query("UPDATE clickup_limits SET retry_at=now()-interval '1 second'");
   await chooseStatus(h, 'Unused', false, picker, 'cooldown-remove');
-  await h.text('clickup statuts'); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Unused');
+  await h.text('clickup statuts'); expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Unused');
 });
 
 async function chooseStatus(h: ReturnType<typeof harness>, name: string, selected: boolean, message = h.messages.at(-1)!, eventId?: string) {
   const label = `${selected ? 'Ajouter' : 'Retirer'} ${name.slice(0, 60)}`;
-  const button = message.buttons!.find(button => button.label === label)!;
+  const button = (await h.controls(message)).find(button => button.label === label)!;
   expect(button, label).toBeDefined();
   const route = h.modules.action(button.action, button.value);
   await h.run({ ...route, payload: { ...route.payload, timestamp: message.timestamp } }, alice, eventId);
@@ -293,11 +322,11 @@ it('automatically persists Add and Remove across closing and process restart', a
   await h.click('status_cancel');
   const restarted = harness(p.fetcher);
   await restarted.text('clickup statuts', alice, 'autosave-reopen');
-  expect(restarted.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Ajouter Unused');
+  expect((await restarted.controls(restarted.messages.at(-1)!)).map(button => button.label)).toContain('Ajouter Unused');
   await chooseStatus(restarted, 'Closed', true);
   await restarted.text('clickup statuts', alice, 'autosave-reopen-added');
-  expect(restarted.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
-  expect(restarted.messages.at(-1)!.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+  expect((await restarted.controls(restarted.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
+  expect((await restarted.controls(restarted.messages.at(-1)!)).some(button => button.label === 'Enregistrer')).toBe(false);
 });
 
 it('autosaves partial-catalogue changes without dropping undiscovered unfinished statuses', async () => {
@@ -309,13 +338,13 @@ it('autosaves partial-catalogue changes without dropping undiscovered unfinished
   await chooseStatus(h, 'Closed', true);
   await h.click('status_cancel');
   await h.text('clickup statuts');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Unused', 'Retirer Closed']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Unused', 'Retirer Closed']));
   await h.text('clickup tâches');
   expect(h.messages.at(-1)!.table!.rows.map(row => row[0])).toEqual([[{ text: 'Task closed', url: 'https://app.clickup.com/t/closed' }], [{ text: 'Task unloaded', url: 'https://app.clickup.com/t/unloaded' }]]);
   p.failures.clear(); p.locations.set('/api/v2/list/12', { id: '12', statuses: [{ status: 'Unloaded', type: 'custom' }] });
   await h.click('status_retry', partial);
   await h.text('clickup statuts');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Unused', 'Retirer Closed', 'Retirer Unloaded']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Unused', 'Retirer Closed', 'Retirer Unloaded']));
 });
 
 it('does not implicitly save other choices from a legacy unsaved editor', async () => {
@@ -325,26 +354,26 @@ it('does not implicitly save other choices from a legacy unsaved editor', async 
   await sql.query(`UPDATE clickup_status_editors SET data=jsonb_set(data,'{filter}',$1::jsonb)`, [JSON.stringify({ mode: 'custom', names: ['Finished'] })]);
   await chooseStatus(h, 'Closed', true, picker);
   await h.text('clickup statuts');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Closed', 'Retirer In progress', 'Retirer Unused', 'Ajouter Finished']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Closed', 'Retirer In progress', 'Retirer Unused', 'Ajouter Finished']));
 });
 
 it('retains explicit saving through a legacy Enregistrer control', async () => {
   const h = await connected(provider([]));
   await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
   await sql.query(`UPDATE clickup_status_editors SET data=jsonb_set(data,'{filter}',$1::jsonb)`, [JSON.stringify({ mode: 'custom', names: ['Finished'] })]);
-  const boundValue = picker.buttons!.find(button => button.action === 'clickup:status_reset')!.value;
+  const boundValue = (await h.controls(picker)).find(button => button.action === 'clickup:status_reset')!.value;
   const legacy = h.modules.action('clickup:status_save', boundValue);
   await h.run({ ...legacy, payload: { ...legacy.payload, timestamp: picker.timestamp } });
   expect(h.messages.at(-1)!.text).toContain('Votre filtre est enregistré');
   await h.text('clickup statuts');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Ajouter In progress']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Ajouter In progress']));
 });
 
 it('never saves a rejected legacy Save when the same event retries after access returns', async () => {
   const p = provider([]), h = await connected(p);
   await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
   await sql.query(`UPDATE clickup_status_editors SET data=jsonb_set(data,'{filter}',$1::jsonb)`, [JSON.stringify({ mode: 'custom', names: ['Finished'] })]);
-  const legacy = h.modules.action('clickup:status_save', picker.buttons!.find(button => button.action === 'clickup:status_reset')!.value);
+  const legacy = h.modules.action('clickup:status_save', (await h.controls(picker)).find(button => button.action === 'clickup:status_reset')!.value);
   const route = { ...legacy, payload: { ...legacy.payload, timestamp: picker.timestamp } };
   const update = h.messenger.update;
   p.failures.set('/api/v2/user', 403);
@@ -355,11 +384,11 @@ it('never saves a rejected legacy Save when the same event retries after access 
   await h.run(route, alice, 'rejected-legacy-save');
   expect(h.messages.at(-1)!.text).toContain('déjà été traitée');
   await h.text('clickup statuts');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Finished', 'Retirer In progress', 'Retirer Unused']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Ajouter Finished', 'Retirer In progress', 'Retirer Unused']));
 });
 
 it('saves a personal completed-status filter without changing an earlier task snapshot', async () => {
-  const p = provider([[...Array.from({ length: 9 }, (_, index) => task(`active${index}`)), task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Closed', type: 'closed' } })]]), h = await connected(p);
+  const p = provider([[...Array.from({ length: 41 }, (_, index) => task(`active${index}`)), task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Closed', type: 'closed' } })]]), h = await connected(p);
   await h.text('clickup tasks'); const original = h.messages.at(-1)!;
   await h.text('clickup statuts');
   await chooseStatus(h, 'Finished', true);
@@ -369,7 +398,7 @@ it('saves a personal completed-status filter without changing an earlier task sn
   expect(h.messages.at(-1)!.text).toContain('enregistré');
   await h.click('page', original);
   expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
-  expect(h.messages.at(-1)!.table!.rows[0]![0]).toEqual([{ text: 'Task active8', url: 'https://app.clickup.com/t/active8' }]);
+  expect(h.messages.at(-1)!.table!.rows[0]![0]).toEqual([{ text: 'Task active9', url: 'https://app.clickup.com/t/active9' }]);
   await h.text('clickup tasks');
   expect(h.messages.at(-1)!.table!.rows.map(row => row[0])).toEqual([[{ text: 'Task closed', url: 'https://app.clickup.com/t/closed' }], [{ text: 'Task done', url: 'https://app.clickup.com/t/done' }]]);
   expect(h.messages.at(-1)!.text).toContain('Finished');
@@ -377,7 +406,7 @@ it('saves a personal completed-status filter without changing an earlier task sn
   await h.click('tasks', original);
   expect(h.messages.at(-1)!.text).toContain('Finished');
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Retirer Closed', 'Ajouter In progress']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Finished', 'Retirer Closed', 'Ajouter In progress']));
 });
 
 it('does not apply a rejected last-status Remove when delivery is retried after a later Add', async () => {
@@ -391,7 +420,7 @@ it('does not apply a rejected last-status Remove when delivery is retried after 
   await chooseStatus(h, 'Finished', true, empty);
   await chooseStatus(h, 'Unused', false, empty, 'empty-remove');
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Unused', 'Retirer Finished']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Retirer Unused', 'Retirer Finished']));
 });
 
 it('keeps autosaved changes after closing and applies Reset immediately', async () => {
@@ -399,7 +428,7 @@ it('keeps autosaved changes after closing and applies Reset immediately', async 
   await h.text('clickup statuses'); await chooseStatus(h, 'Unused', false);
   await h.text('clickup statuses'); await chooseStatus(h, 'Closed', true); await h.click('status_cancel');
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
   await h.click('status_reset');
   await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('2 tâches');
   expect(h.messages.at(-1)!.text).toContain('tous les statuts non terminés');
@@ -412,7 +441,7 @@ it('rejects an outdated editor instead of overwriting a newer saved filter', asy
   await chooseStatus(h, 'Finished', true, older);
   expect(h.messages.at(-1)!.text).toContain('autre sauvegarde');
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
 });
 
 it.each(['remove', 'reset'] as const)('rejects an outdated %s without changing the current filter or calling ClickUp', async change => {
@@ -425,7 +454,7 @@ it.each(['remove', 'reset'] as const)('rejects an outdated %s without changing t
   expect(h.messages.at(-1)!.text).toContain('autre sauvegarde');
   expect(p.calls).toHaveLength(reads);
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toEqual(expect.arrayContaining(['Retirer In progress', 'Ajouter Unused', 'Ajouter Finished']));
 });
 
 it('resumes incomplete status discovery while preserving autosaved choices', async () => {
@@ -433,7 +462,7 @@ it('resumes incomplete status discovery while preserving autosaved choices', asy
   p.failures.set('/api/v2/list/12', 403);
   await h.text('clickup statuses'); const incomplete = h.messages.at(-1)!;
   expect(incomplete.text).toContain('incomplète');
-  expect(incomplete.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+  expect((await h.controls(incomplete)).some(button => button.label === 'Enregistrer')).toBe(false);
   await chooseStatus(h, 'Closed', true);
   await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('inclus explicitement : Closed');
   const successfulReads = p.calls.filter(path => path.startsWith('/api/v2/team/42/space')).length;
@@ -441,7 +470,7 @@ it('resumes incomplete status discovery while preserving autosaved choices', asy
   expect(h.messages.at(-1)!.text).toContain('Statuts disponibles');
   expect(p.calls.filter(path => path.startsWith('/api/v2/team/42/space'))).toHaveLength(successfulReads);
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
 });
 
 it('does not repeat a saved effect after delivery rejection and a later reset', async () => {
@@ -467,7 +496,7 @@ it('keeps preferences across disconnect, replacement and disabled-module startup
   await h.click('status_reset', oldEditor); expect(h.messages.at(-1)!.text).toContain('indisponible');
   p.changeIdentity(8); const replacement = await connect(h); await h.click('confirm', replacement);
   await h.text('clickup statuses');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
 });
 
 it('retains unavailable names without falling back to unfinished tasks', async () => {
@@ -483,7 +512,7 @@ it('retains unavailable names without falling back to unfinished tasks', async (
   await h.text('clickup statuses');
   await h.click('status_retry');
   expect(h.messages.at(-1)!.text).toContain('Finished · indisponible');
-  expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Finished');
+  expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Finished');
   await h.text('clickup tasks');
   expect(h.messages.at(-1)!.text).toContain('Filtre appliqué : Finished');
   expect(h.messages.at(-1)!.text).toContain('0 tâches');
@@ -508,7 +537,7 @@ it('discovers archived, nested, folderless and shared-only definitions with one 
   const h = await connected(p); await h.text('clickup statuses');
   const picker = h.messages.at(-1)!;
   for (const name of ['Archived', 'Inherited', 'Nested', 'Folderless', 'Shared list', 'Shared task home']) expect(picker.text).toContain(name);
-  expect(picker.buttons!.filter(button => button.label === 'Retirer In progress')).toHaveLength(1);
+  expect((await h.controls(picker)).filter(button => button.label === 'Retirer In progress')).toHaveLength(1);
   expect(picker.text).toContain('Statuts disponibles');
 });
 
@@ -518,7 +547,7 @@ it('keeps more than 100 status choices reachable and preserves a saved filter af
   p.locations.set('/api/v2/folder/11', { id: '11', statuses }); p.locations.set('/api/v2/list/12', { id: '12', statuses });
   const h = await connected(p); await h.text('clickup statuses');
   for (let page = 1; page < 15; page++) {
-    const message = h.messages.at(-1)!, next = message.buttons!.find(button => button.label === 'Suivant')!;
+    const message = h.messages.at(-1)!, next = (await h.controls(message)).find(button => button.label === 'Suivant')!;
     const route = h.modules.action(next.action, next.value);
     await h.run({ ...route, payload: { ...route.payload, timestamp: message.timestamp } });
   }
@@ -547,7 +576,7 @@ it('keeps an editor recoverable during a catalogue rate-limit cooldown without a
   await h.click('status_retry', incomplete, alice, 'limited-catalogue-retry');
   expect(h.messages.at(-1)!.text).toContain('temporairement');
   expect(h.messages.at(-1)!.text).not.toContain('Reconnectez');
-  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Réessayer')).toBe(true);
+  expect((await h.controls(h.messages.at(-1)!)).some(button => button.label === 'Réessayer')).toBe(true);
   // Simulate the provider's cooldown ending, then reconstruct the process.
   await sql.query('UPDATE clickup_limits SET retry_at=now()-interval \'1 second\'');
   await base.click('status_retry', incomplete, alice, 'catalogue-recovered');
@@ -560,12 +589,12 @@ it('keeps each User’s saved filter independent and rejects another DM or messa
   p.changeIdentity(8); const proposal = await connect(h, bob); await h.click('confirm', proposal, bob);
   await h.text('clickup statuses', bob); expect(h.messages.at(-1)!.text).toContain('Filtre par défaut');
   p.changeIdentity(7); await h.text('clickup statuses'); const picker = h.messages.at(-1)!;
-  expect(picker.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  expect((await h.controls(picker)).map(button => button.label)).toContain('Retirer Closed');
   await h.click('status_reset', picker, { ...alice, channel: 'DOTHER' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
   await h.click('status_reset', { ...picker, timestamp: '999.000' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
   await sql.query("UPDATE clickup_status_editors SET expires_at=now()-interval '1 second'");
   await h.click('status_reset', picker); expect(h.messages.at(-1)!.text).toContain('expiré');
-  await h.text('clickup statuses'); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+  await h.text('clickup statuses'); expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
 });
 
 it('blocks an unresolved shared task’s home List and hides a cached catalogue after workspace revocation', async () => {
@@ -574,7 +603,7 @@ it('blocks an unresolved shared task’s home List and hides a cached catalogue 
   p.tasks.set('shared', task('shared', { list: { id: '33', name: 'Private home' } }));
   p.locations.set('/api/v2/list/33', { id: '33', statuses: [] });
   await h.text('clickup statuts'); const picker = h.messages.at(-1)!;
-  expect(picker.text).toContain('incomplète'); expect(picker.buttons!.some(button => button.label === 'Enregistrer')).toBe(false);
+  expect(picker.text).toContain('incomplète'); expect((await h.controls(picker)).some(button => button.label === 'Enregistrer')).toBe(false);
   p.failures.set('/api/v2/team', 403);
   await h.click('status_retry', picker);
   expect(h.messages.at(-1)!.text).toContain('Reconnectez'); expect(h.messages.at(-1)!.text).not.toContain('Unused');
@@ -592,29 +621,29 @@ it('routes signed French status commands and editor controls through Slack ingre
     const job = (await sql.query("SELECT * FROM jobs WHERE id='slack:status-command'")).rows[0];
     expect(job.module).toBe('clickup'); expect(job.payload.text).toBe('statuses');
     await h.run(job, job.actor, job.id); const picker = h.messages.at(-1)!;
-    const add = picker.buttons!.find(button => button.label === 'Ajouter Closed')!;
+    const add = (await h.controls(picker)).find(button => button.label === 'Ajouter Closed')!;
     const action = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: picker.timestamp }, actions: [{ action_id: add.action, value: add.value }] }) }).toString();
     expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: action, headers: { ...signed(action), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
     const click = (await sql.query("SELECT * FROM jobs WHERE id LIKE 'action:%'")).rows[0];
     expect(click.payload.action).toBe('status_add');
-    await h.run(click, click.actor, click.id); expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+    await h.run(click, click.actor, click.id); expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
     await h.text('clickup statuses');
-    expect(h.messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+    expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
   } finally { await app.close(); }
 });
 
-it('fetches all raw pages and lists direct assignments in a linked eight-row table, excluding only completed/individual archives', async () => {
+it('fetches all raw pages and lists direct assignments in a linked forty-row table, excluding only completed/individual archives', async () => {
   const p = provider([
     [task('done', { status: { status: 'Finished', type: 'done' } }), task('closed', { status: { status: 'Complete', type: 'closed' } }), task('archived', { archived: true }), task('other', { assignees: [{ id: 8 }] })],
-    [task('old', { due_date: String(Date.UTC(2020, 0, 1)) }), task('subtask', { parent: 'someone-elses-task', assignees: [{ id: 7 }, { id: 8 }] }), task('active-in-archived-folder', { folder: { archived: true } }), ...Array.from({ length: 7 }, (_, i) => task(`item${i}`))],
+    [task('old', { due_date: String(Date.UTC(2020, 0, 1)) }), task('subtask', { parent: 'someone-elses-task', assignees: [{ id: 7 }, { id: 8 }] }), task('active-in-archived-folder', { folder: { archived: true } }), ...Array.from({ length: 39 }, (_, i) => task(`item${i}`))],
   ]);
   const h = await connected(p);
   await h.text('clickup tasks');
   const first = h.messages.at(-1)!;
   expect(first.table!.columns).toEqual(['Tâche', 'Statut', 'Échéance', 'Priorité', 'Workspace', 'Liste']);
-  expect(first.table!.rows).toHaveLength(8);
+  expect(first.table!.rows).toHaveLength(40);
   expect(first.table!.rows[0]![0]).toEqual([{ text: 'Task old', url: 'https://app.clickup.com/t/old' }]);
-  expect(first.text).toContain('10 tâches');
+  expect(first.text).toContain('42 tâches');
   expect(p.calls.filter(url => url.startsWith('/api/v2/team/42/task')).map(url => new URL(`https://unused${url}`).searchParams.get('page'))).toEqual(['0', '1', '2']);
   await h.click('page', first);
   expect(h.messages.at(-1)!.table!.rows).toHaveLength(2);
@@ -622,7 +651,7 @@ it('fetches all raw pages and lists direct assignments in a linked eight-row tab
 });
 
 it('hides cached task text when task access, workspace access or authenticated identity is lost', async () => {
-  const p = provider([Array.from({ length: 10 }, (_, i) => task(`a${i}`, { name: `Secret ${i}` }))]), h = await connected(p);
+  const p = provider([Array.from({ length: 42 }, (_, i) => task(`a${i}`, { name: `Secret ${i}` }))]), h = await connected(p);
   await h.text('clickup tasks'); const first = h.messages.at(-1)!;
   p.failures.set('/api/v2/task/a8', 403);
   await h.click('page', first);
@@ -642,7 +671,7 @@ it('shows partial coverage when provider pages fail and detects repeated paginat
   p.failures.set('/api/v2/team/42/task?assignees%5B%5D=7&subtasks=true&include_closed=false&page=1&order_by=id', 400);
   await h.text('clickup tasks');
   expect(h.messages.at(-1)!.text).toContain('Résultats incomplets : 1 tâches récupérées');
-  expect(h.messages.at(-1)!.buttons!.some(button => button.label === 'Réessayer')).toBe(true);
+  expect((await h.controls(h.messages.at(-1)!)).some(button => button.label === 'Réessayer')).toBe(true);
   p.failures.clear();
   p.tasks.set('two', task('two'));
   const looping = provider([[task('one')], [task('one')]]), h2 = harness(looping.fetcher);
@@ -701,7 +730,7 @@ it('rejects a wrong browser, replayed and expired OAuth links and unauthorized M
 });
 
 it('never renews expired results or connection confirmations and rejects wrong-DM/message controls', async () => {
-  const p = provider([Array.from({ length: 10 }, (_, i) => task(`a${i}`))]), h = await connected(p);
+  const p = provider([Array.from({ length: 41 }, (_, i) => task(`a${i}`))]), h = await connected(p);
   await h.text('clickup tasks'); const result = h.messages.at(-1)!;
   await h.click('tasks', result, { ...alice, channel: 'DOTHER' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
   await h.click('tasks', { ...result, timestamp: '999.000' }); expect(h.messages.at(-1)!.text).toContain('indisponible');
@@ -723,7 +752,7 @@ it('admits signed French commands and Refresh into one operation slot and hides 
   await app.inject({ method: 'POST', url: '/slack/events', payload: raw2, headers: { ...signed(raw2), 'content-type': 'application/json' } });
   const jobs = (await sql.query("SELECT * FROM jobs WHERE id IN('slack:first','slack:second') ORDER BY id")).rows;
   expect(jobs[0].module).toBe('clickup'); expect(jobs[1].payload.original).toBe('slack:first'); expect(jobs[1].module).toBe('core');
-  const refresh = result.buttons!.find(button => button.action === 'clickup:tasks')!;
+  const refresh = (await h.controls(result)).find(button => button.action === 'clickup:tasks')!;
   const action = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: result.timestamp }, actions: [{ action_id: refresh.action, value: refresh.value }] }) }).toString();
   expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: action, headers: { ...signed(action), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
   const duplicate = (await sql.query("SELECT payload FROM jobs WHERE id LIKE 'action:%'")).rows[0];
@@ -741,7 +770,7 @@ it('renders the result as a native Slack table with literal values and ClickUp l
   const sent: any[] = [];
   const slack = new Slack('fake', (async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) as typeof fetch);
   await slack.send(alice, result);
-  const table = sent[0].blocks.find((block: any) => block.type === 'table');
+  const table = sent[0].blocks.find((block: any) => block.type === 'data_table');
   expect(table.rows.length).toBe(2);
   expect(JSON.stringify(table)).toContain('https://app.clickup.com/t/one');
 });
@@ -807,7 +836,7 @@ it('retries temporary provider errors and resolves missing own-archive metadata 
 });
 
 it('preserves pending replacement until approval and invalidates old results only when the new account is activated', async () => {
-  const p = provider([Array.from({ length: 10 }, (_, i) => task(`a${i}`))]), h = await connected(p);
+  const p = provider([Array.from({ length: 41 }, (_, i) => task(`a${i}`))]), h = await connected(p);
   await h.text('clickup tasks'); const result = h.messages.at(-1)!;
   p.changeIdentity(8); const replacement = await connect(h); p.changeIdentity(7);
   await h.click('page', result); expect(h.messages.at(-1)!.table).toBeDefined();

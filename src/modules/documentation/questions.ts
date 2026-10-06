@@ -153,8 +153,8 @@ export class DocumentationQuestions {
     }
     if (!saved.project_id) {
       if (new Date(saved.created_at).getTime() <= Date.now() - 30 * 60_000) return { kind: "Choix expiré", text: "Répétez la question documentation pour obtenir de nouveaux choix." };
-      const ids = saved.candidates ?? [], pages = Math.max(1, Math.ceil(ids.length / 8)), page = Math.min(Number(match[3]), pages - 1);
-      const projects = (await Promise.all(ids.slice(page * 8, page * 8 + 8).map(id => this.store.project(actor, id)))).filter(p => p !== undefined);
+      const ids = saved.candidates ?? [], pages = Math.max(1, Math.ceil(ids.length / 40)), page = Math.min(Number(match[3]), pages - 1);
+      const projects = (await Promise.all(ids.slice(page * 40, page * 40 + 40).map(id => this.store.project(actor, id)))).filter(p => p !== undefined);
       return { kind: "Choisir un projet", text: `Projet ambigu. Choisissez une fiche. Aucun contexte de projet n’a été établi.\nChoix — page ${page + 1}/${pages}`,
         ...await presentation.list(projects.map(project => ({ ...project, kind: 'project' as const })), projects.map(project => `questionchoice_${saved.id}_${project.id}`)), links: this.pagination(saved.id, page, pages) };
     }
@@ -176,8 +176,8 @@ export class DocumentationQuestions {
       if (!result.entries.length) text = "Composants : inconnus\nHébergements : inconnus";
     } else if (plan.operation === 'technologies') {
       const result = await this.sql.query(`SELECT id,fields,archived FROM documentation_records WHERE team=$1 AND kind='component' AND parent_id=$2 ORDER BY lower(fields->>'name'),id`, [actor.team, project.id]);
-      pages = Math.max(1, Math.ceil(result.rows.length / 8)); page = Math.min(Number(match[3]), pages - 1);
-      const view = await presentation.list(result.rows.slice(page * 8, page * 8 + 8).map(component => ({ ...component, kind: 'component' as const })));
+      pages = Math.max(1, Math.ceil(result.rows.length / 40)); page = Math.min(Number(match[3]), pages - 1);
+      const view = await presentation.list(result.rows.slice(page * 40, page * 40 + 40).map(component => ({ ...component, kind: 'component' as const })));
       table = view.table; recordChoices = view.recordChoices;
       text = result.rows.length ? '' : "Composants : inconnus\nTechnologies : inconnues";
     }

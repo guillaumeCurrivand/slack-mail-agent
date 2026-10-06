@@ -1,3 +1,5 @@
 # Sanitized markdown Replies, not mrkdwn sections
 
-Agent messages used `plain_text` sections so model and email content could not mention people or invent links. Conversational Replies now post as Slack `markdown` blocks so standard markdown can render. Mentions and links stay blocked by sanitizing, not by using `section` `mrkdwn`, which would reintroduce Slack mention syntax and a different markup dialect than the model is instructed to write.
+Status: superseded by [ADR 0007](0007-clickable-displayed-links.md) for link handling. Mention sanitization and the choice of Slack markdown for Replies still apply.
+
+Agent messages used `plain_text` sections so model and email content could not mention people or invent links. Conversational Replies moved to Slack `markdown` blocks so standard markdown could render. At this decision point, sanitization blocked both mentions and links rather than using `section` `mrkdwn`; [ADR 0007](0007-clickable-displayed-links.md) later changed link handling while retaining mention sanitization.

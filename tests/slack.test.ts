@@ -3,15 +3,15 @@ import { Slack, type AgentMessage } from '../src/core/slack.js';
 
 const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 
-it('keeps native tables outside containers, links only validated destinations and rejects oversized tables before delivery', async () => {
+it('keeps data tables outside containers, links displayed web destinations and rejects oversized tables before delivery', async () => {
   const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ["Nom", "Liens"], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: "Retour", action: 'core:navigate', value: 'bound|main' }] });
-  expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'table', 'container']);
+  expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'data_table', 'container']);
   expect(body.blocks[0].child_blocks.every((block: any) => block.type !== 'actions')).toBe(true);
   expect(body.blocks[1].rows[1][0]).toEqual({ type: 'raw_text', text: 'Literal <@UBOB>' });
   expect(body.blocks[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
   const sent: unknown[] = [];
   const slack = new Slack('token', (async () => { sent.push(true); return Response.json({ ok: true }); }) as typeof fetch);
-  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ["Nom"], rows: [['x'.repeat(10_000)]] } })).rejects.toThrow('exceeds Slack limits');
+  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ["Nom"], rows: [['x'.repeat(20_000)]] } })).rejects.toThrow('exceeds Slack limits');
   expect(sent).toHaveLength(0);
 });
 
@@ -51,7 +51,7 @@ it('keeps allowed Reply markup', async () => {
   expect(body.blocks[0]).toEqual({ type: 'markdown', text });
 });
 
-it('strips Slack mentions, images, markdown links, autolinks, and raw URL sequences from Reply text', async () => {
+it('keeps web links in Replies while stripping Slack mentions', async () => {
   const body = await post({
     text: 'Hi <@U123> <!channel> <!here> <!everyone> <#C99|inbox>. See ![logo](https://evil.example/x.png) and [docs](https://evil.example/docs) plus https://evil.example/bare www.evil.example/site [ref][1] <https://evil.example/auto> <http://evil.example/raw> <mailto:phish@evil.example>.\n[1]: https://evil.example/ref',
   });
@@ -62,11 +62,11 @@ it('strips Slack mentions, images, markdown links, autolinks, and raw URL sequen
   expect(posted).not.toMatch(/<!everyone>/);
   expect(posted).not.toMatch(/<#/);
   expect(posted).not.toMatch(/!\[[^\]]*\]\(/);
-  expect(posted).not.toMatch(/\[[^\]]*\]\(/);
-  expect(posted).not.toMatch(/https?:\/\//i);
-  expect(posted).not.toMatch(/<http/i);
+  expect(posted).toContain('[docs](https://evil.example/docs)');
+  expect(posted).toContain('[https://evil.example/bare](https://evil.example/bare)');
+  expect(posted).toContain('[www.evil.example/site](https://www.evil.example/site)');
+  expect(posted).toContain('[https://evil.example/auto](https://evil.example/auto)');
   expect(posted).not.toMatch(/mailto:/i);
-  expect(posted).not.toMatch(/\bwww\./i);
   expect(posted).not.toMatch(/\[[^\]]*]\[[^\]]*]/);
   expect(posted).toContain('Hi');
   expect(posted).toContain('See');
@@ -119,41 +119,39 @@ it('keeps existing buttons with the Card content', async () => {
   });
 });
 
-it.each(['Connexion', 'Connect'])('keeps the engine-owned %s URL clickable after sanitizing', async kind => {
+it.each(['Connexion', 'Connect'])('makes all displayed %s URLs clickable', async kind => {
   const url = 'https://agent.example.com/auth/google?ticket=abc';
   const body = await post({
     kind,
     text: `Ignore https://evil.example/phish\nConnect your own Google Workspace mailbox using this single-use link (expires in 10 minutes):\n${url}`,
   });
   expect(card(body).title.text).toBe(kind);
-  expect(cardParts(body)).toContainEqual({ type: 'link', text: url, url, style: { bold: true } });
-  expect(JSON.stringify(cardParts(body))).not.toContain('https://evil.example/phish');
+  expect(cardParts(body)).toContainEqual({ type: 'link', text: url, url });
+  expect(cardParts(body)).toContainEqual({ type: 'link', text: 'https://evil.example/phish', url: 'https://evil.example/phish' });
   expect(body.text).toContain(url);
   expect(body.parse).toBe('none');
   expect(body.unfurl_links).toBe(false);
 });
 
-it('posts escaped email interpolation as literal rich text under a Details kind header', async () => {
+it('makes escaped email links clickable under a Details kind header', async () => {
   const body = await post({
     kind: "Détails",
     text: 'Run abc\\-123 — page 1/1\n\n1. \\*\\*FREE\\*\\*\nDe : \\[click\\]\\(http://evil\\)\nMessage: \\*\\*id\\*\\*',
   });
   expect(card(body).title.text).toBe("Détails");
   expect(cardParts(body)).toContainEqual({ type: 'text', text: '1. **FREE**' });
-  expect(cardParts(body)).toContainEqual({ type: 'text', text: "De : [click](http://evil)" });
-  expect(cardParts(body).some((part: any) => part.type === 'link')).toBe(false);
+  expect(cardParts(body)).toContainEqual({ type: 'link', text: 'click', url: 'http://evil' });
   expect(body.text).toBe("Run abc-123 — page 1/1\n\n1. **FREE**\nDe : [click](http://evil)\nMessage: **id**");
 });
 
-it('posts escaped rule interpolation as literal rich text under a Your rules kind header', async () => {
+it('makes escaped rule links clickable under a Your rules kind header', async () => {
   const body = await post({
     kind: "Vos règles",
     text: '\\*\\*FREE\\*\\*\nSee \\[click\\]\\(http://evil\\)',
   });
   expect(card(body).title.text).toBe("Vos règles");
   expect(cardParts(body)).toContainEqual({ type: 'text', text: '**FREE**' });
-  expect(cardParts(body)).toContainEqual({ type: 'text', text: 'See [click](http://evil)' });
-  expect(cardParts(body).some((part: any) => part.type === 'link')).toBe(false);
+  expect(cardParts(body)).toContainEqual({ type: 'link', text: 'click', url: 'http://evil' });
   expect(body.text).toBe('**FREE**\nSee [click](http://evil)');
 });
 
@@ -161,7 +159,7 @@ it.each([['Messages sans réponse', 'Ouvrir le message'], ['Unanswered for you',
   const url = 'https://example.slack.com/archives/C123/p123';
   const body = await post({ kind, text: `*#team*\n• Alice: Please reply [${label}](${url})` });
   expect(cardParts(body)).toContainEqual({ type: 'text', text: '#team', style: { bold: true } });
-  expect(cardParts(body)).toContainEqual({ type: 'link', text: label, url, style: { bold: true } });
+  expect(cardParts(body)).toContainEqual({ type: 'link', text: label, url });
   expect(card(body).child_blocks.some((block: any) => block.type === 'actions')).toBe(false);
 });
 
@@ -176,4 +174,28 @@ it('groups repeated logical actions horizontally and preserves order across the 
   expect(controls.map((control: any) => control.value)).toEqual(buttons.map(button => button.value));
   expect(new Set(controls.map((control: any) => control.action_id)).size).toBe(28);
   expect(controls.map((control: any) => control.action_id)).toEqual(buttons.map((_, index) => `channel_select~button-${index}`));
+});
+
+it('keeps surrounding punctuation outside clickable bare URLs', async () => {
+  const reply = await post({ text: 'See (https://example.com/a(b)) and https://example.com/next.' });
+  expect(reply.blocks[0].text).toContain('[https://example.com/a(b)](https://example.com/a(b))');
+  expect(reply.blocks[0].text).toContain('[https://example.com/next](https://example.com/next).');
+  const card = await post({ kind: 'Aide', text: 'See (https://example.com/a(b)) and https://example.com/next.' });
+  const links = cardParts(card).filter((part: any) => part.type === 'link');
+  expect(links.map((part: any) => part.url)).toEqual(['https://example.com/a(b)', 'https://example.com/next']);
+});
+
+it('preserves underscores inside one-time invitation URLs', async () => {
+  const url = 'https://agent.example.com/auth/google?ticket=abc_def_ghi';
+  const body = await post({ kind: 'Connexion', text: `Connectez-vous avec ce lien :\n${url}` });
+  expect(cardParts(body).find((part: any) => part.type === 'link')).toMatchObject({ text: url, url });
+});
+
+it('keeps parentheses inside labeled destinations clickable', async () => {
+  const url = 'https://example.com/wiki/Function_(mathematics)';
+  const text = `Read [reference](${url}).`;
+  const reply = await post({ text });
+  expect(reply.blocks[0].text).toContain(`[reference](${url}).`);
+  const card = await post({ kind: 'Aide', text });
+  expect(cardParts(card)).toContainEqual({ type: 'link', text: 'reference', url });
 });
