@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto';
 import type { Actor } from '../../core/identity.js';
 import { Navigation, type MenuPage, type MenuTarget } from '../../core/navigation.js';
-import { escapeCardValue, menuButton, type Button } from '../../core/slack.js';
+import { menuButton, type Button } from '../../core/slack.js';
 import type { StatusEditor } from './domain.js';
 import { ClickupAPI, ClickupError } from './api.js';
 import { formatDate, formatNumber } from '../../core/presentation.js';
@@ -21,21 +21,26 @@ export function statusPage(editor: StatusEditor, requestedPage = 0, notice = '')
   const names = choices.filter(choice => matchesStatus(filter, choice.name, choice.unfinished)).map(choice => choice.name);
   const pages = Math.max(1, Math.ceil(choices.length / 10)), page = Math.min(requestedPage, pages - 1);
   const selected = new Set(names), visible = choices.slice(page * 10, (page + 1) * 10);
-  const buttons: Button[] = visible.filter(choice => choice.available || selected.has(choice.name)).map(choice => ({
-    label: `${selected.has(choice.name) ? 'Retirer' : 'Ajouter'} ${choice.name.slice(0, 60)}`,
+  const rowButtons = visible.map(choice => choice.available || selected.has(choice.name) ? {
+    label: selected.has(choice.name) ? '☑ Retirer' : '☐ Ajouter',
     action: selected.has(choice.name) ? 'status_remove' : 'status_add', value: `${editor.id}|${page}|${choiceKey(choice.name)}`,
-  }));
+  } : null);
+  const buttons: Button[] = [];
   if (page > 0) buttons.push({ label: 'Précédent', action: 'status_page', value: `${editor.id}|${page - 1}` });
   if (page + 1 < pages) buttons.push({ label: 'Suivant', action: 'status_page', value: `${editor.id}|${page + 1}` });
   if (!catalogue.complete) buttons.push({ label: 'Réessayer', action: 'status_retry', value: `${editor.id}|${page}` });
   if (catalogue.complete) buttons.push({ label: 'Actualiser les statuts', action: 'status_retry', value: `${editor.id}|${page}` });
   buttons.push({ label: 'Réinitialiser le filtre', action: 'status_reset', value: `${editor.id}|${page}` }, { label: 'Fermer', action: 'status_cancel', value: `${editor.id}|${page}` });
-  return { kind: 'Statuts ClickUp', bindButtons: true, buttonPaging: true, buttons, text: [
+  return { kind: 'Statuts ClickUp', bindButtons: true, buttons,
+    ...(visible.length ? { table: { columns: ['Statut', 'Inclus', 'Disponibilité'],
+      rows: visible.map(choice => [choice.name, selected.has(choice.name) ? 'Oui' : 'Non', choice.available ? 'Disponible' : catalogue.complete ? 'Indisponible' : 'Non vérifié']),
+      rowButtons, rowButtonColumn: 'Sélection', rowButtonFallback: 'Ouvrez clickup statuts dans un client Slack récent',
+    } } : {}), text: [
     notice, filter.mode === 'default' ? `Filtre par défaut : ${filterSummary(filter)}.` : `Sélection personnelle : ${formatNumber(names.length)} statuts.`,
-    'Chaque ajout, retrait ou réinitialisation est enregistré automatiquement. Ce sélecteur expire après 30 minutes.',
-    catalogue.complete ? `Statuts disponibles · Page ${formatNumber(page + 1)}/${formatNumber(pages)}.` : 'Liste des statuts incomplète. Les modifications sont enregistrées ; Réessayer poursuit la découverte.',
+    '☑ Retirer exclut un statut ; ☐ Ajouter l’inclut. Chaque modification est enregistrée automatiquement. Ce sélecteur expire après 30 minutes.',
+    catalogue.complete ? `Statuts disponibles · Page ${formatNumber(page + 1)}/${formatNumber(pages)}.` : `Liste des statuts incomplète · Page ${formatNumber(page + 1)}/${formatNumber(pages)}. Les modifications sont enregistrées ; Réessayer poursuit la découverte.`,
     catalogue.checkedAt ? `Catalogue vérifié : ${formatDate(catalogue.checkedAt)}. Réutilisé pendant 5 minutes ; Actualiser les statuts relance la découverte.` : '',
-    ...visible.map(choice => `${selected.has(choice.name) ? '✓' : '○'} ${escapeCardValue(choice.name)}${catalogue.complete && !catalogue.choices.some(available => available.name === choice.name) ? ' · indisponible' : ''}`),
+    !visible.length ? 'Aucun statut découvert pour le moment.' : '',
     'Les noms identiques s’appliquent à toutes les listes de Mayasquad. La découverte des statuts de Personal List est différée.',
   ].filter(Boolean).join('\n') };
 }

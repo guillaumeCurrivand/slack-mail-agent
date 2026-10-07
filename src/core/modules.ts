@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { budgetReport, type Budget } from './budget.js';
 import type { Actor, IntegrationActor } from './identity.js';
-import { sanitizeReply, type Messenger } from './slack.js';
+import { sanitizeReply, type Button, type Messenger } from './slack.js';
 import { Navigation, needsControlPaging, type MenuPage } from './navigation.js';
 import type { Sql } from './store.js';
 import { logicalAction } from './presentation.js';
@@ -11,6 +11,15 @@ export type JobPayload = Record<string, unknown>;
 export type RoutedJob = { module: string; payload: JobPayload };
 export type ModuleContext = { sql: Sql; budget: Budget; messenger: Messenger; requestedAt: Date };
 export type IntegrationContext = Pick<ModuleContext, 'sql' | 'messenger' | 'requestedAt'>;
+const namespaceMessage = (message: MenuPage, moduleId: string): MenuPage => {
+  const button = (control: Button): Button => ({ ...control,
+    action: control.action.includes(':') ? control.action : `${control.scope === 'core' ? 'core' : moduleId}:${control.action}`,
+  });
+  return { ...message,
+    ...(message.buttons ? { buttons: message.buttons.map(button) } : {}),
+    ...(message.table?.rowButtons ? { table: { ...message.table, rowButtons: message.table.rowButtons.map(control => control ? button(control) : null) } } : {}),
+  };
+};
 export interface AssistantModule {
   id: string;
   description: string;
@@ -108,9 +117,7 @@ export class ModuleRegistry {
     }
     const module = this.modules.get(job.module);
     if (!module) throw new Error('Module is not enabled.');
-    const namespace = (message: MenuPage): MenuPage => ({ ...message,
-      ...(message.buttons ? { buttons: message.buttons.map(button => ({ ...button, action: button.action.includes(':') ? button.action : `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })) } : {}),
-    });
+    const namespace = (message: MenuPage) => namespaceMessage(message, module.id);
     let pagedMessageIndex = 0;
     const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
       const prepared = namespace(message);
@@ -137,7 +144,7 @@ export class ModuleRegistry {
     const module = this.modules.get(id!);
     if (!module) return { kind: "Module indisponible", text: "Ce module n’est pas activé. Aucun traitement n’a été lancé.", links: back };
     const page = module.menu ? await module.menu(actor, section, context) : { kind: module.name ?? module.id, text: `${module.description}. Envoyez ${module.aliases?.[0] ?? module.id} aide.` };
-    return { ...page, buttons: page.buttons?.map(button => ({ ...button, action: `${button.scope === 'core' ? 'core' : module.id}:${button.action}` })),
+    return { ...namespaceMessage(page, module.id),
       recordChoices: page.recordChoices?.map(link => ({ ...link, page: `${module.id}:${link.page}` })),
       links: [...(page.links ?? []).map(link => ({ ...link, page: `${module.id}:${link.page}` })), ...back] };
   }

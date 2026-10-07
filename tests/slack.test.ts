@@ -15,6 +15,21 @@ it('keeps data tables outside containers, links displayed web destinations and r
   expect(sent).toHaveLength(0);
 });
 
+it('renders labelled table toggles and non-interactive rows with consistent columns and client fallback', async () => {
+  const body = await post({ kind: 'Statuts', text: 'Filtre', table: {
+    columns: ['Statut', 'Inclus'], rows: [['Active', 'Oui'], ['Absent', 'Non']],
+    rowButtons: [{ label: '☑ Retirer', action: 'clickup:status_remove', value: 'bound|editor|0|choice' }, null],
+    rowButtonColumn: 'Sélection', rowButtonFallback: 'Ouvrez clickup statuts dans un client Slack récent',
+  } });
+  const table = body.blocks.find((block: any) => block.type === 'data_table');
+  expect(table.rows.map((row: any[]) => row.length)).toEqual([3, 3, 3]);
+  expect(table.rows[0][2].text).toBe('Sélection');
+  expect(table.rows[1][2]).toEqual({ type: 'action_cell', element: {
+    type: 'button', text: { type: 'plain_text', text: '☑ Retirer' }, action_id: 'clickup:status_remove~button-0', value: 'bound|editor|0|choice',
+  }, fallback: { type: 'raw_text', text: 'Ouvrez clickup statuts dans un client Slack récent' } });
+  expect(table.rows[2][2]).toEqual({ type: 'raw_text', text: '—' });
+});
+
 async function post(message: AgentMessage) {
   const posts: any[] = [];
   const slack = new Slack('token', (async (_url, options: any) => {

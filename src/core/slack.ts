@@ -3,7 +3,7 @@ import { logicalAction } from './presentation.js';
 
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core'; bound?: boolean };
 export type TableCell = string | Array<{ text: string; url?: string }>;
-export type MessageTable = { columns: string[]; rows: TableCell[][]; rowButtons?: Button[] };
+export type MessageTable = { columns: string[]; rows: TableCell[][]; rowButtons?: Array<Button | null>; rowButtonColumn?: string; rowButtonFallback?: string };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; selects?: MessageSelect[] };
 export const validResourceUrl = (value: string) => {
@@ -191,7 +191,12 @@ export class Slack implements Messenger {
       if (!table.columns.length || table.columns.length + (table.rowButtons ? 1 : 0) > 20 || table.rows.length < 1 || table.rows.length > 200 || table.rows.some(row => row.length !== table.columns.length) || (table.rowButtons && table.rowButtons.length !== table.rows.length))
         throw new SlackDeliveryRejected('Invalid message table.');
       const rows: TableCell[][] = [table.columns, ...table.rows];
-      const size = rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0) + (table.rowButtons?.reduce((sum, button) => sum + button.label.length, 0) ?? 0);
+      const rowButtonColumn = table.rowButtonColumn ?? 'Ouvrir';
+      const rowButtonFallback = table.rowButtonFallback ?? 'Rechercher la fiche dans le DM';
+      const actionSize = table.rowButtons ? rowButtonColumn.length + table.rowButtons.reduce((sum, button) =>
+        sum + (button ? Math.max(buttonDisplayLabel(button).slice(0, 75).length, rowButtonFallback.length) : 1), 0) : 0;
+      const size = rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0)
+        + actionSize;
       const totalSize = size + text.length + (message.resourceLinks?.reduce((sum, link) => sum + link.label.length + link.url.length, 0) ?? 0)
         + buttons.reduce((sum, button) => sum + button.label.length, 0);
       if (totalSize > 20_000) throw new SlackDeliveryRejected('Message table exceeds Slack limits.');
@@ -206,12 +211,17 @@ export class Slack implements Messenger {
           ? [{ type: 'link' as const, text: part.text, url: part.url }] : linkedParts(part.text));
         return parts.some(part => part.type === 'link') ? { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: parts }] } : { type: 'raw_text', text: cellText(cell) || ' ' };
       };
-      const dataRows = table.rows.map((row, index) => [...row.map(cellBlock), ...(table.rowButtons?.[index] ? [{ type: 'action_cell', element: {
-        type: 'button', text: { type: 'plain_text', text: buttonDisplayLabel(table.rowButtons[index]!).slice(0, 75) },
-        action_id: `${table.rowButtons[index]!.action}~button-${index + buttons.length}`, value: table.rowButtons[index]!.value,
-      }, fallback: { type: 'raw_text', text: 'Rechercher la fiche dans le DM' } }] : [])]);
+      const dataRows = table.rows.map((row, index) => {
+        const cells = row.map(cellBlock), button = table.rowButtons?.[index];
+        if (!table.rowButtons) return cells;
+        return [...cells, button ? { type: 'action_cell', element: {
+          type: 'button', text: { type: 'plain_text', text: buttonDisplayLabel(button).slice(0, 75) },
+          action_id: `${button.action}~button-${index + buttons.length}`, value: button.value,
+          ...(button.style ? { style: button.style } : {}),
+        }, fallback: { type: 'raw_text', text: rowButtonFallback } } : { type: 'raw_text', text: '—' }];
+      });
       blocks.push({ type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
-        rows: [[...table.columns.map(column => ({ type: 'raw_text', text: column || ' ' })), ...(table.rowButtons ? [{ type: 'raw_text', text: 'Ouvrir' }] : [])], ...dataRows] });
+        rows: [[...table.columns.map(column => ({ type: 'raw_text', text: column || ' ' })), ...(table.rowButtons ? [{ type: 'raw_text', text: rowButtonColumn }] : [])], ...dataRows] });
       for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
     }
     if (blocks.length > 50) throw new SlackDeliveryRejected('Message has too many Slack blocks.');

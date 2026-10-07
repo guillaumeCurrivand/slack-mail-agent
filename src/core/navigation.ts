@@ -127,9 +127,11 @@ export class Navigation {
     const id = target?.id ?? uid();
     const { links = [], recordChoices = [], bindButtons = false, ...content } = page;
     const rowChoices = !!content.table && recordChoices.length === content.table.rows.length;
+    const bind = (button: Button) => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button;
     const rawMessage: AgentMessage = { ...content,
-      ...(rowChoices ? { table: { ...content.table!, rowButtons: recordChoices.map(link => ({ label: 'Ouvrir', action: 'core:navigate', value: `${id}|${link.page}` })) } } : {}),
-      buttons: [...(content.buttons ?? []).map(button => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button),
+      ...(content.table ? { table: { ...content.table, ...(rowChoices ? { rowButtons: recordChoices.map(link => ({ label: 'Ouvrir', action: 'core:navigate', value: `${id}|${link.page}` })) }
+        : content.table.rowButtons ? { rowButtons: content.table.rowButtons.map(button => button ? bind(button) : null) } : {}) } } : {}),
+      buttons: [...(content.buttons ?? []).map(bind),
       ...(!rowChoices ? recordChoices.map(link => ({ label: link.label, action: 'core:navigate', value: `${id}|${link.page}` })) : []),
       ...links.map(link => ({ label: link.label, action: 'core:navigate', value: `${id}|${link.page}` }))] };
     const message = this.messenger.prepare?.(rawMessage) ?? rawMessage;

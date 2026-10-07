@@ -9,6 +9,7 @@ import { dispatchJob } from '../src/core/dispatch.js';
 import { createServer } from '../src/core/server.js';
 import { ModuleRegistry, type AssistantModule } from '../src/core/modules.js';
 import { Slack } from '../src/core/slack.js';
+import { Navigation } from '../src/core/navigation.js';
 import { Vault } from '../src/core/crypto.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { Store } from '../src/modules/mail/store.js';
@@ -130,6 +131,31 @@ it('shows every enabled destination on the main menu without action paging', asy
     expect(opened.method).toBe('chat.update');
     expect(opened.ts).toBe(menu.ts);
     expect(title(opened)).toBe(names.at(-1));
+  } finally { await h.close(); }
+});
+
+it('namespaces and binds module-menu table actions through signed dispatch', async () => {
+  const fixture: AssistantModule = { id: 'table_fixture', name: 'Table fixture', description: 'Table controls', menuActions: ['toggle'],
+    async menu() { return { kind: 'Table fixture', text: 'Choix', bindButtons: true,
+      table: { columns: ['Nom'], rows: [['Active']], rowButtons: [{ label: '☑ Retirer', action: 'toggle', value: 'Active' }], rowButtonColumn: 'Sélection' },
+    }; },
+    async handle(actor, payload, eventId, context) {
+      expect(payload.type).toBe('menu_action'); expect(payload.action).toBe('toggle');
+      const bound = await new Navigation(context.sql, context.messenger).boundTarget(actor, payload.value, payload.timestamp);
+      expect(bound?.value).toBe('Active');
+      await context.messenger.send(actor, { text: `Modification enregistrée : ${bound!.value}` });
+    },
+  };
+  const h = await harness(env, [fixture]);
+  try {
+    const menu = await h.dm('menu'), page = await h.click(menu, 'Table fixture');
+    const control = page.body.blocks.find((block: any) => block.type === 'data_table').rows[1][1].element;
+    expect(control.action_id).toMatch(/^table_fixture:toggle~button-\d+$/);
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: page.ts },
+      actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }],
+    }) }).toString();
+    expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
+    expect((await h.drain()).body.text).toContain('Modification enregistrée : Active');
   } finally { await h.close(); }
 });
 

@@ -10,7 +10,7 @@ import { JobStore } from '../src/core/store.js';
 import { createServer } from '../src/core/server.js';
 import { ModuleRegistry, type RoutedJob } from '../src/core/modules.js';
 import { createClickupModule } from '../src/modules/clickup/index.js';
-import { Slack, SlackDeliveryRejected } from '../src/core/slack.js';
+import { cellText, Slack, SlackDeliveryRejected } from '../src/core/slack.js';
 import type { ClickupDatabase } from '../src/modules/clickup/transactions.js';
 import { frenchCommand } from '../src/app/commands.js';
 
@@ -29,10 +29,14 @@ function harness(fetcher: typeof fetch) {
   const module = createClickupModule({ ...env }, sql, { fetcher });
   const modules = new ModuleRegistry([{ ...module, normalizeText: text => frenchCommand('clickup', text) }]);
   const messages: Array<AgentMessage & { timestamp: string; allButtons?: Button[] }> = [];
+  // Workflow tests identify a row control by its status name, independent of its compact display label.
+  const controlsFor = (message: AgentMessage) => [...(message.buttons ?? []), ...(message.table?.rowButtons?.flatMap((button, index) => button ? [{ ...button,
+    label: `${button.label.replace(/^[☐☑] /, '')} ${cellText(message.table!.rows[index]![0]!).slice(0, 60)}`,
+  }] : []) ?? [])];
   const snapshot = async (message: AgentMessage, timestamp: string) => {
     const id = message.buttons?.map(button => button.value.split('|')[0]).find(value => /^[0-9a-f-]{36}$/.test(value));
     const saved = id ? (await sql.query('SELECT content FROM core_navigation_menus WHERE id=$1', [id])).rows[0]?.content as AgentMessage | undefined : undefined;
-    messages.push({ ...message, timestamp, allButtons: saved?.buttons ?? message.buttons });
+    messages.push({ ...message, text: [message.text, ...(message.table?.rows.map(row => row.map(cellText).join(' · ')) ?? [])].join('\n'), timestamp, allButtons: controlsFor(saved ?? message) });
   };
   const messenger = {
     async send(_actor: unknown, message: AgentMessage) { await snapshot(message, `${messages.length + 1}.000`); },
@@ -44,7 +48,7 @@ function harness(fetcher: typeof fetch) {
   const controls = async (message: AgentMessage & { timestamp: string; allButtons?: Button[] }) => {
     if (message.allButtons) return message.allButtons;
     const saved = (await sql.query('SELECT content FROM core_navigation_menus WHERE timestamp=$1', [message.timestamp])).rows[0]?.content as AgentMessage | undefined;
-    return (saved?.buttons ?? message.buttons ?? []).map(button => ({ ...button, action: button.action.includes(':') ? button.action : `clickup:${button.action}` }));
+    return controlsFor(saved ?? message).map(button => ({ ...button, action: button.action.includes(':') ? button.action : `clickup:${button.action}` }));
   };
   const click = async (action: string, message = messages.at(-1)!, actor = alice, id?: string) => {
     const button = (await controls(message)).find(button => button.action === `clickup:${action}`);
@@ -159,21 +163,22 @@ it('opens the private French status picker with unused configured statuses and c
   expect(h.messages.at(-1)!.text).toContain('indisponible');
 });
 
-it('keeps module actions executable after paging the visible button group', async () => {
+it('shows every status toggle in a table without paging the action buttons', async () => {
   const h = await connected(provider([]));
   await h.text('clickup statuts');
   const first = h.messages.at(-1)!;
-  const next = first.buttons?.find(button => button.label === 'Actions ▶');
-  expect(next).toBeDefined();
-  const navigation = h.modules.action(next!.action, next!.value);
-  await h.run({ ...navigation, payload: { ...navigation.payload, timestamp: first.timestamp } }, alice, 'visible-controls-next');
-  const second = h.messages.at(-1)!;
-  expect(second.timestamp).toBe(first.timestamp);
-  const choice = second.buttons?.find(button => /^clickup:status_(add|remove)$/.test(button.action));
-  expect(choice).toBeDefined();
+  expect(first.table?.columns).toEqual(['Statut', 'Inclus', 'Disponibilité']);
+  expect(first.table?.rows).toHaveLength(4);
+  expect(first.table?.rowButtons).toHaveLength(4);
+  expect(first.buttons?.map(button => button.label)).toEqual(['Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
+  const choice = first.table!.rowButtons![0]!;
+  expect(choice.label).toBe('☐ Ajouter');
+  expect(choice.action).toBe('clickup:status_add');
   const selection = h.modules.action(choice!.action, choice!.value);
-  await h.run({ ...selection, payload: { ...selection.payload, timestamp: second.timestamp } }, alice, 'visible-controls-select');
+  await h.run({ ...selection, payload: { ...selection.payload, timestamp: first.timestamp } }, alice, 'visible-controls-select');
   expect(h.messages.at(-1)!.kind).toBe('Statuts ClickUp');
+  expect(h.messages.at(-1)!.timestamp).toBe(first.timestamp);
+  expect(h.messages.at(-1)!.table!.rowButtons![0]!.label).toBe('☑ Retirer');
   expect(h.messages.at(-1)!.text).toContain('enregistré');
 });
 
@@ -511,12 +516,40 @@ it('retains unavailable names without falling back to unfinished tasks', async (
   p.replaceTask('done', task('done', { status: { status: 'Renamed', type: 'done' } }));
   await h.text('clickup statuses');
   await h.click('status_retry');
-  expect(h.messages.at(-1)!.text).toContain('Finished · indisponible');
+  expect(h.messages.at(-1)!.table!.rows).toContainEqual(['Finished', 'Oui', 'Indisponible']);
   expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Finished');
   await h.text('clickup tasks');
   expect(h.messages.at(-1)!.text).toContain('Filtre appliqué : Finished');
   expect(h.messages.at(-1)!.text).toContain('0 tâches');
   expect(h.messages.at(-1)!.table).toBeUndefined();
+});
+
+it('shows an unavailable excluded status without permitting a new selection', async () => {
+  const p = provider([]), h = await connected(p);
+  p.failures.set('/api/v2/list/12', 403);
+  await h.text('clickup statuts'); await chooseStatus(h, 'Unused', false);
+  p.failures.clear();
+  const statuses = [{ status: 'In progress', type: 'custom' }, { status: 'Closed', type: 'closed' }];
+  p.locations.set('/api/v2/team/42/space', { spaces: [{ id: '10', statuses }] });
+  p.locations.set('/api/v2/folder/11', { id: '11', statuses });
+  p.locations.set('/api/v2/list/12', { id: '12', statuses });
+  // Retry finishes the partial attempt; refreshing then replaces its retained catalogue.
+  await h.click('status_retry');
+  await h.click('status_retry');
+  const table = h.messages.at(-1)!.table!, row = table.rows.findIndex(row => row[0] === 'Unused');
+  expect(table.rows[row]).toEqual(['Unused', 'Non', 'Indisponible']);
+  expect(table.rowButtons![row]).toBeNull();
+  expect(h.messages.at(-1)!.text).toContain('sauf : Unused');
+});
+
+it('keeps recovery controls available when discovery has no status rows', async () => {
+  const p = provider([]), h = await connected(p);
+  p.failures.set('/api/v2/team/42/space', 403); p.failures.set('/api/v2/team/42/shared', 403);
+  await h.text('clickup statuts');
+  const picker = h.messages.at(-1)!;
+  expect(picker.table).toBeUndefined();
+  expect(picker.text).toContain('Aucun statut découvert');
+  expect(picker.buttons?.map(button => button.label)).toEqual(['Réessayer', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
 });
 
 it('discovers archived, nested, folderless and shared-only definitions with one choice per name', async () => {
@@ -546,11 +579,22 @@ it('keeps more than 100 status choices reachable and preserves a saved filter af
   p.locations.set('/api/v2/team/42/space', { spaces: [{ id: '10', statuses }] });
   p.locations.set('/api/v2/folder/11', { id: '11', statuses }); p.locations.set('/api/v2/list/12', { id: '12', statuses });
   const h = await connected(p); await h.text('clickup statuses');
+  const seen = new Set<string>();
+  const checkPage = () => {
+    const picker = h.messages.at(-1)!;
+    expect(picker.buttons?.some(button => button.action === 'core:controls')).toBe(false);
+    expect(picker.table!.rows).toHaveLength(10);
+    expect(picker.table!.rowButtons!.every(button => button?.label === '☑ Retirer')).toBe(true);
+    for (const row of picker.table!.rows) seen.add(cellText(row[0]!));
+  };
+  checkPage();
   for (let page = 1; page < 15; page++) {
     const message = h.messages.at(-1)!, next = (await h.controls(message)).find(button => button.label === 'Suivant')!;
     const route = h.modules.action(next.action, next.value);
     await h.run({ ...route, payload: { ...route.payload, timestamp: message.timestamp } });
+    checkPage();
   }
+  expect(seen).toEqual(new Set(statuses.map(status => status.status)));
   expect(h.messages.at(-1)!.text).toContain('Status 149');
   expect(h.messages.at(-1)!.text).toContain('Page 15/15');
   const picker = h.messages.at(-1)!, update = h.messenger.update;
@@ -621,8 +665,21 @@ it('routes signed French status commands and editor controls through Slack ingre
     const job = (await sql.query("SELECT * FROM jobs WHERE id='slack:status-command'")).rows[0];
     expect(job.module).toBe('clickup'); expect(job.payload.text).toBe('statuses');
     await h.run(job, job.actor, job.id); const picker = h.messages.at(-1)!;
-    const add = (await h.controls(picker)).find(button => button.label === 'Ajouter Closed')!;
-    const action = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: picker.timestamp }, actions: [{ action_id: add.action, value: add.value }] }) }).toString();
+    const rendered: any[] = [];
+    await new Slack('unused', (async (_input, options) => { rendered.push(JSON.parse(String(options?.body))); return Response.json({ ok: true }); }) as typeof fetch).send(alice, picker);
+    const table = rendered[0].blocks.find((block: any) => block.type === 'data_table');
+    expect(table.rows[0].map((cell: any) => cell.text)).toEqual(['Statut', 'Inclus', 'Disponibilité', 'Sélection']);
+    expect(table.rows.slice(1).every((row: any[]) => row[3].type === 'action_cell')).toBe(true);
+    const add = table.rows.find((row: any[]) => row[0].text === 'Closed')[3].element;
+    expect(add.text.text).toBe('☐ Ajouter');
+    expect(add.action_id).toMatch(/^clickup:status_add~button-\d+$/);
+    const route = h.modules.action(add.action_id, add.value);
+    const preferences = (await sql.query('SELECT * FROM clickup_status_preferences')).rows;
+    await h.run({ ...route, payload: { ...route.payload, timestamp: '999.999' } }, alice, 'wrong-row-message');
+    await h.run({ ...route, payload: { ...route.payload, timestamp: picker.timestamp } }, { ...alice, channel: 'DOTHER' }, 'wrong-row-dm');
+    await h.run({ ...route, payload: { ...route.payload, timestamp: picker.timestamp } }, { ...alice, user: 'UBOB' }, 'wrong-row-owner');
+    expect((await sql.query('SELECT * FROM clickup_status_preferences')).rows).toEqual(preferences);
+    const action = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: picker.timestamp }, actions: [{ action_id: add.action_id, value: add.value }] }) }).toString();
     expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: action, headers: { ...signed(action), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
     const click = (await sql.query("SELECT * FROM jobs WHERE id LIKE 'action:%'")).rows[0];
     expect(click.payload.action).toBe('status_add');
