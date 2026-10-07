@@ -6,6 +6,7 @@ import { availableRuleProposal, currentPreview, labelSchema, ownerKey, planMessa
 import type { Mailbox } from './gmail.js';
 import { escapeCardValue, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import { prune, Store } from './store.js';
+import { mailHelp } from './help.js';
 
 export const SORT_OPERATION = 'sort';
 export type Event = { type: 'text'; text: string; resolved?: Intent; presentationLanguage?: 'fr'; activeOperation?: string } | { type: 'action'; action : string; value: string } | { type: 'connection'; connection: Connection };
@@ -15,7 +16,7 @@ export type EngineDependencies = {
   connectUrl: (actor: Actor) => Promise<string>;
   admitSort?: (actor: Actor, eventId: string) => Promise<string>;
 };
-const HELP = "Je peux trier les 100 derniers messages de votre boîte de réception après votre approbation de l’aperçu.\nCommandes : courrier connecter, courrier modèles, courrier règles, courrier trier, courrier rapport, courrier détails <identifiant> <page>, courrier déconnecter.\nCommencez chaque demande par courrier, même en langage naturel : « courrier Applique le libellé Projets/Alpha aux e-mails d’alex@example.com ». Les changements de règles nécessitent aussi votre approbation. Utilisez les boutons de l’aperçu pour confirmer, annuler, examiner ou revenir sur un traitement. Commandes communes : aide, budget.";
+const HELP = mailHelp.text;
 
 export class Engine {
   constructor(private d: EngineDependencies) {}

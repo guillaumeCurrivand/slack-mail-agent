@@ -8,10 +8,9 @@ import type { DevelopmentConfig } from './config.js';
 import { projectSchema, ready, resultSchema, ticketIds, type Project, type Result } from './domain.js';
 import { ClickupDevelopment, DevelopmentChannels } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
+import { developmentHelp } from './help.js';
 
-const help = 'Configurez un projet avec development configure {"id":"projet","name":"Projet","channel":"C…","folder":"123","repository":"https://github.com/organisation/projet","skill":"maintenance"}. '
-  + 'Les membres du canal peuvent consulter et configurer ce projet. Publiez un lien ClickUp dans le canal pour une analyse. Ready for AI autorise le traitement ; le commit testé est poussé sur la branche de maintenance configurée sur le worker puis le ticket passe à to build. Aucun PR/MR automatique. '
-  + 'Commandes : development projects ; development status <projet> ; development retry <identifiant du traitement bloqué>. Le worker local doit être connecté. Les appels Cursor sont facturés séparément ; le budget OpenAI de Mayassistant ne les couvre pas.';
+const help = developmentHelp.text;
 
 export function createDevelopmentModule(config: DevelopmentConfig, database: Database, dependencies: {
   clickup?: ClickupDevelopment; channels?: DevelopmentChannels; fetcher?: typeof fetch;
@@ -50,6 +49,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
 
   return {
     id: 'development', name: 'Développement', description: 'Analyse et correction des tickets de maintenance avec un worker Cursor local',
+    help: developmentHelp,
     async initialize(sql) {
       for (const statement of developmentSchema.split(';').map(value => value.trim()).filter(Boolean)) await sql.query(statement);
       await new JobStore(sql).enqueueIntegration(`development:poll:${config.SLACK_TEAM_ID}`, identity, { type: 'poll' }, 'development');

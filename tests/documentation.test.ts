@@ -2326,7 +2326,7 @@ it('keeps all delivered Documentation paths available when the shared AI allowan
     const edit = await h.dm('documentation edit project Budgetless {"notes":"Still no AI needed"}', bob);
     expect(kind(await h.click(edit, "Confirmer la modification", bob))).toBe("Projet modifié");
     expect(bodyText(await h.dm('documentation project Budgetless'))).toContain('Notes: Still no AI needed');
-    expect(kind(await h.dm('documentation'))).toBe("Aide de Documentation");
+    expect(kind(await h.dm('documentation'))).toBe("Aide — Documentation");
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); }
 });

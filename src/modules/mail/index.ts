@@ -12,12 +12,14 @@ import { GoogleOAuth } from './oauth.js';
 import { registerMailRoutes } from './routes.js';
 import { mailSchema, prune, Store } from './store.js';
 import { mailMenu } from './menu.js';
+import { mailHelp } from './help.js';
 
 export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sql: Sql): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
   const oauth = new GoogleOAuth(config, new Store(sql), vault);
   return {
     id: 'mail', name: "Tri des e-mails", description: "Trier votre Gmail selon vos règles personnelles approuvées",
+    help: mailHelp,
     workOperations: [{ key: SORT_OPERATION, label: "Trier la boîte de réception", commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
     menuActions: ['sort_inbox'],
     async menu(actor, page, context) {

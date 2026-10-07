@@ -13,6 +13,7 @@ import { clickupSchema, ClickupStore } from './store.js';
 import { retrieveTasks, taskPage } from './tasks.js';
 import { ClickupStatusStore, statusSchema } from './status-store.js';
 import { handleStatusMenu } from './status-menu.js';
+import { clickupHelp } from './help.js';
 
 export function createClickupModule(config: ClickupConfig, sql: Sql, dependencies: { fetcher?: typeof fetch } = {}): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
@@ -29,6 +30,7 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
   });
   return {
     id: 'clickup', name: 'ClickUp', description: 'Consulter vos tâches assignées dans Mayasquad',
+    help: clickupHelp,
     menuActions: ['connect', 'disconnect', 'confirm', 'cancel', 'tasks', 'page', 'statuses', 'status_save', 'status_cancel', 'status_reset', 'status_add', 'status_remove', 'status_page', 'status_retry'],
     workOperations: [{ key: 'tasks', label: 'Consulter mes tâches ClickUp', commands: ['tasks'], action: 'tasks' }],
     async initialize(database) { for (const statement of (clickupSchema + statusSchema).split(';').filter(part => part.trim())) await database.query(statement); },

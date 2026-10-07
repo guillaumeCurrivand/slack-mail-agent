@@ -26,7 +26,7 @@ Include `clickup` in the deployment's `ENABLED_MODULES`. Follow [ClickUp setup](
 | Choose personal status filters | `clickup statuts` | `clickup statuses` |
 | Obtain the OAuth invitation | `clickup connecter` | `clickup connect` |
 | Propose disconnecting | `clickup déconnecter` | `clickup disconnect` |
-| Show connection status and help | `clickup aide` | `clickup help` |
+| Open the detailed Module guide | `clickup aide` | `clickup help` |
 
 Each typed request needs the `clickup` prefix. The menu shows connection status, Connect or confirmed Disconnect, Tasks and Choisir les statuts when connected, and Back to the main menu. Results offer Previous/Next, Refresh, Retry when incomplete, and Menu. These commands use deterministic routing; free-form natural-language requests are unsupported.
 
@@ -36,7 +36,7 @@ Results have up to 40 tasks per page, with linked name, original status, Paris c
 
 Paging retains the original snapshot and retrieval time while rechecking access. Snapshots expire after 24 hours; disconnect or account replacement invalidates them. Expired results need a fresh `clickup tâches` request. Lost/revoked access withholds cached task text and asks you to reconnect. Physical cleanup pauses while disabled, but logical expiry still applies.
 
-Partial or stalled retrieval is visibly incomplete. **Réessayer** starts fresh retrieval; an incomplete empty list is not proof you have no tasks. Overlapping starts/Refresh report the active request. Delivery checkpoints prevent blind duplicate sends; use `clickup aide` or a fresh menu to inspect current state after delivery trouble. Confirmed disconnect removes active credentials, pending authorizations and snapshots; provider grant revocation, already-posted Slack text and backups have separate lifecycles.
+Partial or stalled retrieval is visibly incomplete. **Réessayer** starts fresh retrieval; an incomplete empty list is not proof you have no tasks. Overlapping starts/Refresh report the active request. Delivery checkpoints prevent blind duplicate sends; use `clickup aide` for recovery guidance, or a fresh menu to inspect current connection state after delivery trouble. Confirmed disconnect removes active credentials, pending authorizations and snapshots; provider grant revocation, already-posted Slack text and backups have separate lifecycles.
 
 ## Personal status filters
 

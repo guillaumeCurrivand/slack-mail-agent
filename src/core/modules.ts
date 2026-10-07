@@ -24,6 +24,8 @@ export interface AssistantModule {
   id: string;
   description: string;
   name?: string;
+  /** Static, module-owned user guide. Reading it never invokes the handler or providers. */
+  help?: { text: string; topics?: readonly { label: string; text: string }[] };
   aliases?: readonly string[];
   normalizeText?(text: string): string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
@@ -78,7 +80,7 @@ export class ModuleRegistry {
     const [prefix = '', rest = ''] = text.trim().split(/\s+([\s\S]*)/, 2);
     const id = prefix.toLowerCase(), module = this.prefixes.get(id);
     if (module) return { module: module.id, payload: { type: 'text', text: module.normalizeText?.(rest.trim()) || rest.trim() || 'help' } };
-    if (['aide', 'bonjour', 'salut'].includes(id) && !rest) text = 'help';
+    if (['aide', 'bonjour', 'salut'].includes(id) && !rest) text = ({ aide: 'help', bonjour: 'hello', salut: 'hi' } as Record<string, string>)[id]!;
     return { module: 'core', payload: { type: 'text', text: text.trim() } };
   }
   action(action: string, value: string): RoutedJob {
@@ -111,12 +113,15 @@ export class ModuleRegistry {
         return context.messenger.send(actor, { text: await budgetReport(context.budget) });
       }
       if (job.payload.type === 'text' && ['menu', 'help', 'hello', 'hi'].includes(String(job.payload.text).toLowerCase())) {
-        return navigation.show(actor, eventId, await this.page('main', actor, context));
+        return navigation.show(actor, eventId, await this.page(String(job.payload.text).toLowerCase() === 'help' ? 'help' : 'main', actor, context));
       }
       return navigation.show(actor, eventId, { kind: "Aide", text: `Commencez chaque demande par le préfixe d’un module activé. Cette demande n’a été transmise à aucun module.\n${this.all().map(m => `${m.id} — ${m.description}. Envoyez ${m.aliases?.[0] ?? m.id} aide.`).join('\n') || "Aucun module n’est actuellement activé."}\nCommandes communes : menu, aide, budget. Envoyez menu si un bouton ne fonctionne plus.`, buttons: [{ label: 'Menu', action: 'core:menu', value: '' }] });
     }
     const module = this.modules.get(job.module);
     if (!module) throw new Error('Module is not enabled.');
+    if (module.help && job.payload.type === 'text' && String(job.payload.text).trim().toLowerCase() === 'help') {
+      return new Navigation(context.sql, context.messenger).show(actor, eventId, await this.page(`help:module_${module.id}`, actor, context));
+    }
     const namespace = (message: MenuPage) => namespaceMessage(message, module.id);
     let pagedMessageIndex = 0;
     const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
@@ -139,13 +144,39 @@ export class ModuleRegistry {
       { label: 'Budget', page: 'budget' }, { label: "Aide", page: 'help' },
     ] };
     if (destination === 'budget') return { kind: 'Budget', text: await budgetReport(context.budget), links: back };
-    if (destination === 'help') return { kind: "Aide", text: `Commencez chaque demande écrite par le préfixe d’un module activé, même en langage naturel. Ouvrir un menu ne change pas le routage.\n${this.all().map(module => `${module.id} — ${module.description}. Envoyez ${module.aliases?.[0] ?? module.id} aide.`).join('\n')}\nCommandes communes : menu, aide, budget. Les menus n’utilisent pas d’IA. Envoyez menu si un bouton est indisponible.`, links: back };
+    if (destination === 'help') return { kind: "Aide — guide de l’assistant", text: [
+      'L’assistant réunit les modules ci-dessous. Choisissez leur aide pour connaître toutes leurs capacités, commandes et exemples.',
+      '*Commandes communes*\n• menu : ouvrir un nouveau menu avec les modules activés.\n• aide (ou help) : ouvrir ce guide.\n• budget : consulter les dépenses d’IA enregistrées et les montants réservés, au total et par module, pour le mois civil UTC.\n• bonjour / salut (hello / hi) : ouvrir le menu.',
+      '*Choisir un module*\nCommencez chaque demande écrite par son préfixe, même en langage naturel. <préfixe> aide ouvre son guide ; un préfixe seul ouvre également son aide. Ouvrir un menu ne change pas le routage des messages suivants. Les commandes anglaises restent compatibles.',
+      '*Modules activés*\n' + (this.all().map(module => `${module.name ?? module.id} — ${module.description}.\nPréfixe : ${module.aliases?.[0] ?? module.id}. Guide : ${module.aliases?.[0] ?? module.id} aide.`).join('\n\n') || 'Aucun module n’est actuellement activé.'),
+      '*Données et confirmations*\nLes demandes et réponses restent privées en DM. Certains modules gèrent des données partagées ou publient dans des canaux : leur guide précise qui peut voir les données et les changements. Une confirmation porte sur la proposition affichée ; un message en langage naturel ne la remplace pas.',
+      '*Coûts et démarrage*\nLire l’aide et parcourir les menus n’utilise pas d’IA. Les boutons de lancement peuvent démarrer une analyse payante. Les modules qui utilisent OpenAI partagent le plafond mensuel configuré ; budget affiche l’usage. Les demandes incertaines conservent leur réservation. Les guides identifient les parcours gratuits et les éventuelles facturations externes séparées.',
+      '*Reprendre une consultation*\nPrécédent/Suivant parcourent les contenus longs dans le même message. Les boutons sont réservés à leur utilisateur et à leur conversation. Envoyez menu ou aide si un bouton est expiré ou indisponible. Relire une proposition ne renouvelle pas son délai de confirmation.',
+    ].join('\n\n'), links: [...this.all().map(module => ({ label: `Aide : ${module.name ?? module.id}`, page: `help:module_${module.id}` })), ...back] };
+    if (destination.startsWith('help:')) {
+      const guide = /^help:module_(.+)$/.exec(destination);
+      const detail = /^help:topic_(\d+)_(.+)$/.exec(destination);
+      const id = guide?.[1] ?? detail?.[2], topic = detail?.[1];
+      const module = this.modules.get(id!);
+      if (!module) return { kind: 'Aide indisponible', text: 'Ce module n’est pas activé. Revenez au guide pour consulter les modules disponibles.', links: [{ label: 'Retour à l’aide', page: 'help' }, ...back] };
+      const section = topic !== undefined && /^\d+$/.test(topic) ? module.help?.topics?.[Number(topic)] : undefined;
+      if (topic !== undefined && !section) return { kind: 'Aide indisponible', text: 'Cette rubrique est indisponible. Ouvrez à nouveau l’aide du module.', links: [{ label: 'Retour à l’aide du module', page: `help:module_${module.id}` }, ...back] };
+      return { kind: `Aide — ${section?.label ?? module.name ?? module.id}`,
+        text: section?.text ?? module.help?.text ?? `${module.description}. Envoyez ${module.aliases?.[0] ?? module.id} aide.`,
+        links: [
+          ...(section ? [{ label: 'Retour à l’aide du module', page: `help:module_${module.id}` }] : (module.help?.topics ?? []).map((entry, index) => ({ label: entry.label, page: `help:topic_${index}_${module.id}` }))),
+          { label: 'Ouvrir le module', page: `${module.id}:main` }, { label: 'Retour à l’aide', page: 'help' }, ...back,
+        ],
+      };
+    }
     const [id, section = 'main'] = destination.split(':');
     const module = this.modules.get(id!);
     if (!module) return { kind: "Module indisponible", text: "Ce module n’est pas activé. Aucun traitement n’a été lancé.", links: back };
+    if (section === 'help' && module.help) return this.page(`help:module_${module.id}`, actor, context);
     const page = module.menu ? await module.menu(actor, section, context) : { kind: module.name ?? module.id, text: `${module.description}. Envoyez ${module.aliases?.[0] ?? module.id} aide.` };
     return { ...namespaceMessage(page, module.id),
       recordChoices: page.recordChoices?.map(link => ({ ...link, page: `${module.id}:${link.page}` })),
-      links: [...(page.links ?? []).map(link => ({ ...link, page: `${module.id}:${link.page}` })), ...back] };
+      links: [...(page.links ?? []).map(link => ({ ...link, page: `${module.id}:${link.page}` })),
+        ...(module.help && !page.links?.some(link => link.page === 'help') ? [{ label: 'Aide du module', page: `help:module_${module.id}` }] : []), ...back] };
   }
 }

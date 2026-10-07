@@ -11,6 +11,7 @@ import type { readSlackConfig } from './config.js';
 import { SlackHistory } from './history.js';
 import { slackAiSchema, slackHandledSchema, slackResultsSchema, slackSchema, SlackAiAttempts, SlackChannelSelections, SlackUnansweredResults } from './store.js';
 import { SlackUnansweredSearch, type UnansweredMatch } from './unanswered.js';
+import { slackHelp } from './help.js';
 
 const RESULT_PAGE_SIZE = 8;
 const parseResultsPage = (value: unknown) => {
@@ -167,6 +168,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
 
   return {
     id: 'slack', name: "Messages Slack sans réponse", description: "Trouver les messages sans réponse dans les canaux Slack sélectionnés",
+    help: slackHelp,
     workOperations: [{ key: 'unanswered', label: "Chercher les messages sans réponse", commands: ['unanswered'], action: 'find_unanswered' }],
     menuActions: ['channel_page', 'channel_select', 'channel_remove', 'find_unanswered'],
     async menu(actor, page) {

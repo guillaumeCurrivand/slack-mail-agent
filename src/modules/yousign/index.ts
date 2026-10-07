@@ -10,6 +10,7 @@ import type { YousignConfig } from './config.js';
 import { deliverEvent } from './delivery.js';
 import { parseEvent, verifyYousign } from './events.js';
 import { YousignStore } from './store.js';
+import { yousignHelp } from './help.js';
 
 const uuid = z.uuid();
 const pageNumber = (value: string) => /^\d{1,6}$/.test(value) ? Number(value) : 0;
@@ -67,6 +68,7 @@ export function createYousignModule(config: YousignConfig, database: Database, d
 
   return {
     id: 'yousign', name: 'Yousign', description: 'Recevoir les notifications Yousign dans des canaux partagés',
+    help: yousignHelp,
     menuActions: ['channel_add', 'channel_remove', 'channel_page', 'status_page', 'review', 'retry', 'confirm', 'cancel'],
     async initialize(sql) { await store(sql).initialize(); },
     registerRoutes(app) {

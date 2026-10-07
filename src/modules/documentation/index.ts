@@ -16,6 +16,7 @@ import { readDocumentationAIConfig, type QuestionAIConfig } from './ai.js';
 import { DocumentationQuestions, questionSchema } from './questions.js';
 import { inventoryQueryHelp } from './inventory-query.js';
 import { InventoryPresentation, tableSize, valuePages } from './presentation.js';
+import { documentationHelp } from './guide.js';
 
 const literal = (value: string) => escapeCardValue(value);
 const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
@@ -121,6 +122,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
   return {
     menuActions: ['request_archive', 'request_restore'],
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
+    help: documentationHelp,
     initialize: async database => { await database.query(documentationSchema + questionSchema + documentationImportSchema); },
     cleanup: async () => { await store.cleanup(); await questions.cleanup(); },
     menu: (actor, destination) => page(actor, destination),

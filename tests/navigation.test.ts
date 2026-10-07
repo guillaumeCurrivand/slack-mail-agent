@@ -33,11 +33,12 @@ function blocks(message: Posted) { return message.body.blocks.flatMap((block: an
 function buttons(message: Posted) { return blocks(message).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements); }
 function title(message: Posted) { return message.body.blocks[0]?.title?.text; }
 function richParts(message: Posted) { return blocks(message).filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements.flatMap((section: any) => section.elements)); }
+function renderedText(message: Posted) { return richParts(message).map((part: any) => part.text ?? '').join(''); }
 function findButton(message: Posted, label: string) { return buttons(message).find((item: any) => item.text.text.replace(/^🧭 /, '') === label); }
 function button(message: Posted, label: string) { const found = findButton(message, label); expect(found, `${label}; available: ${buttons(message).map((item: any) => item.text.text).join(', ')}`).toBeTruthy(); return found; }
 async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: AssistantModule[] = []) {
   const config = readConfig(overrides), modules = new ModuleRegistry([...createModules(config, sql, overrides).all(), ...additionalModules]);
-  for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
+  for (const module of modules.all()) await module.initialize?.({ query: async (text, values) => values ? db.query(text, values) : (await db.exec(text)).at(-1)! });
   const app = createServer(config, new JobStore(sql), modules);
   const messages: Posted[] = [];
   const selectedControls = new WeakMap<Posted, Map<string, any>>();
@@ -99,7 +100,7 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
 it('discovers enabled modules and shared commands in a private main menu without Gmail or AI', async () => {
   const h = await harness();
   try {
-    for (const command of ['menu', 'help', 'hello', 'aide', 'bonjour', 'salut']) {
+    for (const command of ['menu', 'hello', 'hi', 'bonjour', 'salut']) {
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
       expect(menu.body.blocks[0].width).toBe('full');
@@ -111,6 +112,102 @@ it('discovers enabled modules and shared commands in a private main menu without
     const guidance = await h.dm('sort');
     expect(guidance.body.text).toContain("préfixe");
     button(guidance, 'Menu');
+  } finally { await h.close(); }
+});
+
+it('opens complete built-in help through signed DM dispatch without connections, provider work or domain changes', async () => {
+  const allEnv = { ...mailEnv, ENABLED_MODULES: 'mail,slack,documentation,clickup,yousign,development',
+    CLICKUP_CLIENT_ID: 'client', CLICKUP_CLIENT_SECRET: 'secret', CLICKUP_WORKSPACE_ID: '123',
+    YOUSIGN_WEBHOOK_SECRET: 'fake-webhook-secret', YOUSIGN_SUBSCRIPTION_ID: 'subscription', SLACK_ADMIN_USER_ID: 'UADMIN',
+    DEVELOPMENT_CLICKUP_TOKEN: 'fake', DEVELOPMENT_WORKER_TOKEN: 'fake-worker-token'.repeat(3),
+  };
+  const h = await harness(allEnv);
+  try {
+    // Startup schedules Development polling; this test exercises only User help jobs.
+    await sql.query('DELETE FROM jobs');
+    const guide = await h.dm('aide');
+    expect(title(guide)).toBe('Aide — guide de l’assistant');
+    expect(guide.body.text).toContain('plafond mensuel');
+    expect(guide.body.text).toContain('préfixe');
+    expect(title(await h.dm('help'))).toBe(title(guide));
+    const capabilities = [
+      ['courrier', 'Tri des e-mails', '100 derniers messages', 'Annuler ce traitement'],
+      ['slack', 'Messages Slack sans réponse', '48 heures', 'Vous concerne peut-être'],
+      ['documentation', 'Documentation', 'six types de fiches', 'documentation compter'],
+      ['clickup', 'ClickUp', 'directement assignées', 'clickup statuts'],
+      ['yousign', 'Yousign', 'destinations sont partagées', 'Confirmer cette relance'],
+      ['development', 'Développement', 'Ready for AI', 'development relancer'],
+    ];
+    for (const [prefix, name, capability, other] of capabilities) {
+      const clicked = await h.click(guide, `Aide : ${name}`);
+      expect(clicked.method).toBe('chat.update');
+      expect(clicked.ts).toBe(guide.ts);
+      expect(renderedText(clicked)).toContain(capability);
+      expect(renderedText(clicked)).toContain(other);
+      for (const text of [prefix!, `${prefix} aide`, `${prefix} help`]) {
+        const direct = await h.dm(text);
+        expect(renderedText(direct)).toBe(renderedText(clicked));
+      }
+      const menu = await h.click(clicked, 'Ouvrir le module');
+      const help = await h.click(menu, name === 'Documentation' ? 'Aide' : 'Aide du module');
+      expect(renderedText(help)).toBe(renderedText(clicked));
+    }
+    const documentation = await h.dm('documentation aide');
+    const fields = await h.click(documentation, 'Hébergements : commandes et champs');
+    expect(fields.ts).toBe(documentation.ts);
+    expect(fields.body.text).toContain('serviceId');
+    expect(fields.body.text).toContain('confirmation séparée');
+    const back = await h.click(fields, 'Retour à l’aide du module');
+    const query = await h.click(back, 'Rechercher et compter');
+    expect(query.body.text).toContain('same-component');
+    expect(query.body.text).toContain('documentation compter');
+    expect((await h.click(query, 'Retour à l’aide')).body.text).toContain('Commandes communes');
+    expect((await h.dm('mail aide')).body.text).toBe((await h.dm('courrier aide')).body.text);
+    expect((await sql.query('SELECT * FROM users')).rows).toHaveLength(0);
+    expect((await sql.query('SELECT * FROM ai_calls')).rows).toHaveLength(0);
+    expect((await sql.query('SELECT * FROM core_operation_slots')).rows).toHaveLength(0);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('keeps long static help and topics private and pages them without invoking module handlers or menus', async () => {
+  const handle = vi.fn(), menu = vi.fn();
+  const probe: AssistantModule = { id: 'probe', name: 'Module test', description: 'Guide test', handle, menu,
+    help: { text: `${'A'.repeat(9_500)}\n${'B'.repeat(9_500)}`, topics: [{ label: 'Exemple', text: 'Explication complète du parcours.' }] },
+  };
+  const h = await harness(env, [probe]);
+  try {
+    const first = await h.dm('probe help');
+    const second = await h.click(first, 'Suivant');
+    expect(second.method).toBe('chat.update');
+    expect(second.ts).toBe(first.ts);
+    expect(renderedText(second)).toContain('B'.repeat(9_500));
+    const privatePage = await h.click(second, 'Exemple', bob);
+    expect(privatePage.body.text).toContain('indisponible');
+    expect(privatePage.body.text).not.toContain('Explication complète');
+    const topic = await h.click(second, 'Exemple');
+    expect(topic.ts).toBe(first.ts);
+    expect(topic.body.text).toContain('Explication complète');
+    expect(renderedText(await h.click(topic, 'Retour à l’aide du module'))).toContain('A'.repeat(9_500));
+    expect(handle).not.toHaveBeenCalled();
+    expect(menu).not.toHaveBeenCalled();
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
+it('hides disabled modules from help and refuses their older help links after a restart', async () => {
+  const first = await harness();
+  const guide = await first.dm('aide');
+  const module = await first.click(guide, 'Aide : Messages Slack sans réponse');
+  await first.close();
+  const h = await harness({ ...env, ENABLED_MODULES: '' });
+  try {
+    const empty = await h.dm('aide');
+    expect(empty.body.text).toContain('Aucun module');
+    expect(buttons(empty).map((item: any) => item.text.text.replace(/^🧭 /, ''))).toEqual(['Retour au menu']);
+    expect((await h.click(guide, 'Aide : Messages Slack sans réponse')).body.text).toContain('n’est pas activé');
+    expect((await h.click(module, 'Ouvrir le module')).body.text).toContain('n’est pas activé');
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
 });
 
