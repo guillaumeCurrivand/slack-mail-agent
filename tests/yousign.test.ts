@@ -34,7 +34,7 @@ const event = (name = 'signer.done', id = randomUUID()) => ({ event_id: id, even
     signer: { info: { first_name: 'Jean', last_name: 'Dupont', email: 'private@example.com' }, signature_link: 'https://secret.example/sign-token' } } });
 
 async function harness() {
-  let failEnqueue = false, counter = 0;
+  let failEnqueue = false, failDirectory = false, counter = 0;
   const wrap = (connection: any) => ({ query: async (text: string, values?: any[]) => {
     if (failEnqueue && text.startsWith('INSERT INTO jobs')) throw new Error('Database unavailable');
     return connection.query(text, values);
@@ -48,7 +48,8 @@ async function harness() {
   let beforePost: ((channel: string) => Promise<void>) | undefined;
   const fetcher = (async (url: URL | string, init?: RequestInit) => {
     const request = new URL(String(url));
-    if (request.pathname.endsWith('/users.conversations')) return Response.json({ ok: true, channels: request.searchParams.get('user') === alice.user ? aliceChannels : aliceChannels.filter(channel => !channel.is_private) });
+    if (request.pathname.endsWith('/users.conversations')) return Response.json(failDirectory ? { ok: false, error: 'missing_scope' }
+      : { ok: true, channels: request.searchParams.get('user') === alice.user ? aliceChannels : aliceChannels.filter(channel => !channel.is_private) });
     if (request.pathname.endsWith('/conversations.info')) {
       const id = request.searchParams.get('channel')!;
       return Response.json({ ok: true, channel: { id, is_member: access.get(id) === true, is_channel: true } });
@@ -91,7 +92,11 @@ async function harness() {
     expect(response.statusCode).toBe(200); await run(`slack:${id}`);
     return posts.filter(post => post.channel === actor.channel).at(-1)!;
   };
-  const buttons = (post: (typeof posts)[number]) => post.blocks.flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements : []);
+  // Workflow tests identify compact table controls by their channel's row name.
+  const buttons = (post: (typeof posts)[number]) => post.blocks.flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements
+    : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element,
+      text: { ...cell.element.text, text: `${cell.element.text.text.replace(/^[☐☑] /, '')} ${row[0].text}` },
+    }))) : []);
   const click = async (post: (typeof posts)[number], label: string, actor = alice, timestamp = post.ts) => {
     let current = post;
     for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^🧭 /, '') === label); page++) {
@@ -113,7 +118,7 @@ async function harness() {
   const due = async () => { await sql.query("UPDATE yousign_deliveries SET next_at=now() WHERE status='queued'"); await sql.query("UPDATE yousign_alerts SET next_at=now() WHERE status='queued'"); await sql.query("UPDATE jobs SET available_at=now() WHERE module='yousign'"); };
   return { sql, module, modules, messenger, app, posts, access, failures, aliceChannels, run, text, click, buttons, webhook, add, deliver, due, pending,
     beforePost(callback: typeof beforePost) { beforePost = callback; },
-    setEnqueueFailure(value: boolean) { failEnqueue = value; }, setAlertFailure(value: typeof alertFailure) { alertFailure = value; } };
+    setEnqueueFailure(value: boolean) { failEnqueue = value; }, setDirectoryFailure(value: boolean) { failDirectory = value; }, setAlertFailure(value: typeof alertFailure) { alertFailure = value; } };
 }
 
 it('is opt-in, validates only enabled credentials, and requires no mail, encryption or AI configuration', async () => {
@@ -154,6 +159,79 @@ it('shares selections through signed private routing while hiding private destin
   await h.click(shared, 'Retirer #sales', bob);
   expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'GPRIVATE' }]);
   expect((await h.sql.query('SELECT * FROM ai_calls')).rows).toHaveLength(0);
+});
+
+it('renders a channel table with signed checkbox-style controls that update and persist in place', async () => {
+  const h = await harness(), list = await h.text('yousign canaux');
+  const table = list.blocks.find(block => block.type === 'data_table');
+  expect(table?.rows[0].map((cell: any) => cell.text)).toEqual(['Canal', 'Visibilité', 'Notifications', 'Sélection']);
+  expect(list.blocks.map(block => block.type)).toEqual(['container', 'data_table', 'container']);
+  expect(table.rows.slice(1).map((row: any[]) => row.slice(0, 3).map(cell => cell.text))).toEqual([
+    ['#legal', 'Privé', 'Désactivées'], ['#sales', 'Public', 'Désactivées'],
+  ]);
+  const toggle = table.rows[1][3];
+  expect(toggle.element.text.text).toBe('☐ Activer');
+  expect(toggle.element.action_id).toMatch(/^yousign:channel_add~button-\d+$/);
+  expect(toggle.fallback.text).toContain('yousign canaux');
+  expect(list.text).toContain('autorise immédiatement');
+  await h.click(list, 'Activer #legal', alice, '999.999');
+  await h.click(list, 'Activer #legal', { ...alice, channel: 'DOTHER' });
+  expect((await h.sql.query('SELECT * FROM yousign_destinations')).rows).toHaveLength(0);
+  const activated = await h.click(list, 'Activer #legal');
+  expect(activated.ts).toBe(list.ts);
+  const activeRow = activated.blocks.find(block => block.type === 'data_table')!.rows[1];
+  expect(activeRow[2].text).toBe('Activées');
+  expect(activeRow[3].element.text.text).toBe('☑ Retirer');
+  expect(activeRow[3].element.style).toBe('danger');
+  expect(activeRow[3].element.action_id).toMatch(/^yousign:channel_remove~button-\d+$/);
+  const reopened = await h.text('yousign channels');
+  expect(reopened.blocks.find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
+  const removed = await h.click(reopened, 'Retirer #legal');
+  expect(removed.ts).toBe(reopened.ts);
+  expect(removed.blocks.find(block => block.type === 'data_table')!.rows[1][3].element.text.text).toBe('☐ Activer');
+});
+
+it('opens the same channel table from menu navigation and typed commands', async () => {
+  const h = await harness(), typed = await h.text('yousign canaux');
+  const main = await h.click(await h.text('menu'), 'Yousign');
+  const page = await h.click(main, 'Choisir les canaux');
+  expect(page.ts).toBe(main.ts);
+  const typedTable = typed.blocks.find(block => block.type === 'data_table')!, menuTable = page.blocks.find(block => block.type === 'data_table')!;
+  expect(menuTable.rows.map((row: any[]) => row.slice(0, 3))).toEqual(typedTable.rows.map((row: any[]) => row.slice(0, 3)));
+  expect(menuTable.rows[1][3].element.action_id).toMatch(/^yousign:channel_add~button-\d+$/);
+  const selected = await h.click(page, 'Activer #legal');
+  expect(selected.ts).toBe(page.ts);
+  expect(selected.blocks.find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
+});
+
+it('retains inaccessible selections and hides their rows when current access is lost', async () => {
+  const h = await harness(); await h.add('legal');
+  const previous = await h.text('yousign canaux');
+  h.aliceChannels.splice(h.aliceChannels.findIndex(channel => channel.id === 'GPRIVATE'), 1);
+  const updated = await h.click(previous, 'Retirer #legal');
+  expect(JSON.stringify(updated)).not.toMatch(/legal|GPRIVATE/);
+  expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'GPRIVATE' }]);
+});
+
+it('shows recovery navigation without an empty table when no channels can be displayed', async () => {
+  const h = await harness(); h.aliceChannels.length = 0;
+  const empty = await h.text('yousign canaux');
+  expect(empty.blocks.some(block => block.type === 'data_table')).toBe(false);
+  expect(empty.text).toContain('Aucun canal partagé');
+  expect(h.buttons(empty).map(button => button.text.text.replace(/^🧭 /, ''))).toEqual(['Menu', 'Retour à Yousign']);
+  h.setDirectoryFailure(true);
+  const unavailable = await h.text('yousign canaux');
+  expect(unavailable.blocks.some(block => block.type === 'data_table')).toBe(false);
+  expect(unavailable.text).toContain('ne peut pas être vérifié');
+  expect(h.buttons(unavailable).map(button => button.text.text.replace(/^🧭 /, ''))).toEqual(['Menu', 'Retour à Yousign']);
+});
+
+it('keeps previously posted unsuffixed channel controls compatible', async () => {
+  const h = await harness(), list = await h.text('yousign canaux');
+  const row = list.blocks.find(block => block.type === 'data_table')!.rows.find((row: any[]) => row[0].text === '#sales');
+  const legacy = { ...list, blocks: [{ type: 'actions', elements: [{ ...row[3].element, action_id: 'yousign:channel_add', text: { type: 'plain_text', text: 'Activer #sales' } }] }] };
+  await h.click(legacy, 'Activer #sales');
+  expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'CPUBLIC' }]);
 });
 
 it('acknowledges durable receipt before Slack, broadcasts once per event/channel, and discards unapproved payload fields', async () => {
@@ -321,9 +399,20 @@ it('paginates the shared selector and accepts eligible externally shared channel
   const h = await harness();
   for (let index = 0; index < 12; index++) h.aliceChannels.push({ id: `CEXTERNAL${index}`, name: `external-${String(index).padStart(2, '0')}`, is_channel: true, is_ext_shared: true });
   const first = await h.text('yousign channels'); expect(first.text).toContain('page 1/2');
+  const firstRows = first.blocks.find(block => block.type === 'data_table')!.rows.slice(1);
+  expect(firstRows).toHaveLength(10);
+  expect(firstRows.every((row: any[]) => row[3].type === 'action_cell')).toBe(true);
+  expect(new Set(firstRows.map((row: any[]) => row[3].element.action_id)).size).toBe(10);
+  expect(h.buttons(first).some(button => /Actions/.test(button.text.text))).toBe(false);
   const second = await h.click(first, 'Suivant'); expect(second.ts).toBe(first.ts); expect(second.text).toContain('page 2/2');
-  await h.click(second, 'Activer #external-10');
+  expect(second.blocks.find(block => block.type === 'data_table')!.rows.slice(1).map((row: any[]) => row[0].text)).toEqual(['#external-10', '#external-11', '#legal', '#sales']);
+  expect(h.buttons(second).some(button => /Actions/.test(button.text.text))).toBe(false);
+  const selected = await h.click(second, 'Activer #external-10');
+  expect(selected.ts).toBe(first.ts);
+  expect(selected.blocks.find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
   expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'CEXTERNAL10' }]);
+  const previous = await h.click(selected, 'Précédent');
+  expect(previous.ts).toBe(first.ts); expect(previous.text).toContain('page 1/2');
 });
 
 it('keeps disabled integration work pending, bypasses deferred integration jobs and preserves User ordering', async () => {

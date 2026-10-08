@@ -3,10 +3,11 @@ export const yousignHelp = {
 
 *1. Gérer les destinations partagées*
 • yousign canaux ou Menu → Yousign → Choisir les canaux : parcourir les canaux publics, privés et partagés avec l’extérieur accessibles à vous et au bot.
-• Activer : autoriser immédiatement les futures notifications dans ce canal, sans confirmation supplémentaire. Les événements déjà reçus ne sont pas rattrapés.
-• Retirer : désactiver la destination et annuler ses envois encore en attente. Un envoi déjà commencé peut aboutir ; les messages publiés restent en place.
+Le tableau affiche dix canaux par page, leur visibilité et l’état de leurs notifications, avec un contrôle sur chaque ligne.
+• ☐ Activer : autoriser immédiatement les futures notifications dans ce canal, sans confirmation supplémentaire. Les événements déjà reçus ne sont pas rattrapés.
+• ☑ Retirer : désactiver la destination et annuler ses envois encore en attente. Un envoi déjà commencé peut aboutir ; les messages publiés restent en place.
 La liste commence vide. Si aucune destination n’est active, les événements sont ignorés sans rattrapage ultérieur. Réactiver un canal ne relance pas les anciennes notifications. Les canaux auxquels vous n’avez pas accès sont masqués et leurs sélections sont conservées.
-Précédent/Suivant parcourent les destinations dans le même message. Ces réglages sont indépendants de vos sélections personnelles Slack sans réponse.
+Précédent/Suivant parcourent les destinations dans le même message ; Retour à Yousign et Menu restent visibles sous le tableau. Ces réglages sont indépendants de vos sélections personnelles Slack sans réponse.
 
 *2. Recevoir les notifications automatiques*
 Chaque événement authentifié reçu par l’intégration produit la même notification française dans les destinations actives lors de sa réception. Il n’y a pas de filtre par type d’événement ; les nouveaux noms d’événements sont également acceptés.

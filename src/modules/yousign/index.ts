@@ -25,18 +25,24 @@ export function createYousignModule(config: YousignConfig, database: Database, d
   async function channelsPage(actor: Actor, sql: Database, requested = 0, notice = '', standalone = false): Promise<MenuPage> {
     let available;
     try { available = await directory.list(actor.user); }
-    catch { return { kind: 'Canaux Yousign', text: 'L’accès aux canaux ne peut pas être vérifié. Aucun canal n’est affiché ni modifié. Réouvrez la liste plus tard.', links: back(standalone) }; }
+    catch { return { kind: 'Canaux Yousign', text: 'L’accès aux canaux ne peut pas être vérifié. Aucun canal n’est affiché ni modifié. Réouvrez la liste plus tard.', buttons: [menuButton], links: back(standalone) }; }
     const selected = new Map((await store(sql).destinations()).map(row => [row.channel_id, row.id]));
     const pages = Math.max(1, Math.ceil(available.length / 10)), current = Math.min(requested, pages - 1);
     const visible = available.slice(current * 10, (current + 1) * 10);
-    const buttons: Button[] = visible.map(channel => selected.has(channel.id)
-      ? { label: `Retirer #${channel.name.slice(0, 55)}`, action: 'channel_remove', value: `${channel.id}|${selected.get(channel.id)}|${current}`, style: 'danger' }
-      : { label: `Activer #${channel.name.slice(0, 55)}`, action: 'channel_add', value: `${channel.id}|${current}` });
+    const rowButtons: Button[] = visible.map(channel => selected.has(channel.id)
+      ? { label: '☑ Retirer', action: 'channel_remove', value: `${channel.id}|${selected.get(channel.id)}|${current}`, style: 'danger' }
+      : { label: '☐ Activer', action: 'channel_add', value: `${channel.id}|${current}` });
+    const buttons: Button[] = [];
     if (current) buttons.push({ label: 'Précédent', action: 'channel_page', value: String(current - 1) });
     if (current + 1 < pages) buttons.push({ label: 'Suivant', action: 'channel_page', value: String(current + 1) });
-    return { kind: 'Canaux Yousign', bindButtons: true, links: back(standalone), buttons, text: [notice,
+    buttons.push(menuButton);
+    return { kind: 'Canaux Yousign', bindButtons: true, links: back(standalone), buttons,
+      ...(visible.length ? { table: { columns: ['Canal', 'Visibilité', 'Notifications'],
+        rows: visible.map(channel => [`#${channel.name}`, channel.private ? 'Privé' : 'Public', selected.has(channel.id) ? 'Activées' : 'Désactivées']),
+        rowButtons, rowButtonColumn: 'Sélection', rowButtonFallback: 'Ouvrez yousign canaux dans un client Slack récent',
+      } } : {}), text: [notice,
       'Liste partagée : Activer autorise immédiatement les futurs messages Yousign dans ce canal. Retirer annule les messages en attente. Les canaux auxquels vous n’avez pas accès sont masqués.',
-      `Canaux (page ${current + 1}/${pages}) :`, ...visible.map(channel => `${selected.has(channel.id) ? '✓' : '○'} ${channel.private ? 'Privé' : 'Public'} #${escapeCardValue(channel.name)}`),
+      `Canaux (page ${current + 1}/${pages}) :`,
       !available.length ? 'Aucun canal partagé avec le bot. Invitez-le dans les canaux à sélectionner.' : '',
     ].filter(Boolean).join('\n') };
   }
