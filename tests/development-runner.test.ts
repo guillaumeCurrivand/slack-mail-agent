@@ -6,7 +6,7 @@ import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 import path from 'node:path';
 import { afterEach, expect, it } from 'vitest';
-import type { Work } from '../src/modules/development/domain.js';
+import { resultSchema, type Work } from '../src/modules/development/domain.js';
 import { atomicJson, execute, LocalRunner, type Execute, type LocalProject } from '../src/modules/development/runner.js';
 import { workerConfigSchema } from '../src/modules/development/worker-main.js';
 
@@ -220,8 +220,13 @@ it.each(['test', 'preprod'])('accumulates one commit per ticket above %s without
 it('rejects unsafe base branch names and publishing directly to the base branch', () => {
   const value = { server: 'https://agent.example.com', stateDirectory: 'state', projects: [{ id: 'pilot', repository: 'url', skill: 'maintenance', skillPath: 'skill', checks: [['check']], branch: 'maintenance/ai', baseBranch: 'preprod' }] };
   expect(workerConfigSchema.safeParse(value).success).toBe(true);
+  expect(workerConfigSchema.safeParse({ ...value, projects: [{ ...value.projects[0], branch: 'stage/maintenance-ia' }] }).success).toBe(true);
+  expect(resultSchema.safeParse({ outcome: 'pushed', summary: 'Menu corrigé.', tests: [], branch: 'stage/maintenance-ia', commit: 'a'.repeat(40) }).success).toBe(true);
   for (const baseBranch of ['--help', '../preprod', 'preprod; command', 'preprod//other', 'maintenance/ai']) {
     expect(workerConfigSchema.safeParse({ ...value, projects: [{ ...value.projects[0], baseBranch }] }).success).toBe(false);
+  }
+  for (const branch of ['--help', '../stage', 'stage; command', 'stage//maintenance-ia', 'preprod']) {
+    expect(workerConfigSchema.safeParse({ ...value, projects: [{ ...value.projects[0], branch }] }).success).toBe(false);
   }
 });
 
@@ -252,6 +257,19 @@ it('recovers a lost push response by checking the existing SHA, without another 
   const result = await h.runner.run(h.work, h.local, h.attempt);
   expect(result.outcome).toBe('pushed'); expect(h.count().agents).toBe(1); expect(h.count().pushes).toBe(1);
   expect(await h.git(h.remote, 'rev-list', '--count', 'test..maintenance')).toBe('1');
+});
+
+it('publishes one commit to a configured branch outside the maintenance namespace', async () => {
+  const h = await fixture({ baseBranch: 'preprod' });
+  h.local.baseBranch = 'preprod';
+  h.local.branch = 'stage/maintenance-ia';
+  const base = await h.git(h.remote, 'rev-parse', 'preprod');
+  const result = await h.runner.run(h.work, h.local, h.attempt);
+  expect(result.outcome).toBe('pushed');
+  expect(result.branch).toBe('stage/maintenance-ia');
+  expect(await h.git(h.remote, 'rev-parse', 'stage/maintenance-ia')).toBe(result.commit);
+  expect(await h.git(h.remote, 'rev-parse', 'preprod')).toBe(base);
+  expect(await h.git(h.remote, 'rev-list', '--count', 'preprod..stage/maintenance-ia')).toBe('1');
 });
 
 it('publishes and recovers maintenance/ai without conflicting with historical maintenance branches', async () => {

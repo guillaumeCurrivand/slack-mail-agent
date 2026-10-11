@@ -19,8 +19,9 @@ Vous créez ensuite le PR/MR et gérez sa revue. Aucun PR/MR, fusion ou déploie
 
 *4. Consulter le suivi et relancer un traitement bloqué*
 • development statut <identifiant-du-projet> : consulter les traitements, leurs identifiants, états, essais, résumés et problèmes de connexion.
-• development relancer <identifiant-du-traitement> : demander une nouvelle exécution d’un traitement bloqué admissible, avec les exigences déjà figées. Le projet doit être actif et accessible, et le traitement ne doit pas avoir de commit à réconcilier.
-Pour changer les exigences, modifiez le ticket, changez son statut puis remettez Ready for AI. Une publication incertaine ou un commit déjà poussé doit être vérifié avant reprise ; une relance ne doit pas répéter le code déjà publié.
+• development relancer <identifiant-du-traitement> : relancer un traitement bloqué sans commit, avec les exigences déjà figées, ou relancer explicitement une publication incertaine déjà poussée. Le projet doit être actif et accessible.
+Une publication incertaine relancée lit le ticket actuel et laisse le commit déjà poussé sur son ancienne branche. Le worker publie la nouvelle exécution sur la branche indiquée dans sa configuration locale. Ready for AI ne fait pas cette relance tout seul.
+Pour changer les exigences d’un traitement bloqué sans commit, modifiez le ticket, changez son statut puis remettez Ready for AI.
 
 *Prérequis et coûts*
 L’opérateur configure les accès Slack/ClickUp, le worker local, les dépôts, les skills et les services nécessaires aux tests. Le compte ClickUp de ce module est celui de l’intégration de maintenance ; il est distinct de votre connexion personnelle au module ClickUp.

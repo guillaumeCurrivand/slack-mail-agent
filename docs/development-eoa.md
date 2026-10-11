@@ -14,9 +14,9 @@ development status pilot
 
 Wait for **Projet … enregistré**. The requester and bot must belong to the channel, and the dedicated Development ClickUp token must access the Folder. Apply the repository's [Slack manifest](../slack-manifest.json) to the installed app, reinstall if scopes changed, and invite Mayassistant into that channel. Configuration does not require the local worker to be running.
 
-Post the standard ticket URL in the project channel, for example `https://app.clickup.com/t/1245apux5f7`. The workspace-qualified form `https://app.clickup.com/t/4573809/1245apux5f7` is not supported by the current parser. Investigation answers appear in a thread. A person sets **Ready for AI** to authorize implementation. A confirmed, tested push to **maintenance/ai** precedes **to build**. Reports are French; each ticket's commit message is English. You open the MR and merge into **preprod** yourself.
+Post the standard ticket URL in the project channel, for example `https://app.clickup.com/t/1245apux5f7`. The workspace-qualified form `https://app.clickup.com/t/4573809/1245apux5f7` is not supported by the current parser. Investigation answers appear in a thread. A person sets **Ready for AI** to authorize implementation. A confirmed, tested push to **stage/maintenance-ia** precedes **to build**. Reports are French; each ticket's commit message is English. You open the MR and merge into **preprod** yourself.
 
-The worker expects remote `preprod`; publishing `maintenance/ai` does not satisfy a missing base branch. No remote `test` branch is needed. Repository credentials must work unattended in fresh clones; successful access from an already-open checkout alone is insufficient.
+The worker expects remote `preprod`; publishing `stage/maintenance-ia` does not satisfy a missing base branch. No remote `test` branch is needed. Repository credentials must work unattended in fresh clones; successful access from an already-open checkout alone is insufficient.
 
 ## Automatic startup
 
@@ -102,7 +102,7 @@ Use the following EOA profile in `C:\Work\slack-mail-agent\development-worker.lo
     "repository": "https://gitlab.com/mayasquad/orient-action/orient-action-frontend",
     "skill": "maintenance",
     "skillPath": "C:/Work/EOA/.cursor/skills/maintenance/SKILL.md",
-    "branch": "maintenance/ai",
+    "branch": "stage/maintenance-ia",
     "baseBranch": "preprod",
     "setup": [
       ["powershell.exe", "-NoProfile", "-Command", "$env:PATH='C:/Users/gcurr/AppData/Local/nvm/v16.20.2;'+$env:PATH; Remove-Item Env:NODE_OPTIONS -ErrorAction SilentlyContinue; npm ci --legacy-peer-deps"],
@@ -212,7 +212,7 @@ Inspect the newest run beneath `C:\Work\mayassistant-development-state\runs`. Ea
 | --- | --- |
 | Configuration receives no response / no saved project | Verify server version, signed DM delivery and job diagnostics. Earlier fixes changed Slack membership API calls to GET query parameters, normalized Slack-formatted repository URLs and added safe error type/location logs. Send a new configure message after correcting the cause; do not reset exhausted database jobs. |
 | Ticket link gets no visible reply | Use the short `/t/<task-id>` URL in the configured channel, check `development status pilot`, and ensure the local worker is running. A queued review with zero attempts has not yet been investigated. |
-| Remote `test` branch absent | Set EOA `baseBranch` to `preprod`; `branch` remains `maintenance/ai`. Restart the worker and explicitly retry the blocked run. |
+| Remote `test` branch absent | Set EOA `baseBranch` to `preprod`; `branch` remains `stage/maintenance-ia`. Restart the worker and explicitly retry the blocked run. |
 | `npm error code ERESOLVE` | The known Chart.js/plugin peer conflict needs `npm ci --legacy-peer-deps` for this existing dependency tree. |
 | Preview exits with `ERR_OSSL_EVP_UNSUPPORTED` | Verify that frontend setup, tests, preview and build use the configured Node 16 executable via their child PATH, and clear inherited `NODE_OPTIONS`. The earlier Node 25 legacy-provider workaround is superseded by explicit project runtime selection. |
 | Build fails on a `date-fns/.../localize.mjs` named export | Inspect the underlying Webpack diagnostics: the observed failure was untransformed optional chaining in dependency code, which Webpack 4 cannot parse. The frontend repair forces optional-chaining/nullish-coalescing transforms in CRA's dependency Babel loader. Run `node scripts/check-webpack-dependencies.js` and the full build under Node 16. The repair must be published to the frontend branch before a worker clone can use it; changing Node or restoring the OpenSSL workaround alone does not fix this compilation problem. |

@@ -187,9 +187,22 @@ it('does not retry uncertain external status changes or accidentally restart cod
   h.failStatus(); await h.run(`development:finish:${work.id}`);
   expect((await h.store.run(work.id)).state).toBe('reporting_error');
   expect(h.statuses).toEqual(['to build']);
-  await h.dm(`development retry ${work.id}`);
+  h.tasks.get('abc123')!.status = 'to do';
+  await h.poll();
+  h.tasks.get('abc123')!.status = 'Ready for AI';
+  h.tasks.get('abc123')!.description = 'Comportement revu après le commit.';
+  await h.poll();
   expect(await h.store.history('pilot')).toHaveLength(1);
+  await h.dm(`development retry ${work.id}`);
+  const runs = await h.store.history('pilot');
+  expect(runs).toHaveLength(2);
+  expect(runs.find(run => run.id !== work.id).ticket.description).toBe('Comportement revu après le commit.');
+  expect((await h.store.run(work.id)).state).toBe('reporting_error');
+  expect(h.posts.at(-1).text).toContain('branche configurée localement');
+  expect(h.posts.at(-1).text).toContain('b'.repeat(40));
   expect(h.posts.some(post => post.text.includes('a déjà été poussé'))).toBe(true);
+  await h.poll();
+  expect(await h.store.history('pilot')).toHaveLength(2);
 });
 
 it('reports blockers in the original thread, leaves ClickUp status unchanged, and allows explicit retry', async () => {

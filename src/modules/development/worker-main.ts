@@ -41,15 +41,21 @@ export async function runWorker(filename: string, once = false) {
       return response.json() as Promise<any>;
     };
     const runner = new LocalRunner(root, config.agent);
+    console.log(`Worker prêt. ${config.projects.map(project => `${project.id} → ${project.branch ?? 'maintenance'} (base ${project.baseBranch ?? 'test'})`).join(', ')}`);
+    let lastIdleLog = 0;
     do {
       try {
         const { work } = await request('claim', { worker, projects: config.projects.map(project => project.id) }) as { work: Work | null };
         if (work) {
           const project = config.projects.find(project => project.id === work.project.id);
           if (!project) throw new Error('Projet local introuvable ; restaurez sa configuration pour terminer le traitement.');
+          console.log(`Pris ${work.kind} ${work.project.id}/${work.ticket.id} sur ${project.branch ?? 'maintenance'}.`);
           const result = await runner.run(work, project, async expected => (await request('attempt', { id: work.id, lease: work.lease, expected })).attempt);
           await request('result', { id: work.id, lease: work.lease, result });
-          console.log(`${work.project.id} / ${work.ticket.id} : ${result.outcome}`);
+          console.log(`${work.project.id} / ${work.ticket.id} : ${result.outcome}${result.commit ? ` ${result.commit.slice(0, 12)} sur ${result.branch ?? project.branch ?? 'maintenance'}` : ''}`);
+        } else if (Date.now() - lastIdleLog > 60_000) {
+          console.log('Aucun traitement en attente.');
+          lastIdleLog = Date.now();
         }
       } catch (error) { console.error(error instanceof Error ? error.message.split('\n')[0] : 'Worker indisponible.'); }
       if (!once && !stopping) await delay(5000);

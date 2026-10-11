@@ -110,13 +110,21 @@ export class DevelopmentStore {
     });
   }
   async run(id: string) { return (await this.db.query('SELECT * FROM development_runs WHERE team=$1 AND id=$2', [this.team, id])).rows[0]; }
-  async retry(id: string, eventId: string, project: string) {
+  async retry(id: string, eventId: string, project: string, ticket?: Ticket) {
     return transaction(this.db, async sql => {
       await sql.query('SELECT id FROM development_projects WHERE team=$1 AND id=$2 FOR UPDATE', [this.team, project]);
-      return (await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
-        SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND state='blocked' AND result->>'commit' IS NULL
+      const retryId = `retry:${eventId}`;
+      // A blocked run without a commit keeps its frozen ticket. A pushed reporting_error may be explicitly retried; the previous commit stays where it was published.
+      const inserted = await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
+        SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND (
+          (state='blocked' AND result->>'commit' IS NULL) OR
+          (kind='build' AND state='reporting_error' AND result->>'outcome'='pushed' AND result->>'commit' IS NOT NULL)
+        )
         AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.state IN ('queued','running','reporting'))
-        ON CONFLICT DO NOTHING RETURNING id`, [`retry:${eventId}`, id, this.team])).rows.length > 0;
+        ON CONFLICT DO NOTHING RETURNING id`, [retryId, id, this.team]);
+      if (!inserted.rows.length) return false;
+      if (ticket) await sql.query('UPDATE development_runs SET ticket=$2::jsonb WHERE id=$1', [retryId, JSON.stringify(ticket)]);
+      return true;
     });
   }
   async history(project: string) { return (await this.db.query('SELECT id,kind,state,attempts,ticket,result FROM development_runs WHERE team=$1 AND project=$2 ORDER BY created_at DESC LIMIT 10', [this.team, project])).rows; }

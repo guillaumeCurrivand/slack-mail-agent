@@ -61,6 +61,18 @@ Post-update: check the [worker process](development-eoa.md#check-whether-the-wor
 
 The Windows runtime-separation follow-up adds `scripts/start-development-worker.ps1`. Stop the existing local worker normally, run `.\scripts\start-development-worker.ps1 -Check`, verify the installed Node 25 executable, then run `.\scripts\start-development-worker.ps1`. Pin the local browser MCP to the same physical Node 25 executable while EOA child commands retain Node 16. Follow the [runtime separation procedure](development-eoa.md#keep-the-worker-and-project-node-versions-separate); do not run `nvm use` globally. No server environment, schema, manifest or restart changes are required. The direct worker entry point now rejects Node below 24 before taking a lock. A fresh Cursor run with the updated prompt remains a separate live check.
 
+### Development retry onto the current branch — 12/10/2026
+
+An explicit `development retry <run-id>` of a `reporting_error` build that already has a commit queues a new build from the current ticket. The worker publishes it to the branch in its local configuration. Ready for AI still does not. The saved commit stays on its original branch. Deploy this server change before sending that command. No environment variable, Slack permission or database migration changes. Restart the local worker afterward so it prints claim, branch, Cursor attempt, check and publication lines.
+
+Deploy the reviewed, pushed `main` commit with the Development commands above. On the workstation, stop the worker normally, pull the same commit, keep the intended `"branch"` in `development-worker.local.json`, then restart with `.\scripts\start-development-worker.ps1`. For ticket `1245apux992`, send `development retry retry:slack:Ev0C6W2UBXK6` in a private DM only after this server is running the new code. Confirm the worker log names `stage/maintenance-ia` and that `288b8177e312139827b0e5d6d33d05c845fce628` remains on `maintenance/ai`.
+
+### Development destination branch — 11/10/2026
+
+The local `branch` field now accepts the same names as `baseBranch`, including `stage/maintenance-ia`. The server result check uses that same grammar, so deploy this server change before a worker reports a destination outside the old `maintenance` or `maintenance/<name>` pattern. No environment variable, Slack permission or database migration changes. Preserve the local token, worker identity and journals. An in-flight run keeps the branch pinned in its journal.
+
+Deploy the reviewed, pushed `main` commit with the Development commands above. On the workstation, stop the worker normally, pull the same commit, keep `"branch":"stage/maintenance-ia"` and `"baseBranch":"preprod"` in `development-worker.local.json`, then restart with `.\scripts\start-development-worker.ps1`. Confirm the next published commit is on `stage/maintenance-ia` and that `preprod` is unchanged.
+
 ### Development Cursor rules — 06/10/2026
 
 The local worker now prepares the approved Ponytail rule in each run's `.cursor/rules/` folder before starting Cursor. Follow the [rule contract](development.md#cursor-cli-coding-rules). Stop the existing worker normally, update the local checkout, keep the versioned rule asset alongside the source/compiled worker, and restart with `.\scripts\start-development-worker.ps1`. No dependencies, server rebuild/restart, environment variables, migrations or Slack manifest changes are required. The server checkout may pull the reviewed commit using the worker-only commands above. Post-update, verify the rule in the next run's checkout and its absence from the maintenance commit; model adherence and a complete live ticket run need separate observation.

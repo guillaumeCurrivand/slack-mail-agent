@@ -5,7 +5,7 @@ import type { AssistantModule, IntegrationContext } from '../../core/modules.js'
 import { JobStore } from '../../core/store.js';
 import type { Database } from '../../core/transactions.js';
 import type { DevelopmentConfig } from './config.js';
-import { projectSchema, ready, resultSchema, ticketIds, type Project, type Result } from './domain.js';
+import { projectSchema, ready, resultSchema, ticketIds, type Project, type Result, type Ticket } from './domain.js';
 import { ClickupDevelopment, DevelopmentChannels } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
 import { developmentHelp } from './help.js';
@@ -101,10 +101,18 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       }
       if (text.startsWith('retry ')) {
         const row = await store.run(text.slice(6)), project = row && await store.project(row.project);
-        if (!row || !project || !project.enabled || row.state !== 'blocked' || row.result?.commit || !await visible(actor, project)) return send('Ce traitement ne peut pas être relancé.');
+        const republish = row?.kind === 'build' && row.state === 'reporting_error' && row.result?.outcome === 'pushed' && row.result.commit;
+        if (!row || !project || !project.enabled || !await visible(actor, project) || !(row.state === 'blocked' && !row.result?.commit || republish)) return send('Ce traitement ne peut pas être relancé.');
         // A fresh explicit request is a fresh run; repeated delivery of the same request is not.
-        const started = await store.retry(row.id, eventId, project.id);
-        return send(started ? 'Relance enregistrée avec les exigences déjà figées. Pour modifier les exigences, changez le statut puis remettez Ready for AI.' : 'Une relance existe déjà ou ce traitement ne peut plus être relancé.');
+        let refreshed: Ticket | undefined;
+        if (republish) {
+          try { refreshed = await clickup.ticket(project, row.ticket.id); }
+          catch { return send('Relance impossible : lecture du ticket ClickUp indisponible.'); }
+        }
+        const started = await store.retry(row.id, eventId, project.id, refreshed);
+        return send(started ? republish
+          ? `Nouvelle exécution enregistrée. Le commit ${row.result!.commit} reste sur ${row.result!.branch ?? 'sa branche d’origine'} et n’est pas réécrit. Le worker publiera sur la branche configurée localement.`
+          : 'Relance enregistrée avec les exigences déjà figées. Pour modifier les exigences, changez le statut puis remettez Ready for AI.' : 'Une relance existe déjà ou ce traitement ne peut plus être relancé.');
       }
       return send(help);
     },

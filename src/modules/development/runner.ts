@@ -4,7 +4,7 @@ import { appendFile, lstat, mkdir, readFile, rename, writeFile } from 'node:fs/p
 import path from 'node:path';
 import { z } from 'zod';
 import { browserConfigSchema, browserInstructions, browserScenarioSchema, replayBrowser, startPreview } from './browser.js';
-import { maintenanceBranchSchema } from './domain.js';
+import { branchNameSchema } from './domain.js';
 import type { Result, Work } from './domain.js';
 import { localServiceSchema, startLocalServices } from './local-services.js';
 
@@ -12,12 +12,12 @@ const command = z.array(z.string().min(1).max(2000)).min(1).max(100);
 export const localProjectSchema = z.object({
   id: z.string().regex(/^[a-z][a-z0-9-]{0,63}$/), repository: z.string().min(1), skill: z.string().min(1),
   skillPath: z.string().min(1), checks: z.array(command).min(1).max(25), browserChecks: z.array(command).max(5).default([]),
-  branch: maintenanceBranchSchema.optional(),
-  baseBranch: z.string().max(200).regex(/^[a-zA-Z0-9][a-zA-Z0-9_-]*(?:\/[a-zA-Z0-9][a-zA-Z0-9_-]*)*$/).optional(),
+  branch: branchNameSchema.optional(),
+  baseBranch: branchNameSchema.optional(),
   browser: browserConfigSchema.optional(),
   setup: z.array(command).max(30).default([]),
   services: z.array(localServiceSchema).max(10).refine(services => new Set(services.map(service => service.id)).size === services.length && services.every(service => service.id !== 'preview'), 'Service IDs must be unique and cannot be preview.').optional(),
-}).strict().refine(value => (value.baseBranch ?? 'test') !== (value.branch ?? 'maintenance'), 'Base and maintenance branches must differ.');
+}).strict().refine(value => (value.baseBranch ?? 'test') !== (value.branch ?? 'maintenance'), 'Base and destination branches must differ.');
 export type LocalProject = z.infer<typeof localProjectSchema>;
 const commitTitleSchema = z.string().trim().min(1).max(120).regex(/^[^\r\n\x00-\x1f\x7f]+$/, 'Commit title must be a single line.');
 const reportSchema = z.object({ actionable: z.boolean(), summary: z.string().min(1).max(8000), browserRequired: z.boolean(), commitTitle: commitTitleSchema.optional(), browserScenario: browserScenarioSchema.optional() }).strict();
@@ -121,6 +121,7 @@ export class LocalRunner {
             base = `origin/${branch}`;
           }
         }
+        console.log(`${work.ticket.id} : préparation de ${branch} depuis ${baseBranch}.`);
         await git('checkout', '-b', branch, base);
         journal.branch = branch; journal.baseBranch = baseBranch; journal.baseline = await git('rev-parse', 'HEAD');
         await git('config', 'user.name', 'Mayassistant');
@@ -157,6 +158,7 @@ export class LocalRunner {
           // Save before asking the server; an uncertain attempt admission cannot spend twice.
           journal.phase = 'attempting'; await save();
           journal.attempt = await startAttempt(attempt); await save();
+          console.log(`${work.ticket.id} : essai Cursor ${journal.attempt} (${work.kind}).`);
           try {
             const skill = await readFile(path.resolve(project.skillPath), 'utf8');
             const prompt = [
@@ -188,6 +190,7 @@ export class LocalRunner {
             if (!journal.report.commitTitle) throw new Error('Résumé de commit anglais manquant.');
             journal.tests = [];
             const checks = [...project.checks, ...project.browserChecks];
+            console.log(`${work.ticket.id} : ${checks.length} vérification(s)${journal.report.browserRequired ? ', puis navigateur' : ''}.`);
             if (journal.report.browserRequired) {
               if (!project.browserChecks.length && !project.browser) throw new Error('Vérification navigateur nécessaire : configurez browserChecks sur le worker.');
             }
@@ -233,7 +236,10 @@ export class LocalRunner {
           await git('fetch', 'origin', branch);
           contains = (await this.exec(['git', 'merge-base', '--is-ancestor', journal.commit!, 'FETCH_HEAD'], checkout)).code === 0;
         }
-        if (!contains) await git('push', project.repository, `${journal.commit}:refs/heads/${branch}`);
+        if (!contains) {
+          console.log(`${work.ticket.id} : publication de ${journal.commit?.slice(0, 12)} sur ${branch}.`);
+          await git('push', project.repository, `${journal.commit}:refs/heads/${branch}`);
+        }
         return finish({ outcome: 'pushed', branch, summary: journal.report!.summary, tests: journal.tests ?? [], commit: journal.commit });
       }
       throw new Error('État du traitement inconnu.');
