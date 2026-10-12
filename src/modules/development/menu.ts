@@ -15,7 +15,7 @@ export const projectPage = (id: string) => `project_${id}`;
 const runPage = (id: string) => `run_${createHash('sha256').update(id).digest('hex')}`;
 const back = [{ label: 'Retour aux projets', page: 'projects_0' }];
 const unavailable: MenuPage = { kind: 'Développement indisponible', text: 'Ce projet ou traitement est inaccessible. Revenez aux projets ou envoyez menu.', links: back };
-const template = { id: 'alpha', name: 'Alpha', channel: 'C123ABC', folder: '123', repository: 'https://github.com/organisation/alpha', skill: 'maintenance', enabled: false };
+const configureButton = { label: 'Configurer un projet', action: 'configuration_prepare', value: 'new', bound: true };
 
 /** Module-owned browsing and confirmations; core owns message identity and delivery. */
 export class DevelopmentMenu {
@@ -28,7 +28,7 @@ export class DevelopmentMenu {
 
   async page(actor: Actor, page: string): Promise<MenuPage> {
     if (page === 'main') return { kind: 'Développement', text: 'Suivez vos projets et leurs tickets de maintenance. Un lien de ticket dans le canal lance une analyse ; Ready for AI dans ClickUp autorise la correction. Les appels Cursor sont facturés séparément.',
-      links: [{ label: 'Projets et traitements', page: 'projects_0' }, { label: 'Configurer un projet', page: 'configure' }, { label: 'Aide du module', page: 'help' }] };
+      links: [{ label: 'Projets et traitements', page: 'projects_0' }, { label: 'Aide du module', page: 'help' }], buttons: [configureButton] };
     if (page === 'configure') return this.configuration();
     const list = /^projects_(\d{1,6})$/.exec(page);
     if (list) {
@@ -40,7 +40,7 @@ export class DevelopmentMenu {
         links: [...rows.map(p => ({ label: p.name, page: projectPage(p.id) })),
           ...(index ? [{ label: 'Précédent', page: `projects_${index - 1}` }] : []),
           ...((index + 1) * pageSize < projects.length ? [{ label: 'Suivant', page: `projects_${index + 1}` }] : []),
-          { label: 'Actualiser', page: `projects_${index}` }, { label: 'Configurer un projet', page: 'configure' }] };
+          { label: 'Actualiser', page: `projects_${index}` }], buttons: [configureButton] };
     }
     const projectMatch = /^(project|configure|history)_([a-z][a-z0-9-]{0,63})(?:_(\d{1,6}))?$/.exec(page);
     if (projectMatch) {
@@ -51,8 +51,8 @@ export class DevelopmentMenu {
       const health = (await this.store.db.query('SELECT issue,checked_at FROM development_health WHERE team=$1 AND project=$2', [actor.team, project.id])).rows[0];
       return { kind: `Projet — ${project.name}`, text: `${project.enabled ? 'Activé' : 'Suspendu'}\nIdentifiant : ${project.id}\nCanal : ${project.channel}\nDossier ClickUp : ${project.folder}\nSkill : ${project.skill}\n${health ? `Dernière vérification ClickUp : ${formatDate(health.checked_at)}\n${health.issue ?? 'Aucun problème signalé à cette vérification.'}` : 'Aucune vérification ClickUp enregistrée.'}\n\nOuvrez le canal pour partager un lien de ticket. Dans un traitement, ouvrez le ticket pour sélectionner Ready for AI. Le worker doit être connecté ; cet écran ne mesure pas sa disponibilité.`,
         resourceLinks: [{ label: 'Ouvrir le canal Slack', url: `https://app.slack.com/client/${actor.team}/${project.channel}` }, { label: 'Dépôt', url: project.repository }],
-        links: [{ label: 'Voir les traitements', page: `history_${project.id}_0` }, { label: 'Modifier la configuration', page: `configure_${project.id}` }, { label: 'Actualiser', page }, ...back],
-        buttons: [{ label: project.enabled ? 'Suspendre le projet' : 'Réactiver le projet', action: 'propose_state', value: project.id, bound: true }] };
+        links: [{ label: 'Voir les traitements', page: `history_${project.id}_0` }, { label: 'Actualiser', page }, ...back],
+        buttons: [{ label: 'Modifier la configuration', action: 'configuration_prepare', value: `project:${project.id}`, bound: true }, { label: project.enabled ? 'Suspendre le projet' : 'Réactiver le projet', action: 'propose_state', value: project.id, bound: true }] };
     }
     const runMatch = /^run_([a-f0-9]{64})$/.exec(page);
     if (runMatch) {
@@ -70,7 +70,8 @@ export class DevelopmentMenu {
 
   private configuration(project?: Project): MenuPage {
     return { kind: project ? `Configuration — ${project.name}` : 'Configurer un projet',
-      text: `Copiez cette commande dans le DM, remplacez les valeurs puis envoyez-la. Les champs libres doivent être saisis ; tous les écrans de suivi restent accessibles par boutons.\n\ndevelopment configurer ${JSON.stringify(project ?? template)}\n\nLe projet est partagé avec les membres de son canal. Le bot et vous devez accéder au canal actuel et au nouveau canal ; le dossier ClickUp doit être lisible. Un nouveau projet proposé ici commence suspendu : ouvrez-le puis choisissez Réactiver le projet après vérification du worker par l’opérateur. enabled:true autorise immédiatement les tickets déjà Ready for AI. Le dépôt, le skill et l’identifiant doivent correspondre à la configuration locale du worker.`,
+      text: 'Configurez le projet dans un formulaire Slack : nom, canal, dossier ClickUp, dépôt, skill et activation. Après validation des accès, confirmez les valeurs dans votre DM. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
+      buttons: [{ label: 'Préparer le formulaire', action: 'configuration_prepare', value: project ? `project:${project.id}` : 'new', bound: true }],
       links: project ? [{ label: 'Retour au projet', page: projectPage(project.id) }] : back };
   }
 

@@ -44,7 +44,16 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     const raw = String(request.body ?? '');
     if (!verifySlack(raw, String(request.headers['x-slack-request-timestamp'] ?? ''), String(request.headers['x-slack-signature'] ?? ''), config.SLACK_SIGNING_SECRET)) return reply.code(401).send();
     const body = JSON.parse(new URLSearchParams(raw).get('payload') ?? '{}');
-    if (body.team?.id !== config.SLACK_TEAM_ID || !/^[UW][A-Z0-9]+$/.test(body.user?.id ?? '') || !/^D[A-Z0-9]+$/.test(body.channel?.id ?? '')) return reply.code(403).send();
+    if (body.team?.id !== config.SLACK_TEAM_ID || !/^[UW][A-Z0-9]+$/.test(body.user?.id ?? '')) return reply.code(403).send();
+    if (body.type === 'view_submission') {
+      const view = body.view;
+      if (typeof view?.callback_id !== 'string' || typeof view.private_metadata !== 'string' || view.private_metadata.length > 200) return reply.code(400).send();
+      const forms = modules.formSubmission(view.callback_id);
+      if (!forms) return reply.code(403).send();
+      // The Module recovers the original DM from its actor-owned saved form.
+      return forms.submit({ team: body.team.id, user: body.user.id }, view);
+    }
+    if (!/^D[A-Z0-9]+$/.test(body.channel?.id ?? '')) return reply.code(403).send();
     const action = body.actions?.[0];
     // Only the read-only navigation action accepts a static-select payload.
     if (action?.type === 'static_select') {
@@ -61,6 +70,17 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
       route.payload.timestamp = timestamp;
     }
     const actor = { team: body.team.id, user: body.user.id, channel: body.channel.id };
+    const forms = modules.formAction(route);
+    if (forms) {
+      const bound = await boundMenuTarget(store.sql, actor, route.payload.value, route.payload.timestamp);
+      if (!bound) {
+        await store.enqueue(`action:${digest(raw)}`, actor, { type: 'unavailable' }, 'core');
+      } else {
+        if (typeof body.trigger_id !== 'string' || !body.trigger_id || body.trigger_id.length > 300) return reply.code(400).send();
+        await forms.open(actor, { value: bound.value, trigger: body.trigger_id }, `action:${digest(raw)}`);
+      }
+      return { ok: true };
+    }
     const operation = modules.operation(route);
     if (operation && await boundMenuTarget(store.sql, actor, route.payload.value, route.payload.timestamp))
       await store.enqueueOperation(`action:${digest(raw)}`, actor, route.payload, route.module, operation.key, operation.label);

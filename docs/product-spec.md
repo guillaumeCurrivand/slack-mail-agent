@@ -38,7 +38,7 @@ The user approved a clickable interface for both existing modules, entirely with
 
 ### Detailed help
 
-Development follows the same private clickable navigation for projects, paginated treatment history, run details, configuration guidance and separately confirmed pause/resume/retry actions. Its [clickable interface contract](development.md#clickable-private-interface) owns eligibility, access, confirmation and recovery behavior. Ready for AI remains the human authorization to implement; reading menus/help never starts paid work.
+Development follows the same private clickable navigation for projects, paginated treatment history, run details, configuration forms and separately confirmed configuration/pause/resume/retry actions. Native Slack forms support creating and editing every project setting without commands or JSON, including a channel picker and activation checkbox. Its [clickable interface contract](development.md#clickable-private-interface) owns eligibility, access, confirmation and recovery behavior. Ready for AI remains the human authorization to implement; reading menus/help never starts paid work.
 
 The User requested complete explanations of every Module and capability. Shared `aide`/`help` opens a guide describing shared commands, explicit prefixes, private versus shared data, approvals, AI costs and recovery, followed by an overview and a help button for each enabled Module. Disabled Modules remain hidden. `<prefix> aide`, `<prefix> help` and a bare Module prefix open that Module's guide directly. English commands remain compatible.
 

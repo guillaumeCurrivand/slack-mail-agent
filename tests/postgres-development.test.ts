@@ -3,6 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { coreSchema } from '../src/core/store.js';
 import { developmentSchema, DevelopmentStore } from '../src/modules/development/store.js';
+import { configurationSchema, ConfigurationStore } from '../src/modules/development/configuration-store.js';
 import type { Project, Ticket } from '../src/modules/development/domain.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -14,7 +15,7 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
   beforeAll(async () => {
     admin = new pg.Pool({ connectionString: url }); await admin.query(`CREATE SCHEMA ${namespace}`);
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${namespace}` });
-    await pool.query(coreSchema + developmentSchema); store = new DevelopmentStore(pool, 'TTEAM'); await store.save(project, 'setup');
+    await pool.query(coreSchema + developmentSchema + configurationSchema); store = new DevelopmentStore(pool, 'TTEAM'); await store.save(project, 'setup');
   });
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); await admin.end(); } });
   it('admits one snapshot under concurrent polls and one worker across projects sharing a repository', async () => {
@@ -49,5 +50,28 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
     const results = await Promise.all(['retry-one', 'retry-two'].map(id => store.confirm(actor, id, false)));
     expect(results.filter(result => result === 'applied')).toHaveLength(1);
     expect(await store.history(configured.id)).toHaveLength(2);
+  });
+  it('atomically accepts one competing form creation and one competing edit', async () => {
+    const forms = new ConfigurationStore(pool);
+    const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' }, bob = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
+    const candidate = { ...project, id: 'form-race', enabled: false };
+    for (const [actor, id] of [[alice, 'create-alice'], [bob, 'create-bob']] as const) {
+      await forms.create(actor, id, null);
+      await forms.submit(actor, id, candidate);
+      await forms.validated(actor, id);
+    }
+    const created = await Promise.all([forms.finish(alice, 'create-alice', false), forms.finish(bob, 'create-bob', false)]);
+    expect(created.sort()).toEqual(['applied', 'conflict']);
+    for (const [actor, id] of [[alice, 'edit-alice'], [bob, 'edit-bob']] as const) {
+      await forms.create(actor, id, candidate);
+      await forms.submit(actor, id, { ...candidate, name: actor.user });
+      await forms.validated(actor, id);
+    }
+    const edited = await Promise.all([forms.finish(alice, 'edit-alice', false), forms.finish(bob, 'edit-bob', false)]);
+    expect(edited.sort()).toEqual(['applied', 'conflict']);
+    const saved = await store.project(candidate.id);
+    await forms.finish(alice, 'edit-alice', false);
+    await forms.finish(bob, 'edit-bob', false);
+    expect(await store.project(candidate.id)).toEqual(saved);
   });
 });

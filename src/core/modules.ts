@@ -30,6 +30,13 @@ export interface AssistantModule {
   normalizeText?(text: string): string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
   menuActions?: readonly string[];
+  /** Slack's short-lived form triggers must be exchanged before queued work. */
+  forms?: {
+    openActions: readonly string[];
+    callbacks: readonly string[];
+    open(actor: Actor, input: { value: string; trigger: string }, eventId: string): Promise<void>;
+    submit(actor: Pick<Actor, 'team' | 'user'>, view: { callback_id: string; private_metadata: string; state?: { values?: unknown } }): Promise<Record<string, unknown>>;
+  };
   workOperations?: readonly { key: string; label: string; commands: readonly string[]; action: string; snapshotUnknownText?: boolean }[];
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
@@ -62,6 +69,16 @@ export class ModuleRegistry {
   }
   all() { return [...this.modules.values()]; }
   enabledIds() { return ['core', ...this.modules.keys()]; }
+  formAction(job: RoutedJob) {
+    const forms = this.modules.get(job.module)?.forms;
+    return job.payload.type === 'menu_action' && forms?.openActions.includes(String(job.payload.action)) ? forms : undefined;
+  }
+  formSubmission(callback: string) {
+    if (!/^[a-z][a-z0-9_-]*:[a-z][a-z0-9_-]*$/.test(callback)) return;
+    const [id, name] = callback.split(':');
+    const forms = this.modules.get(id!)?.forms;
+    return forms?.callbacks.includes(name!) ? forms : undefined;
+  }
   async dispatchIntegration(job: RoutedJob, actor: IntegrationActor, eventId: string, context: IntegrationContext) {
     const module = this.modules.get(job.module);
     if (!module?.handleIntegration) throw new Error('Integration module is not enabled.');

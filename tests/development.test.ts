@@ -21,18 +21,26 @@ const project = projectSchema.parse({ id: 'pilot', name: 'Projet pilote', channe
 let db: PGlite;
 const apps: Array<{ close(): Promise<void> }> = [];
 beforeAll(async () => { db = new PGlite(); await db.exec(coreSchema); });
-beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations CASCADE'); });
+beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations,development_configuration_forms CASCADE'); });
 afterAll(async () => { for (const app of apps) await app.close(); await db.close(); });
 
 async function harness(failure?: 'conversations.info' | 'conversations.members' | 'clickup') {
   const sql: Database = { query: (text, values) => db.query(text, values), transaction: work => db.transaction(tx => work({ query: (text, values) => tx.query(text, values) })) };
   const tasks = new Map<string, Ticket>([['abc123', { id: 'abc123', name: 'Réparer le menu', description: 'Le menu ne se ferme pas au clic.', url: 'https://app.clickup.com/t/abc123', status: 'open', comments: [], attachments: [] }]]);
-  const comments: string[] = [], statuses: string[] = [], posts: any[] = [];
+  const comments: string[] = [], statuses: string[] = [], posts: any[] = [], views: any[] = [];
   let counter = 0, snapshots = 0, rejectStatus = false, rejectPost = false;
+  let rejectView = false, accessFailure = failure;
+  const requests: string[] = [];
   const fetcher = (async (url: URL | string, init?: RequestInit) => {
     const target = new URL(String(url)), body = init?.body ? JSON.parse(String(init.body)) : undefined;
+    requests.push(target.pathname);
+    if (target.pathname === '/api/views.open') {
+      views.push(body.view);
+      if (rejectView) { rejectView = false; throw new Error('Lost modal response'); }
+      return Response.json({ ok: true, view: { id: `V${views.length}` } });
+    }
     if (target.hostname === 'api.clickup.com') {
-      if (failure === 'clickup') return Response.json({}, { status: 403 });
+      if (accessFailure === 'clickup') return Response.json({}, { status: 403 });
       if (target.pathname.endsWith('/folder/123/list')) return Response.json({ lists: [{ id: 'list1' }] });
       if (target.pathname.endsWith('/list/list1/task')) return Response.json({ tasks: [...tasks.values()].map(task => ({ id: task.id, status: { status: task.status } })), last_page: true });
       const match = /\/task\/([^/]+)(\/comment)?$/.exec(target.pathname);
@@ -51,7 +59,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     if (target.pathname.startsWith('/api/conversations.')) {
       // Match the production rejection: JSON POST arguments were not accepted.
       if (init?.method !== 'GET' || init.body || !target.searchParams.has('channel')) return Response.json({ ok: false, error: 'invalid_arguments' });
-      if (target.pathname === `/api/${failure}`) return Response.json({ ok: false, error: 'missing_scope' });
+      if (target.pathname === `/api/${accessFailure}`) return Response.json({ ok: false, error: 'missing_scope' });
       const channel = target.searchParams.get('channel');
       if (target.pathname.endsWith('/conversations.info')) return Response.json({ ok: true, channel: { id: channel, is_member: channel === 'CPROJECT' } });
       if (target.pathname.endsWith('/conversations.members')) {
@@ -86,24 +94,195 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     return { id: options.channel?.startsWith('D') ? `slack:${id}` : `development:slack:${id}`, response };
   };
   const dm = async (text: string, user = 'UALICE') => { const request = await ingress(text, { channel: 'DALICE', user }); await run(request.id); return posts.at(-1); };
-  const click = async (source: any, label: string, actor = alice, timestamp = source.ts) => {
+  const click = async (source: any, label: string, actor = alice, timestamp = source.ts, clickId = randomUUID()) => {
     const controls: any[] = [];
     const walk = (value: any) => { if (!value || typeof value !== 'object') return; if (value.action_id) controls.push(value); for (const child of Object.values(value)) if (typeof child === 'object') walk(child); };
     walk(source.blocks);
     const control = controls.find(button => button.text?.text.replace(/^🧭 /, '') === label);
     expect(control, `Missing ${label}: ${controls.map(button => button.text?.text).join(', ')}`).toBeTruthy();
     const stamp = String(Math.floor(Date.now() / 1000));
-    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts: timestamp }, actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }] }) }).toString();
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts: timestamp }, trigger_id: 'synthetic-trigger', actions: [{ action_id: control.action_id, value: control.value, action_ts: clickId }] }) }).toString();
     const response = await app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` } });
     expect(response.statusCode).toBe(200);
-    await run(`action:${digest(raw)}`);
+    if ((await sql.query('SELECT id FROM jobs WHERE id=$1', [`action:${digest(raw)}`])).rows.length) await run(`action:${digest(raw)}`);
     return posts.at(-1);
   };
+  const submit = async (view: any, values: Record<string, unknown>, actor = alice, signed = true) => {
+    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
+    const stamp = String(Math.floor(Date.now() / 1000));
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'view_submission', team: { id: actor.team }, user: { id: actor.user }, view: { id: 'V1', callback_id: view.callback_id, private_metadata: view.private_metadata, state: { values: state } } }) }).toString();
+    return app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': signed ? `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` : 'invalid' } });
+  };
   const api = async (route: string, body: unknown, bearer = token) => app.inject({ method: 'POST', url: `/development/worker/${route}`, payload: JSON.stringify(body), headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` } });
-  return { sql, store, tasks, comments, statuses, posts, run, dm, click, ingress, api, module, modules, app,
+  return { sql, store, tasks, comments, statuses, posts, views, requests, submit, run, dm, click, ingress, api, module, modules, app,
     poll: () => run('development:poll:TTEAM'), configure: () => dm(`development configure ${JSON.stringify(project)}`),
-    snapshotCount: () => snapshots, failStatus: () => { rejectStatus = true; }, failPost: () => { rejectPost = true; } };
+    snapshotCount: () => snapshots, failStatus: () => { rejectStatus = true; }, failPost: () => { rejectPost = true; }, failView: () => { rejectView = true; }, accessFailure: (value: typeof failure) => { accessFailure = value; } };
 }
+
+async function newForm(h: Awaited<ReturnType<typeof harness>>) {
+  const prepared = await h.click(await h.click(await h.dm('menu'), 'Développement'), 'Configurer un projet');
+  await h.click(prepared, 'Remplir le formulaire');
+  return { prepared, view: h.views.at(-1) };
+}
+
+it('creates a project entirely through the signed form, validates asynchronously, and confirms once', async () => {
+  const h = await harness();
+  const { view, prepared } = await newForm(h);
+  expect(view.blocks.find((block: any) => block.block_id === 'channel').element.type).toBe('conversations_select');
+  expect(view.blocks.find((block: any) => block.block_id === 'enabled').element.initial_options).toBeUndefined();
+  const before = h.requests.length;
+  expect((await h.submit(view, { ...project, enabled: false })).json()).toEqual({});
+  expect(h.requests).toHaveLength(before);
+  expect(await h.store.project('pilot')).toBeUndefined();
+  await h.run(`development:configuration:${view.private_metadata}`);
+  const confirmation = h.posts.at(-1);
+  expect(confirmation.text).toContain('Dossier ClickUp : 123');
+  expect(await h.store.project('pilot')).toBeUndefined();
+  await h.click(confirmation, 'Enregistrer la configuration');
+  expect(await h.store.project('pilot')).toEqual({ ...project, enabled: false });
+  expect((await h.submit(view, { ...project, enabled: false })).json()).toEqual({});
+  await h.store.save({ ...project, name: 'Changed later' }, 'later');
+  await h.click(confirmation, 'Enregistrer la configuration');
+  expect((await h.store.project('pilot'))!.name).toBe('Changed later');
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  expect(h.comments).toEqual([]); expect(h.statuses).toEqual([]);
+  await h.click(prepared, 'Remplir le formulaire');
+  expect(h.views).toHaveLength(1);
+});
+
+it('prefills editing, keeps the project identifier, and saves all fields without a command', async () => {
+  const h = await harness(); await h.configure();
+  const prepared = await h.click(await h.dm('development status pilot'), 'Modifier la configuration');
+  const before = h.requests.length;
+  await h.click(prepared, 'Remplir le formulaire');
+  expect(h.requests.slice(before)).toEqual(['/api/views.open']);
+  const view = h.views.at(-1);
+  expect(view.blocks.some((block: any) => block.block_id === 'id')).toBe(false);
+  expect(view.blocks.find((block: any) => block.block_id === 'name').element.initial_value).toBe(project.name);
+  expect(view.blocks.find((block: any) => block.block_id === 'repository').element.initial_value).toBe(project.repository);
+  expect(view.blocks.find((block: any) => block.block_id === 'enabled').element.initial_options).toHaveLength(1);
+  const edited = { ...project, name: 'Renamed', repository: 'https://gitlab.com/example/other', skill: 'maintenance-v2', enabled: false };
+  expect((await h.submit(view, { ...edited, id: 'cannot-rename' })).json()).toEqual({});
+  await h.run(`development:configuration:${view.private_metadata}`);
+  await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  expect(await h.store.project('pilot')).toEqual(edited);
+  expect(await h.store.project('cannot-rename')).toBeUndefined();
+});
+
+it('shows per-field validation errors and rejects an existing identifier without enqueueing work', async () => {
+  const h = await harness();
+  const { view } = await newForm(h);
+  const invalid = (await h.submit(view, { ...project, id: 'Bad ID', folder: 'abc', repository: 'https://user:secret@example.com/repo' })).json();
+  expect(invalid.response_action).toBe('errors');
+  expect(Object.keys(invalid.errors).sort()).toEqual(['folder', 'id', 'repository']);
+  expect(JSON.stringify(invalid)).not.toContain('secret');
+  expect((await h.sql.query("SELECT * FROM jobs WHERE payload->>'type'='configuration_validate'")).rows).toHaveLength(0);
+  await h.configure();
+  expect((await h.submit(view, project)).json().errors.id).toContain('existe déjà');
+});
+
+it('binds opening and submission to the owner, DM, message, signature, workspace and expiry', async () => {
+  const h = await harness();
+  const { view, prepared } = await newForm(h);
+  for (const actor of [{ ...alice, user: 'UBOB' }, { ...alice, channel: 'DOTHER' }]) await h.click(prepared, 'Remplir le formulaire', actor);
+  await h.click(prepared, 'Remplir le formulaire', alice, '9.000001');
+  expect(h.views).toHaveLength(1);
+  expect((await h.submit(view, project, { ...alice, user: 'UBOB' })).json().response_action).toBe('errors');
+  expect((await h.submit(view, project, alice, false)).statusCode).toBe(401);
+  expect((await h.submit(view, project, { ...alice, team: 'TOTHER' })).statusCode).toBe(403);
+  expect((await h.submit({ ...view, callback_id: 'missing:configuration' }, project)).statusCode).toBe(403);
+  await h.sql.query("UPDATE development_configuration_forms SET created_at=now()-interval '25 hours'");
+  expect((await h.submit(view, project)).json().response_action).toBe('errors');
+  expect(await h.store.project('pilot')).toBeUndefined();
+});
+
+it.each(['conversations.members', 'clickup'] as const)('retains submitted values after %s access failure and permits correction in a fresh form', async failure => {
+  const h = await harness();
+  const { view } = await newForm(h);
+  await h.submit(view, project);
+  h.accessFailure(failure);
+  await h.run(`development:configuration:${view.private_metadata}`);
+  const error = h.posts.at(-1);
+  expect(error.text).toContain('Aucune configuration enregistrée');
+  expect(await h.store.project('pilot')).toBeUndefined();
+  h.accessFailure(undefined);
+  const corrected = await h.click(error, 'Corriger le formulaire');
+  await h.click(corrected, 'Remplir le formulaire');
+  const next = h.views.at(-1);
+  expect(next.private_metadata).not.toBe(view.private_metadata);
+  expect(next.blocks.find((block: any) => block.block_id === 'name').element.initial_value).toBe(project.name);
+  expect((await h.submit(view, project)).json().response_action).toBe('errors');
+  await h.submit(next, project);
+  await h.run(`development:configuration:${next.private_metadata}`);
+  await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  expect(await h.store.project('pilot')).toEqual(project);
+});
+
+it('does not save cancelled forms or overwrite concurrent project changes', async () => {
+  const h = await harness();
+  const { view, prepared } = await newForm(h);
+  await h.click(prepared, 'Annuler');
+  expect((await h.submit(view, project)).json().response_action).toBe('errors');
+  await h.configure();
+  const edit = await h.click(await h.dm('development status pilot'), 'Modifier la configuration');
+  await h.click(edit, 'Remplir le formulaire');
+  const editing = h.views.at(-1);
+  await h.submit(editing, { ...project, name: 'My edit' });
+  await h.run(`development:configuration:${editing.private_metadata}`);
+  const confirm = h.posts.at(-1);
+  await h.store.save({ ...project, name: 'Other user edit' }, 'other-edit');
+  await h.click(confirm, 'Enregistrer la configuration');
+  expect(h.posts.at(-1).text).toContain('modifié');
+  expect((await h.store.project('pilot'))!.name).toBe('Other user edit');
+});
+
+it('lets users correct a channel the bot cannot access without granting access to that channel', async () => {
+  const h = await harness();
+  const { view } = await newForm(h);
+  await h.submit(view, { ...project, channel: 'COTHER' });
+  await h.run(`development:configuration:${view.private_metadata}`);
+  const prepared = await h.click(h.posts.at(-1), 'Corriger le formulaire');
+  await h.click(prepared, 'Remplir le formulaire');
+  const corrected = h.views.at(-1);
+  expect(corrected.private_metadata).not.toBe(view.private_metadata);
+  expect(corrected.blocks.find((block: any) => block.block_id === 'channel').element.initial_conversation).toBe('COTHER');
+  await h.submit(corrected, project);
+  await h.run(`development:configuration:${corrected.private_metadata}`);
+  await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  expect(await h.store.project('pilot')).toEqual(project);
+});
+
+it('rechecks access at confirmation and preserves a committed save after uncertain delivery', async () => {
+  const h = await harness();
+  const { view } = await newForm(h);
+  await h.submit(view, project);
+  await h.run(`development:configuration:${view.private_metadata}`);
+  const confirm = h.posts.at(-1);
+  h.accessFailure('conversations.members');
+  await h.click(confirm, 'Enregistrer la configuration');
+  expect(await h.store.project('pilot')).toBeUndefined();
+  h.accessFailure(undefined);
+  h.failPost();
+  await expect(h.click(confirm, 'Enregistrer la configuration')).rejects.toThrow('Uncertain Slack delivery');
+  expect(await h.store.project('pilot')).toEqual(project);
+  await h.store.save({ ...project, name: 'Later edit' }, 'later-edit');
+  await h.click(confirm, 'Enregistrer la configuration');
+  expect((await h.store.project('pilot'))!.name).toBe('Later edit');
+});
+
+it('does not replay an uncertain modal open and allows a fresh click without provider reads', async () => {
+  const h = await harness();
+  const prepared = await h.click(await h.click(await h.dm('menu'), 'Développement'), 'Configurer un projet');
+  const id = randomUUID();
+  h.failView();
+  await h.click(prepared, 'Remplir le formulaire', alice, prepared.ts, id);
+  await h.click(prepared, 'Remplir le formulaire', alice, prepared.ts, id);
+  expect(h.views).toHaveLength(1);
+  await h.click(prepared, 'Remplir le formulaire');
+  expect(h.views).toHaveLength(2);
+  expect(h.views[0].external_id).not.toBe(h.views[1].external_id);
+  expect(h.requests.filter(request => request.startsWith('/api/conversations.') || request.startsWith('/api/v2'))).toEqual([]);
+});
 
 it('browses projects, configuration, history and run details through signed buttons without starting work', async () => {
   const h = await harness(); await h.configure();
@@ -117,9 +296,8 @@ it('browses projects, configuration, history and run details through signed butt
   expect(detail.text).toContain('Skill : maintenance');
   expect(JSON.stringify(detail)).toContain('https://app.slack.com/client/TTEAM/CPROJECT');
   const configuration = await h.click(detail, 'Modifier la configuration');
-  expect(configuration.text).toContain('development configurer');
-  expect(configuration.text).toContain('https://github.com/example/project');
-  const history = await h.click(await h.click(configuration, 'Retour au projet'), 'Voir les traitements');
+  expect(configuration.text).toContain('formulaire');
+  const history = await h.click(detail, 'Voir les traitements');
   expect(JSON.stringify(history)).toContain('Ouvrir');
   const next = await h.click(history, 'Suivant');
   expect(next.text).toContain('Page 2');
@@ -148,10 +326,10 @@ it('confirms pause/resume separately, preserves configuration and cannot replay 
   expect(await h.store.project('pilot')).toEqual(project);
 });
 
-it('opens long legacy run identifiers through bounded controls and offers suspended setup templates', async () => {
+it('opens long legacy run identifiers through bounded controls and offers interactive setup', async () => {
   const h = await harness(); await h.configure();
   const setup = await h.click(await h.click(await h.dm('menu'), 'Développement'), 'Configurer un projet');
-  expect(setup.text).toContain('"enabled":false');
+  expect(setup.text).toContain('formulaire');
   await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'long-id');
   await h.sql.query("UPDATE development_runs SET id=$1,state='blocked'", ['r'.repeat(300)]);
   const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements'), 'Ouvrir');

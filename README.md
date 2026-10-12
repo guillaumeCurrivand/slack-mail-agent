@@ -47,7 +47,7 @@ The implementation is organized as follows:
 
 Documentation's one-time spreadsheet transition has a separate [operator import procedure](docs/documentation-import.md). Shipping the importer does not switch source authority; the real snapshot and mapping require separate review, approval and verified reconciliation.
 
-Development's [clickable interface](docs/development.md#clickable-private-interface) opens from **menu → Développement → Projets et traitements**. Browse projects, open run results, and confirm pause/resume or eligible retries without copying identifiers. Setup buttons provide configuration command templates for free-form values. The module help explains the channel analysis → Ready for AI → tested commit → human review workflow.
+Development's [clickable interface](docs/development.md#clickable-private-interface) opens from **menu → Développement → Projets et traitements**. Browse projects, open run results, and confirm pause/resume or eligible retries without copying identifiers. Native Slack forms create and edit every project setting, including the channel and activation, with a separate save confirmation; commands are optional. The module help explains the channel analysis → Ready for AI → tested commit → human review workflow.
 
 ### Upgrading an existing installation
 

@@ -11,6 +11,8 @@ import { ClickupDevelopment, DevelopmentChannels } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
 import { developmentHelp } from './help.js';
 import { DevelopmentMenu, projectPage } from './menu.js';
+import { configurationSchema } from './configuration-store.js';
+import { DevelopmentConfiguration } from './configuration.js';
 
 const help = developmentHelp.text;
 
@@ -24,6 +26,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
   const token = Buffer.from(config.DEVELOPMENT_WORKER_TOKEN);
   const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && channels.accessible(project.channel, actor.user);
   const menus = new DevelopmentMenu(store, visible, clickup);
+  const configuration = new DevelopmentConfiguration(store, menus, visible, clickup, config.SLACK_BOT_TOKEN, dependencies.fetcher);
 
   async function post(context: IntegrationContext, project: Project, text: string, thread?: string, links?: Array<{ label: string; url: string }>) {
     if (!await channels.accessible(project.channel)) throw new Error('Canal indisponible.');
@@ -55,9 +58,11 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     help: developmentHelp,
     async initialize(sql) {
       for (const statement of developmentSchema.split(';').map(value => value.trim()).filter(Boolean)) await sql.query(statement);
+      await sql.query(configurationSchema);
       await new JobStore(sql).enqueueIntegration(`development:poll:${config.SLACK_TEAM_ID}`, identity, { type: 'poll' }, 'development');
     },
-    menuActions: ['propose_state', 'propose_retry', 'confirm', 'cancel'],
+    menuActions: ['propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel'],
+    forms: configuration.forms,
     menu: (actor, page) => menus.page(actor, page),
     async receiveChannel(actor, payload, eventId) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
@@ -69,6 +74,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     },
     async handle(actor, payload, eventId, context) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
+      if (String(payload.type).startsWith('configuration_') || (payload.type === 'menu_action' && String(payload.action).startsWith('configuration_'))) return configuration.handle(actor, payload, eventId, context);
       if (payload.type !== 'text') return menus.handle(actor, payload, eventId, context);
       const text = String(payload.text ?? '').trim();
       const send = (message: string) => context.messenger.send(actor, { kind: 'Développement', text: message, buttons: [menuButton] });
