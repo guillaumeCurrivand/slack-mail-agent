@@ -24,4 +24,30 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
     const claims = await Promise.all(Array.from({ length: 4 }, () => store.claim(randomUUID(), ['pilot', 'other'])));
     expect(claims.filter(Boolean)).toHaveLength(1);
   });
+  it('applies concurrent confirmations only once and preserves a later opposite project transition', async () => {
+    const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+    const configured = { ...project, id: 'confirmations', repository: 'https://github.com/example/confirmations' };
+    await store.save(configured, 'setup-confirmations');
+    await store.propose(actor, 'pause-confirmation', configured, 'pause');
+    const results = await Promise.all(Array.from({ length: 4 }, () => store.confirm(actor, 'pause-confirmation', false)));
+    expect(results.filter(result => result === 'applied')).toHaveLength(1);
+    expect((await store.project(configured.id))!.enabled).toBe(false);
+    await store.propose(actor, 'resume-confirmation', { ...configured, enabled: false }, 'resume');
+    expect(await store.confirm(actor, 'resume-confirmation', false)).toBe('applied');
+    expect(await store.confirm(actor, 'pause-confirmation', false)).toBe('already_applied');
+    expect((await store.project(configured.id))!.enabled).toBe(true);
+  });
+  it('serializes separate retry confirmations for the same blocked ticket', async () => {
+    const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+    const configured = { ...project, id: 'retry-confirmations', repository: 'https://github.com/example/retries' };
+    await store.save(configured, 'setup-retries');
+    await store.review(configured, ticket, '1.000001', 'blocked-review');
+    const run = (await store.history(configured.id))[0];
+    await pool.query("UPDATE development_runs SET state='blocked' WHERE id=$1", [run.id]);
+    await store.propose(actor, 'retry-one', configured, 'retry', run.id);
+    await store.propose(actor, 'retry-two', configured, 'retry', run.id);
+    const results = await Promise.all(['retry-one', 'retry-two'].map(id => store.confirm(actor, id, false)));
+    expect(results.filter(result => result === 'applied')).toHaveLength(1);
+    expect(await store.history(configured.id)).toHaveLength(2);
+  });
 });

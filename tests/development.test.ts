@@ -1,4 +1,5 @@
 import { createHmac, randomUUID } from 'node:crypto';
+import { digest } from '../src/core/crypto.js';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
 import { readConfig } from '../src/app/config.js';
@@ -20,7 +21,7 @@ const project = projectSchema.parse({ id: 'pilot', name: 'Projet pilote', channe
 let db: PGlite;
 const apps: Array<{ close(): Promise<void> }> = [];
 beforeAll(async () => { db = new PGlite(); await db.exec(coreSchema); });
-beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health CASCADE'); });
+beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations CASCADE'); });
 afterAll(async () => { for (const app of apps) await app.close(); await db.close(); });
 
 async function harness(failure?: 'conversations.info' | 'conversations.members' | 'clickup') {
@@ -61,7 +62,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
       }
     }
     if (target.pathname.endsWith('/chat.postMessage') || target.pathname.endsWith('/chat.update')) {
-      const ts = `1700000000.${String(++counter).padStart(6, '0')}`;
+      const ts = body.ts ?? `1700000000.${String(++counter).padStart(6, '0')}`;
       posts.push({ ...body, ts });
       if (rejectPost) { rejectPost = false; throw new Error('Uncertain Slack delivery'); }
       return Response.json({ ok: true, ts });
@@ -84,12 +85,178 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     const response = await app.inject({ method: 'POST', url: '/slack/events', payload: raw, headers: { 'content-type': 'application/json', 'x-slack-request-timestamp': stamp, 'x-slack-signature': `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` } });
     return { id: options.channel?.startsWith('D') ? `slack:${id}` : `development:slack:${id}`, response };
   };
-  const dm = async (text: string, user = 'UALICE') => { const request = await ingress(text, { channel: 'DALICE', user }); await run(request.id); };
+  const dm = async (text: string, user = 'UALICE') => { const request = await ingress(text, { channel: 'DALICE', user }); await run(request.id); return posts.at(-1); };
+  const click = async (source: any, label: string, actor = alice, timestamp = source.ts) => {
+    const controls: any[] = [];
+    const walk = (value: any) => { if (!value || typeof value !== 'object') return; if (value.action_id) controls.push(value); for (const child of Object.values(value)) if (typeof child === 'object') walk(child); };
+    walk(source.blocks);
+    const control = controls.find(button => button.text?.text.replace(/^🧭 /, '') === label);
+    expect(control, `Missing ${label}: ${controls.map(button => button.text?.text).join(', ')}`).toBeTruthy();
+    const stamp = String(Math.floor(Date.now() / 1000));
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts: timestamp }, actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }] }) }).toString();
+    const response = await app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` } });
+    expect(response.statusCode).toBe(200);
+    await run(`action:${digest(raw)}`);
+    return posts.at(-1);
+  };
   const api = async (route: string, body: unknown, bearer = token) => app.inject({ method: 'POST', url: `/development/worker/${route}`, payload: JSON.stringify(body), headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` } });
-  return { sql, store, tasks, comments, statuses, posts, run, dm, ingress, api, module, modules, app,
+  return { sql, store, tasks, comments, statuses, posts, run, dm, click, ingress, api, module, modules, app,
     poll: () => run('development:poll:TTEAM'), configure: () => dm(`development configure ${JSON.stringify(project)}`),
     snapshotCount: () => snapshots, failStatus: () => { rejectStatus = true; }, failPost: () => { rejectPost = true; } };
 }
+
+it('browses projects, configuration, history and run details through signed buttons without starting work', async () => {
+  const h = await harness(); await h.configure();
+  for (let index = 0; index < 10; index++) await h.store.review(project, { ...h.tasks.get('abc123')!, name: `Ticket ${index}` }, '1700000000.000001', `browse-${index}`);
+  const reads = h.snapshotCount();
+  const main = await h.dm('menu');
+  const module = await h.click(main, 'Développement');
+  expect(module.ts).toBe(main.ts);
+  const projects = await h.click(module, 'Projets et traitements');
+  const detail = await h.click(projects, 'Projet pilote');
+  expect(detail.text).toContain('Skill : maintenance');
+  expect(JSON.stringify(detail)).toContain('https://app.slack.com/client/TTEAM/CPROJECT');
+  const configuration = await h.click(detail, 'Modifier la configuration');
+  expect(configuration.text).toContain('development configurer');
+  expect(configuration.text).toContain('https://github.com/example/project');
+  const history = await h.click(await h.click(configuration, 'Retour au projet'), 'Voir les traitements');
+  expect(JSON.stringify(history)).toContain('Ouvrir');
+  const next = await h.click(history, 'Suivant');
+  expect(next.text).toContain('Page 2');
+  const run = await h.click(next, 'Ouvrir');
+  expect(run.text).toContain('Traitement : review:browse-');
+  expect(JSON.stringify(run)).toContain('https://app.clickup.com/t/abc123');
+  await h.click(run, 'Actualiser');
+  expect(h.snapshotCount()).toBe(reads);
+  expect((await h.sql.query('SELECT count(*)::int AS count FROM development_runs')).rows[0].count).toBe(10);
+  expect(h.comments).toEqual([]); expect(h.statuses).toEqual([]);
+});
+
+it('confirms pause/resume separately, preserves configuration and cannot replay an old confirmation', async () => {
+  const h = await harness(); await h.configure();
+  const page = await h.dm('development status pilot');
+  const pause = await h.click(page, 'Suspendre le projet');
+  expect(pause.ts).not.toBe(page.ts);
+  expect((await h.store.project('pilot'))!.enabled).toBe(true);
+  const paused = await h.click(pause, 'Confirmer la suspension');
+  expect(await h.store.project('pilot')).toEqual({ ...project, enabled: false });
+  const pausedPage = await h.click(paused, 'Retour au projet');
+  const resume = await h.click(pausedPage, 'Réactiver le projet');
+  await h.click(resume, 'Confirmer la réactivation');
+  expect(await h.store.project('pilot')).toEqual(project);
+  await h.click(pause, 'Confirmer la suspension');
+  expect(await h.store.project('pilot')).toEqual(project);
+});
+
+it('opens long legacy run identifiers through bounded controls and offers suspended setup templates', async () => {
+  const h = await harness(); await h.configure();
+  const setup = await h.click(await h.click(await h.dm('menu'), 'Développement'), 'Configurer un projet');
+  expect(setup.text).toContain('"enabled":false');
+  await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'long-id');
+  await h.sql.query("UPDATE development_runs SET id=$1,state='blocked'", ['r'.repeat(300)]);
+  const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements'), 'Ouvrir');
+  expect(detail.text).toContain('r'.repeat(300));
+  const confirmation = await h.click(detail, 'Relancer…');
+  await h.click(confirmation, 'Confirmer la relance');
+  expect(await h.store.history('pilot')).toHaveLength(2);
+});
+
+it('recovers uncertain confirmation delivery without repeating a saved effect', async () => {
+  const h = await harness(); await h.configure();
+  const confirmation = await h.click(await h.dm('development status pilot'), 'Suspendre le projet');
+  h.failPost();
+  await expect(h.click(confirmation, 'Confirmer la suspension')).rejects.toThrow('Uncertain Slack delivery');
+  expect((await h.store.project('pilot'))!.enabled).toBe(false);
+  const queued = (await h.sql.query("SELECT id FROM jobs WHERE status='queued' AND payload->>'action'='confirm'")).rows[0];
+  const delivered = h.posts.length;
+  await h.run(queued.id);
+  expect(h.posts).toHaveLength(delivered);
+  await h.store.save(project, 'later-reactivation');
+  const repeated = await h.click(confirmation, 'Confirmer la suspension');
+  expect(repeated.text).toContain('déjà été appliquée');
+  expect((await h.store.project('pilot'))!.enabled).toBe(true);
+});
+
+it('rejects expired menu controls before preparing a confirmation', async () => {
+  const h = await harness(); await h.configure();
+  const page = await h.dm('development status pilot');
+  await h.sql.query("UPDATE core_navigation_menus SET created_at=now()-interval '31 days'");
+  await h.click(page, 'Suspendre le projet');
+  expect((await h.sql.query('SELECT * FROM development_confirmations')).rows).toHaveLength(0);
+  expect((await h.store.project('pilot'))!.enabled).toBe(true);
+});
+
+it('rejects another owner, DM, message, expired confirmation and changed project configuration', async () => {
+  const h = await harness(); await h.configure();
+  const page = await h.dm('development status pilot');
+  const proposal = await h.click(page, 'Suspendre le projet');
+  for (const actor of [{ ...alice, user: 'UBOB' }, { ...alice, channel: 'DOTHER' }]) await h.click(proposal, 'Confirmer la suspension', actor);
+  await h.click(proposal, 'Confirmer la suspension', alice, '1.000001');
+  expect((await h.store.project('pilot'))!.enabled).toBe(true);
+  await h.store.save({ ...project, skill: 'changed' }, 'changed-config');
+  const stale = await h.click(proposal, 'Confirmer la suspension');
+  expect(stale.text).toContain('configuration modifiée');
+  expect((await h.store.project('pilot'))!.enabled).toBe(true);
+  const fresh = await h.click(await h.dm('development status pilot'), 'Suspendre le projet');
+  await h.sql.query("UPDATE development_confirmations SET created_at=now()-interval '25 hours'");
+  await h.click(fresh, 'Confirmer la suspension');
+  expect((await h.store.project('pilot'))!.enabled).toBe(true);
+});
+
+it('cancels and confirms a blocked-run retry once while retaining its frozen requirements', async () => {
+  const h = await harness(); await h.configure();
+  await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'blocked');
+  await h.sql.query("UPDATE development_runs SET state='blocked',result=$1", [JSON.stringify({ outcome: 'blocked', summary: 'Service indisponible.', tests: [] })]);
+  const history = await h.click(await h.dm('development status pilot'), 'Voir les traitements');
+  const detail = await h.click(history, 'Ouvrir');
+  const cancelled = await h.click(detail, 'Relancer…');
+  await h.click(cancelled, 'Annuler');
+  await h.click(cancelled, 'Confirmer la relance');
+  expect(await h.store.history('pilot')).toHaveLength(1);
+  const confirmation = await h.click(detail, 'Relancer…');
+  h.tasks.get('abc123')!.description = 'Changed current ticket';
+  await h.click(confirmation, 'Confirmer la relance');
+  await h.click(confirmation, 'Confirmer la relance');
+  const rows = await h.store.history('pilot');
+  expect(rows).toHaveLength(2);
+  expect(rows.find(row => row.id.startsWith('retry:')).ticket.description).toBe('Le menu ne se ferme pas au clic.');
+  // Even after the new run finishes, the old confirmation cannot authorize more work.
+  await h.sql.query("UPDATE development_runs SET state='completed' WHERE id LIKE 'retry:%'");
+  await h.click(confirmation, 'Confirmer la relance');
+  expect(await h.store.history('pilot')).toHaveLength(2);
+});
+
+it('retries an already-pushed reporting failure through a warning and confirmation using the current ticket', async () => {
+  const h = await harness(); await h.configure();
+  h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  await h.sql.query("UPDATE development_runs SET state='reporting_error',result=$1", [JSON.stringify({ outcome: 'pushed', summary: 'Poussé.', tests: ['Tests OK'], commit: 'a'.repeat(40), branch: 'maintenance/old' })]);
+  const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements'), 'Ouvrir');
+  expect(JSON.stringify(detail)).toContain(`/commit/${'a'.repeat(40)}`);
+  const proposal = await h.click(detail, 'Relancer…');
+  expect(proposal.text).toContain('maintenance/old');
+  h.tasks.get('abc123')!.description = 'New explicit requirements';
+  await h.click(proposal, 'Confirmer la relance');
+  const rows = await h.store.history('pilot');
+  expect(rows).toHaveLength(2);
+  expect(rows.find(row => row.id.startsWith('retry:')).ticket.description).toBe('New explicit requirements');
+  expect(rows.find(row => !row.id.startsWith('retry:')).result.commit).toBe('a'.repeat(40));
+});
+
+it('rechecks channel access on old controls and refuses retry after suspension', async () => {
+  const h = await harness(); await h.configure();
+  await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'access');
+  await h.sql.query("UPDATE development_runs SET state='blocked'");
+  const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements'), 'Ouvrir');
+  const proposal = await h.click(detail, 'Relancer…');
+  await h.store.save({ ...project, enabled: false }, 'pause');
+  await h.click(proposal, 'Confirmer la relance');
+  expect(await h.store.history('pilot')).toHaveLength(1);
+  expect(await h.store.retry('review:access:pilot:abc123', 'disabled', 'pilot')).toBe(false);
+  await h.store.save({ ...project, channel: 'COTHER' }, 'access-lost');
+  const hidden = await h.click(detail, 'Actualiser');
+  expect(hidden.text).toContain('inaccessible');
+  expect(hidden.text).not.toContain('Le menu ne se ferme');
+});
 
 it('configures through signed DM dispatch and restricts configuration/status to channel members', async () => {
   const h = await harness();

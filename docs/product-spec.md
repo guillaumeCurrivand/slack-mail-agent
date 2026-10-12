@@ -38,6 +38,8 @@ The user approved a clickable interface for both existing modules, entirely with
 
 ### Detailed help
 
+Development follows the same private clickable navigation for projects, paginated treatment history, run details, configuration guidance and separately confirmed pause/resume/retry actions. Its [clickable interface contract](development.md#clickable-private-interface) owns eligibility, access, confirmation and recovery behavior. Ready for AI remains the human authorization to implement; reading menus/help never starts paid work.
+
 The User requested complete explanations of every Module and capability. Shared `aide`/`help` opens a guide describing shared commands, explicit prefixes, private versus shared data, approvals, AI costs and recovery, followed by an overview and a help button for each enabled Module. Disabled Modules remain hidden. `<prefix> aide`, `<prefix> help` and a bare Module prefix open that Module's guide directly. English commands remain compatible.
 
 Each built-in Module supplies French help covering its purpose, every available user capability, commands/menu paths, practical examples, prerequisites, data scope, approval requirements, costs and meaningful limits. Documentation additionally offers topic pages with its structured schemas and field constraints. Module menus offer a read-only Help link. Reading help, following topics and returning to the guide or Module menu perform no AI calls, provider requests or domain mutations. Help uses the existing owner/DM/message-bound navigation, delivery recovery, content paging and retention safeguards. Operator-only setup/import is identified as such, without presenting it as a Slack command or an available user workflow.

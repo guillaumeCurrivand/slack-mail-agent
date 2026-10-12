@@ -3,7 +3,10 @@ import { isDeepStrictEqual } from 'node:util';
 import type { Sql } from '../../core/store.js';
 import { JobStore } from '../../core/store.js';
 import { transaction, type Database } from '../../core/transactions.js';
-import { ready, repositoryKey, type Project, type Result, type Ticket, type Work } from './domain.js';
+import { ownerKey, type Actor } from '../../core/identity.js';
+import { ready, repositoryKey, type Project, type Result, type Ticket, type Work, type Run } from './domain.js';
+
+type Confirmation = { id: string; project: Project; run_id: string | null; operation: 'pause' | 'resume' | 'retry'; state: string };
 
 export const developmentSchema = `
 CREATE TABLE IF NOT EXISTS development_projects (
@@ -32,6 +35,11 @@ CREATE TABLE IF NOT EXISTS development_receipts (
 );
 CREATE TABLE IF NOT EXISTS development_health (
  team text NOT NULL, project text NOT NULL, issue text, checked_at timestamptz NOT NULL DEFAULT now(), PRIMARY KEY(team,project)
+);
+CREATE TABLE IF NOT EXISTS development_confirmations (
+ id text PRIMARY KEY, team text NOT NULL, owner text NOT NULL, channel text NOT NULL,
+ project jsonb NOT NULL, run_id text, operation text NOT NULL, state text NOT NULL DEFAULT 'pending',
+ created_at timestamptz NOT NULL DEFAULT now()
 );
 `;
 
@@ -109,23 +117,59 @@ export class DevelopmentStore {
       return true;
     });
   }
-  async run(id: string) { return (await this.db.query('SELECT * FROM development_runs WHERE team=$1 AND id=$2', [this.team, id])).rows[0]; }
+  async run(id: string): Promise<Run | undefined> { return (await this.db.query('SELECT * FROM development_runs WHERE team=$1 AND id=$2', [this.team, id])).rows[0] as Run | undefined; }
+  async runByPage(key: string): Promise<Run | undefined> {
+    return (await this.db.query("SELECT * FROM development_runs WHERE team=$1 AND encode(sha256(convert_to(id,'UTF8')),'hex')=$2", [this.team, key])).rows[0] as Run | undefined;
+  }
   async retry(id: string, eventId: string, project: string, ticket?: Ticket) {
     return transaction(this.db, async sql => {
-      await sql.query('SELECT id FROM development_projects WHERE team=$1 AND id=$2 FOR UPDATE', [this.team, project]);
-      const retryId = `retry:${eventId}`;
-      // A blocked run without a commit keeps its frozen ticket. A pushed reporting_error may be explicitly retried; the previous commit stays where it was published.
-      const inserted = await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
-        SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND (
-          (state='blocked' AND result->>'commit' IS NULL) OR
-          (kind='build' AND state='reporting_error' AND result->>'outcome'='pushed' AND result->>'commit' IS NOT NULL)
-        )
-        AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.state IN ('queued','running','reporting'))
-        ON CONFLICT DO NOTHING RETURNING id`, [retryId, id, this.team]);
-      if (!inserted.rows.length) return false;
-      if (ticket) await sql.query('UPDATE development_runs SET ticket=$2::jsonb WHERE id=$1', [retryId, JSON.stringify(ticket)]);
-      return true;
+      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 AND id=$2 FOR UPDATE', [this.team, project])).rows[0]?.config as Project | undefined;
+      if (!current?.enabled) return false;
+      return this.retryLocked(sql, id, eventId, project, ticket);
     });
+  }
+  private async retryLocked(sql: Sql, id: string, eventId: string, project: string, ticket?: Ticket) {
+    const retryId = `retry:${eventId}`;
+    // A blocked run without a commit keeps its frozen ticket. A pushed reporting_error may be explicitly retried; the previous commit stays where it was published.
+    const inserted = await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
+      SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND project=$4 AND (
+        (state='blocked' AND result->>'commit' IS NULL) OR
+        (kind='build' AND state='reporting_error' AND result->>'outcome'='pushed' AND result->>'commit' IS NOT NULL)
+      )
+      AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.state IN ('queued','running','reporting'))
+      ON CONFLICT DO NOTHING RETURNING id`, [retryId, id, this.team, project]);
+    if (!inserted.rows.length) return false;
+    if (ticket) await sql.query('UPDATE development_runs SET ticket=$2::jsonb WHERE id=$1', [retryId, JSON.stringify(ticket)]);
+    return true;
+  }
+  async propose(actor: Actor, id: string, project: Project, operation: Confirmation['operation'], run?: string) {
+    await this.db.query('INSERT INTO development_confirmations(id,team,owner,channel,project,operation,run_id) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING',
+      [id, this.team, ownerKey(actor), actor.channel, JSON.stringify(project), operation, run ?? null]);
+    return this.confirmation(actor, id);
+  }
+  async confirmation(actor: Actor, id: string): Promise<Confirmation | undefined> {
+    return (await this.db.query("SELECT * FROM development_confirmations WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND created_at>=now()-interval '24 hours'", [id, this.team, ownerKey(actor), actor.channel])).rows[0] as Confirmation | undefined;
+  }
+  async confirm(actor: Actor, id: string, cancel: boolean, ticket?: Ticket) {
+    return transaction(this.db, async sql => {
+      const proposal = (await sql.query("SELECT * FROM development_confirmations WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4 AND created_at>=now()-interval '24 hours' FOR UPDATE", [id, this.team, ownerKey(actor), actor.channel])).rows[0] as Confirmation | undefined;
+      if (!proposal) return 'unavailable';
+      if (proposal.state !== 'pending') return proposal.state === 'applied' ? 'already_applied' : proposal.state;
+      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 AND id=$2 FOR UPDATE', [this.team, proposal.project.id])).rows[0]?.config;
+      let state = cancel ? 'cancelled' : !isDeepStrictEqual(current, proposal.project) ? 'changed' : 'applied';
+      if (state === 'applied') {
+        if (proposal.operation === 'retry') {
+          if (!current.enabled || !await this.retryLocked(sql, proposal.run_id!, `confirmation:${id}`, current.id, ticket)) state = 'unavailable';
+        } else {
+          await sql.query("UPDATE development_projects SET config=jsonb_set(config,'{enabled}',$3::jsonb) WHERE team=$1 AND id=$2", [this.team, current.id, JSON.stringify(proposal.operation === 'resume')]);
+        }
+      }
+      await sql.query('UPDATE development_confirmations SET state=$2 WHERE id=$1', [id, state]);
+      return state;
+    });
+  }
+  async historyPage(project: string, page: number, size = 8): Promise<Run[]> {
+    return (await this.db.query('SELECT * FROM development_runs WHERE team=$1 AND project=$2 ORDER BY created_at DESC,id DESC LIMIT $3 OFFSET $4', [this.team, project, size + 1, page * size])).rows as Run[];
   }
   async history(project: string) { return (await this.db.query('SELECT id,kind,state,attempts,ticket,result FROM development_runs WHERE team=$1 AND project=$2 ORDER BY created_at DESC LIMIT 10', [this.team, project])).rows; }
   async frozen(project: string, ticket: string) {

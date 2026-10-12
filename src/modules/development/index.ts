@@ -2,13 +2,15 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, IntegrationContext } from '../../core/modules.js';
+import { menuButton } from '../../core/slack.js';
 import { JobStore } from '../../core/store.js';
 import type { Database } from '../../core/transactions.js';
 import type { DevelopmentConfig } from './config.js';
-import { projectSchema, ready, resultSchema, ticketIds, type Project, type Result, type Ticket } from './domain.js';
+import { canRetry, commitLink, projectSchema, ready, resultSchema, ticketIds, type Project, type Result, type Ticket } from './domain.js';
 import { ClickupDevelopment, DevelopmentChannels } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
 import { developmentHelp } from './help.js';
+import { DevelopmentMenu, projectPage } from './menu.js';
 
 const help = developmentHelp.text;
 
@@ -21,6 +23,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
   const identity = { kind: 'integration' as const, team: config.SLACK_TEAM_ID, integration: 'development' };
   const token = Buffer.from(config.DEVELOPMENT_WORKER_TOKEN);
   const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && channels.accessible(project.channel, actor.user);
+  const menus = new DevelopmentMenu(store, visible, clickup);
 
   async function post(context: IntegrationContext, project: Project, text: string, thread?: string, links?: Array<{ label: string; url: string }>) {
     if (!await channels.accessible(project.channel)) throw new Error('Canal indisponible.');
@@ -32,7 +35,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     const row = await store.run(id);
     if (!row || row.state !== 'reporting') return;
     const result = row.result as Result, project = row.config as Project;
-    const commitUrl = result.commit && result.outcome === 'pushed' ? `${project.repository.replace(/\.git\/?$/, '').replace(/\/$/, '')}/${new URL(project.repository).hostname === 'github.com' ? 'commit' : '-/commit'}/${result.commit}` : undefined;
+    const commitUrl = result.commit && result.outcome === 'pushed' ? commitLink(project.repository, result.commit) : undefined;
     const text = `${row.ticket.name}\n${result.summary}\n${result.tests.length ? `Vérifications :\n${result.tests.join('\n')}` : ''}\n${result.outcome === 'pushed' ? `Commit poussé sur ${result.branch ?? 'maintenance'}. Statut : to build. À vous de créer le PR/MR.` : result.outcome === 'actionable' ? 'Informations suffisantes. Passez le ticket à Ready for AI pour autoriser le traitement.' : result.commit ? 'Publication à vérifier. Ne relancez pas le code avant réconciliation du commit.' : 'Traitement arrêté. Précisez le ticket puis demandez explicitement une relance.'}`;
     try {
       if (result.outcome === 'pushed') await store.effect(`${id}:status`, () => clickup.built(row.ticket.id));
@@ -54,7 +57,8 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       for (const statement of developmentSchema.split(';').map(value => value.trim()).filter(Boolean)) await sql.query(statement);
       await new JobStore(sql).enqueueIntegration(`development:poll:${config.SLACK_TEAM_ID}`, identity, { type: 'poll' }, 'development');
     },
-    async menu() { return { kind: 'Développement', text: help }; },
+    menuActions: ['propose_state', 'propose_retry', 'confirm', 'cancel'],
+    menu: (actor, page) => menus.page(actor, page),
     async receiveChannel(actor, payload, eventId) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
       const projects = (await store.projects()).filter(project => project.enabled && project.channel === actor.channel);
@@ -65,8 +69,9 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     },
     async handle(actor, payload, eventId, context) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
+      if (payload.type !== 'text') return menus.handle(actor, payload, eventId, context);
       const text = String(payload.text ?? '').trim();
-      const send = (message: string) => context.messenger.send(actor, { kind: 'Développement', text: message });
+      const send = (message: string) => context.messenger.send(actor, { kind: 'Développement', text: message, buttons: [menuButton] });
       if (text.startsWith('configure ')) {
         let input: unknown;
         try { input = JSON.parse(text.slice(10)); } catch { return send('JSON de configuration invalide. ' + help); }
@@ -84,25 +89,18 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
         try { await clickup.lists(parsed.data.folder); }
         catch { return send('Configuration non enregistrée : lecture du dossier ClickUp indisponible. Vérifiez son identifiant et les accès du jeton Development, puis renvoyez la commande development configure.'); }
         await store.save(parsed.data, eventId);
-        return send(`Projet ${parsed.data.name} enregistré. ${parsed.data.enabled ? 'Les tickets Ready for AI sont autorisés pour le worker local.' : 'Nouveaux traitements suspendus.'}`);
+        return menus.show(actor, eventId, context, { kind: 'Développement', text: `Projet ${parsed.data.name} enregistré. ${parsed.data.enabled ? 'Les tickets Ready for AI sont autorisés pour le worker local.' : 'Nouveaux traitements suspendus.'}`, links: [{ label: 'Ouvrir le projet', page: projectPage(parsed.data.id) }] });
       }
       if (text === 'projects') {
-        const projects: Project[] = [];
-        for (const project of await store.projects()) if (await visible(actor, project)) projects.push(project);
-        return send(projects.map(project => `${project.id} — ${project.name} — ${project.enabled ? 'activé' : 'suspendu'} — canal ${project.channel}, dossier ${project.folder}, skill ${project.skill}`).join('\n') || 'Aucun projet accessible. ' + help);
+        return menus.show(actor, eventId, context, await menus.page(actor, 'projects_0'));
       }
       if (text.startsWith('status ')) {
-        const project = await store.project(text.slice(7));
-        if (!project || !await visible(actor, project)) return send('Projet inaccessible.');
-        const rows = await store.history(project.id);
-        const health = (await database.query('SELECT issue,checked_at FROM development_health WHERE team=$1 AND project=$2', [config.SLACK_TEAM_ID, project.id])).rows[0];
-        const labels: Record<string, string> = { queued: 'en attente', running: 'en cours', reporting: 'publication en cours', reporting_error: 'publication à vérifier', blocked: 'bloqué', completed: 'terminé' };
-        return send([health?.issue, rows.map(row => `${row.id} — ${row.ticket.name} — ${labels[row.state] ?? row.state} — essais ${row.attempts}/2${row.result ? `\n${row.result.summary}` : ''}`).join('\n\n') || 'Aucun traitement.'].filter(Boolean).join('\n\n'));
+        return menus.show(actor, eventId, context, await menus.page(actor, projectPage(text.slice(7))));
       }
       if (text.startsWith('retry ')) {
         const row = await store.run(text.slice(6)), project = row && await store.project(row.project);
         const republish = row?.kind === 'build' && row.state === 'reporting_error' && row.result?.outcome === 'pushed' && row.result.commit;
-        if (!row || !project || !project.enabled || !await visible(actor, project) || !(row.state === 'blocked' && !row.result?.commit || republish)) return send('Ce traitement ne peut pas être relancé.');
+        if (!row || !project || !project.enabled || !await visible(actor, project) || !await visible(actor, row.config) || !canRetry(row)) return send('Ce traitement ne peut pas être relancé.');
         // A fresh explicit request is a fresh run; repeated delivery of the same request is not.
         let refreshed: Ticket | undefined;
         if (republish) {
