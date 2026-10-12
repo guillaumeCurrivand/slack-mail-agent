@@ -1,6 +1,7 @@
 import type { Project, Ticket } from './domain.js';
 
 export class TicketOutsideFolder extends Error {}
+export type FolderChoice = { id: string; name: string; space: string; workspace: string };
 
 export class ClickupDevelopment {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
@@ -15,6 +16,22 @@ export class ClickupDevelopment {
     const data = await this.request(`/folder/${encodeURIComponent(folder)}/list?archived=false`);
     if (!Array.isArray(data.lists)) throw new Error('Liste ClickUp incomplète.');
     return data.lists.map((list: any) => String(list.id));
+  }
+  async folders(): Promise<FolderChoice[]> {
+    const records = (data: any, key: string): Array<{ id: string; name: string }> => {
+      if (!Array.isArray(data[key]) || data[key].some((item: any) => !item || !/^\d{1,100}$/.test(String(item.id)) || typeof item.name !== 'string' || !item.name.trim()))
+        throw new Error('Catalogue ClickUp incomplet.');
+      return data[key].filter((item: any) => !item.archived).map((item: any) => ({ id: String(item.id), name: item.name }));
+    };
+    const result = new Map<string, FolderChoice>();
+    for (const workspace of records(await this.request('/team'), 'teams')) {
+      for (const space of records(await this.request(`/team/${workspace.id}/space?archived=false`), 'spaces')) {
+        for (const folder of records(await this.request(`/space/${space.id}/folder?archived=false`), 'folders')) {
+          result.set(folder.id, { ...folder, space: space.name, workspace: workspace.name });
+        }
+      }
+    }
+    return [...result.values()].sort((a, b) => `${a.workspace}/${a.space}/${a.name}/${a.id}`.localeCompare(`${b.workspace}/${b.space}/${b.name}/${b.id}`, 'fr'));
   }
   async tasks(project: Project): Promise<Array<{ id: string; status: string }>> {
     const result = new Map<string, { id: string; status: string }>();

@@ -3,20 +3,22 @@ import { ownerKey, type Actor } from '../../core/identity.js';
 import { JobStore } from '../../core/store.js';
 import { transaction, type Database } from '../../core/transactions.js';
 import type { Project } from './domain.js';
+import type { FolderChoice } from './providers.js';
 
 export const configurationSchema = `CREATE TABLE IF NOT EXISTS development_configuration_forms (
  id text PRIMARY KEY, owner text NOT NULL, channel text NOT NULL, base jsonb, candidate jsonb,
  state text NOT NULL DEFAULT 'editing', created_at timestamptz NOT NULL DEFAULT now()
-); ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS thread text`;
-export type ConfigurationForm = { id: string; owner: string; channel: string; thread?: string; base: Project | null; candidate: Project | null; state: string };
+); ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS thread text;
+ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS folders jsonb`;
+export type ConfigurationForm = { id: string; owner: string; channel: string; thread?: string; folders?: FolderChoice[] | null; base: Project | null; candidate: Project | null; state: string };
 
 export class ConfigurationStore {
   constructor(private db: Database) {}
   async get(actor: Pick<Actor, 'team' | 'user'>, id: string): Promise<ConfigurationForm | undefined> {
     return (await this.db.query("SELECT * FROM development_configuration_forms WHERE id=$1 AND owner=$2 AND created_at>=now()-interval '24 hours'", [id, ownerKey(actor)])).rows[0] as ConfigurationForm | undefined;
   }
-  async create(actor: Actor, id: string, base: Project | null, candidate = base) {
-    await this.db.query('INSERT INTO development_configuration_forms(id,owner,channel,base,candidate,thread) VALUES($1,$2,$3,$4,$5,$6) ON CONFLICT DO NOTHING', [id, ownerKey(actor), actor.channel, base && JSON.stringify(base), candidate && JSON.stringify(candidate), actor.thread ?? null]);
+  async create(actor: Actor, id: string, base: Project | null, candidate = base, folders?: FolderChoice[]) {
+    await this.db.query('INSERT INTO development_configuration_forms(id,owner,channel,base,candidate,thread,folders) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING', [id, ownerKey(actor), actor.channel, base && JSON.stringify(base), candidate && JSON.stringify(candidate), actor.thread ?? null, folders ? JSON.stringify(folders) : null]);
     return this.get(actor, id);
   }
   async submit(actor: Pick<Actor, 'team' | 'user'>, id: string, candidate: Project) {

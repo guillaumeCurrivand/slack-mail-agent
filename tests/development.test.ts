@@ -31,6 +31,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
   let counter = 0, snapshots = 0, rejectStatus = false, rejectPost = false;
   let rejectView = false, accessFailure = failure;
   const requests: string[] = [];
+  const folders = [{ id: '123', name: 'Maintenance', archived: false }, { id: '456', name: 'Autre dossier', archived: false }];
   const accessibleChannels = new Set(['CPROJECT']);
   const fetcher = (async (url: URL | string, init?: RequestInit) => {
     const target = new URL(String(url)), body = init?.body ? JSON.parse(String(init.body)) : undefined;
@@ -42,6 +43,9 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     }
     if (target.hostname === 'api.clickup.com') {
       if (accessFailure === 'clickup') return Response.json({}, { status: 403 });
+      if (target.pathname.endsWith('/team')) return Response.json({ teams: [{ id: '1', name: 'Maya' }] });
+      if (target.pathname.endsWith('/team/1/space')) return Response.json({ spaces: [{ id: '2', name: 'Projets' }] });
+      if (target.pathname.endsWith('/space/2/folder')) return Response.json({ folders });
       if (target.pathname.endsWith('/folder/123/list')) return Response.json({ lists: [{ id: 'list1' }] });
       if (target.pathname.endsWith('/folder/456/list')) return Response.json({ lists: [{ id: 'list2' }] });
       if (target.pathname.endsWith('/list/list1/task')) return Response.json({ tasks: [...tasks.values()].map(task => ({ id: task.id, status: { status: task.status } })), last_page: true });
@@ -111,13 +115,18 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     return posts.at(-1);
   };
   const submit = async (view: any, values: Record<string, unknown>, actor = alice, signed = true) => {
-    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
+    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'folder' ? { type: 'external_select', selected_option: value ? { value } : null } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
     const stamp = String(Math.floor(Date.now() / 1000));
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'view_submission', team: { id: actor.team }, user: { id: actor.user }, view: { id: 'V1', callback_id: view.callback_id, private_metadata: view.private_metadata, state: { values: state } } }) }).toString();
     return app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': signed ? `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` : 'invalid' } });
   };
+  const suggest = async (view: any, value = '', actor = alice, overrides: Record<string, unknown> = {}, signed = true) => {
+    const stamp = String(Math.floor(Date.now() / 1000));
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_suggestion', team: { id: actor.team }, user: { id: actor.user }, view, block_id: 'folder', action_id: 'value', value, ...overrides }) }).toString();
+    return app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': signed ? `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` : 'invalid' } });
+  };
   const api = async (route: string, body: unknown, bearer = token) => app.inject({ method: 'POST', url: `/development/worker/${route}`, payload: JSON.stringify(body), headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` } });
-  return { sql, store, tasks, comments, statuses, posts, views, requests, submit, run, command, click, ingress, api, module, modules, app, accessibleChannels,
+  return { sql, store, tasks, comments, statuses, posts, views, requests, submit, suggest, folders, run, command, click, ingress, api, module, modules, app, accessibleChannels,
     poll: () => run('development:poll:TTEAM'), configure: () => command(`development configure ${JSON.stringify(project)}`),
     snapshotCount: () => snapshots, failStatus: () => { rejectStatus = true; }, failPost: () => { rejectPost = true; }, failView: () => { rejectView = true; }, accessFailure: (value: typeof failure) => { accessFailure = value; } };
 }
@@ -380,7 +389,7 @@ it('creates a project entirely through the signed form, validates asynchronously
   expect(await h.store.project('pilot')).toBeUndefined();
   await h.run(`development:configuration:${view.private_metadata}`);
   const confirmation = h.posts.at(-1);
-  expect(confirmation.text).toContain('Dossier ClickUp : 123');
+  expect(confirmation.text).toContain('Dossier ClickUp : Maya / Projets / Maintenance (123)');
   expect(await h.store.project('pilot')).toBeUndefined();
   await h.click(confirmation, 'Enregistrer la configuration');
   expect(await h.store.project('pilot')).toEqual({ ...project, enabled: false });
@@ -411,6 +420,80 @@ it('prefills editing, keeps the project identifier, and saves all fields without
   await h.click(h.posts.at(-1), 'Enregistrer la configuration');
   expect(await h.store.project('pilot')).toEqual(edited);
   expect(await h.store.project('cannot-rename')).toBeUndefined();
+});
+
+it('searches named ClickUp folders beyond the first 100 from an owner-bound prepared snapshot', async () => {
+  const h = await harness();
+  h.folders.push(...Array.from({ length: 110 }, (_, index) => ({ id: String(1000 + index), name: `Dossier ${index}`, archived: false })));
+  h.folders.push({ id: '9876', name: 'Réparations', archived: false }, { id: '9877', name: 'Archivé', archived: true });
+  const { view } = await newForm(h);
+  const input = view.blocks.find((block: any) => block.block_id === 'folder');
+  expect(input.element.type).toBe('external_select');
+  const before = h.requests.length;
+  expect((await h.suggest(view)).json().options).toHaveLength(100);
+  const result = (await h.suggest(view, 'maya reparations')).json().options;
+  expect(result).toEqual([{ text: { type: 'plain_text', text: 'Réparations · 9876' }, value: '9876', description: { type: 'plain_text', text: 'Maya / Projets' } }]);
+  expect((await h.suggest(view, '1109')).json().options[0].value).toBe('1109');
+  expect((await h.suggest(view, 'archivé')).json().options).toEqual([]);
+  expect((await h.suggest(view, 'missing')).json().options).toEqual([]);
+  expect(h.requests).toHaveLength(before); // Suggestions never call Slack or ClickUp.
+  expect((await h.sql.query("SELECT * FROM jobs WHERE payload->>'type'='configuration_validate'")).rows).toHaveLength(0);
+});
+
+it('rejects unsigned, cross-user, cross-workspace, wrong-field, disabled and expired folder suggestions', async () => {
+  const h = await harness(); const { view } = await newForm(h);
+  expect((await h.suggest(view, '', alice, {}, false)).statusCode).toBe(401);
+  expect((await h.suggest(view, '', { ...alice, team: 'TOTHER' })).statusCode).toBe(403);
+  expect((await h.suggest(view, '', { ...alice, user: 'UBOB' })).json().options).toEqual([]);
+  expect((await h.suggest(view, '', alice, { block_id: 'repository' })).json().options).toEqual([]);
+  expect((await h.suggest(view, '', alice, { action_id: 'wrong' })).json().options).toEqual([]);
+  expect((await h.suggest({ ...view, callback_id: 'disabled:configuration' })).statusCode).toBe(403);
+  expect((await h.suggest(view, '', alice, { value: {} })).statusCode).toBe(400);
+  await h.sql.query("UPDATE development_configuration_forms SET created_at=now()-interval '25 hours'");
+  expect((await h.suggest(view)).json().options).toEqual([]);
+});
+
+it('prefills the selected folder and refuses a forged or missing selection before enqueueing validation', async () => {
+  const h = await harness(); await h.configure();
+  const prepared = await h.click(await h.command('development status pilot'), 'Modifier la configuration');
+  await h.click(prepared, 'Remplir le formulaire'); const view = h.views.at(-1);
+  expect(view.blocks.find((block: any) => block.block_id === 'folder').element.initial_option.value).toBe('123');
+  for (const folder of ['99999', null]) expect((await h.submit(view, { ...project, folder })).json().errors.folder).toBeTruthy();
+  expect((await h.sql.query("SELECT * FROM jobs WHERE payload->>'type'='configuration_validate'")).rows).toHaveLength(0);
+  await h.submit(view, { ...project, folder: '456' });
+  await h.run(`development:configuration:${view.private_metadata}`);
+  expect(h.posts.at(-1).text).toContain('Autre dossier (456)');
+  expect((await h.suggest(view)).json().options).toEqual([]);
+  await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  expect((await h.store.project('pilot'))!.folder).toBe('456');
+});
+
+it('offers refresh when folder discovery is empty or fails and preserves the project', async () => {
+  const h = await harness(); await h.configure(); h.folders.length = 0;
+  const prepared = await h.click(await h.command('development status pilot'), 'Modifier la configuration');
+  expect(prepared.text).toContain('Aucun dossier');
+  expect(h.views).toHaveLength(0);
+  h.accessFailure('clickup');
+  const failed = await h.click(prepared, 'Actualiser les dossiers');
+  expect(failed.text).toContain('chargés complètement');
+  expect(await h.store.project('pilot')).toEqual(project);
+  h.accessFailure(undefined); h.folders.push({ id: '456', name: 'Nouveau dossier', archived: false });
+  const ready = await h.click(failed, 'Actualiser les dossiers');
+  await h.click(ready, 'Remplir le formulaire'); const view = h.views.at(-1);
+  expect(view.blocks.find((block: any) => block.block_id === 'folder').element.initial_option).toBeUndefined();
+  expect(JSON.stringify(view)).toContain('ne figure plus');
+  expect((await h.suggest(view)).json().options[0].value).toBe('456');
+});
+
+it('refreshes folder choices in a fresh draft and invalidates the old form', async () => {
+  const h = await harness(); const { view, prepared } = await newForm(h);
+  h.folders[0]!.name = 'Nom actualisé';
+  expect((await h.suggest(view, 'actualisé')).json().options).toEqual([]);
+  const refreshed = await h.click(prepared, 'Actualiser les dossiers');
+  await h.click(refreshed, 'Remplir le formulaire');
+  expect((await h.suggest(h.views.at(-1), 'actualisé')).json().options[0].value).toBe('123');
+  expect((await h.suggest(view)).json().options).toEqual([]);
+  expect((await h.submit(view, project)).json().response_action).toBe('errors');
 });
 
 it('shows per-field validation errors and rejects an existing identifier without enqueueing work', async () => {

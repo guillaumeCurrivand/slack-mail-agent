@@ -50,6 +50,15 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (!verifySlack(raw, String(request.headers['x-slack-request-timestamp'] ?? ''), String(request.headers['x-slack-signature'] ?? ''), config.SLACK_SIGNING_SECRET)) return reply.code(401).send();
     const body = JSON.parse(new URLSearchParams(raw).get('payload') ?? '{}');
     if (body.team?.id !== config.SLACK_TEAM_ID || !/^[UW][A-Z0-9]+$/.test(body.user?.id ?? '')) return reply.code(403).send();
+    if (body.type === 'block_suggestion') {
+      const view = body.view;
+      if (typeof view?.callback_id !== 'string' || typeof view.private_metadata !== 'string' || view.private_metadata.length > 200 ||
+        typeof body.block_id !== 'string' || body.block_id.length > 255 || typeof body.action_id !== 'string' || body.action_id.length > 255 ||
+        typeof body.value !== 'string' || body.value.length > 500) return reply.code(400).send();
+      const forms = modules.formSubmission(view.callback_id);
+      if (!forms?.suggest) return reply.code(403).send();
+      return forms.suggest({ team: body.team.id, user: body.user.id }, { form: view.private_metadata, block: body.block_id, action: body.action_id, query: body.value });
+    }
     if (body.type === 'view_submission') {
       const view = body.view;
       if (typeof view?.callback_id !== 'string' || typeof view.private_metadata !== 'string' || view.private_metadata.length > 200) return reply.code(400).send();

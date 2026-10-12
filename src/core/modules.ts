@@ -41,6 +41,7 @@ export interface AssistantModule {
     callbacks: readonly string[];
     open(actor: Actor, input: { value: string; trigger: string }, eventId: string): Promise<void>;
     submit(actor: Pick<Actor, 'team' | 'user'>, view: { callback_id: string; private_metadata: string; state?: { values?: unknown } }): Promise<Record<string, unknown>>;
+    suggest?(actor: Pick<Actor, 'team' | 'user'>, input: { form: string; block: string; action: string; query: string }): Promise<Record<string, unknown>>;
   };
   workOperations?: readonly { key: string; label: string; commands: readonly string[]; action: string; snapshotUnknownText?: boolean }[];
   legacyActions?: readonly string[];
