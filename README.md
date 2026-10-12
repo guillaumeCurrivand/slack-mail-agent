@@ -49,6 +49,8 @@ Documentation's one-time spreadsheet transition has a separate [operator import 
 
 Development's [clickable interface](docs/development.md#clickable-private-interface) opens from **menu → Développement → Projets et traitements**. Browse projects, open run results, and confirm pause/resume or eligible retries without copying identifiers. Native Slack forms create and edit every project setting, including the channel and activation, with a separate save confirmation; commands are optional. The module help explains the channel analysis → Ready for AI → tested commit → human review workflow.
 
+Frontend/backend maintenance can share the same Slack channel, ClickUp Folder and List. Configure one Development project per repository, then use **Développement → Tickets et dépôts** to explicitly select one or both repositories for each ticket. The shared ticket reaches `to build` only after all selected corrections succeed. See [shared tickets across repositories](docs/development.md#shared-tickets-across-repositories) for setup, worker configuration and existing-work recovery.
+
 ### Upgrading an existing installation
 
 Stop the old process before starting this version; do not run old and new workers together during the upgrade. Startup adds module identifiers to existing jobs and AI records, treating old records as Mail Sorter. Mail tables, encrypted credentials, saved rules, previews, and spending totals retain their existing values. Previously queued requests and previously posted buttons still work with their original ownership and approval checks. New DM requests require the `mail` prefix; bare `sort` returns guidance.

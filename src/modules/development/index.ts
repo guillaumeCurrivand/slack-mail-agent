@@ -7,12 +7,14 @@ import { JobStore } from '../../core/store.js';
 import type { Database } from '../../core/transactions.js';
 import type { DevelopmentConfig } from './config.js';
 import { canRetry, commitLink, projectSchema, ready, resultSchema, ticketIds, type Project, type Result, type Ticket } from './domain.js';
-import { ClickupDevelopment, DevelopmentChannels } from './providers.js';
+import { ClickupDevelopment, DevelopmentChannels, TicketOutsideFolder } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
 import { developmentHelp } from './help.js';
 import { DevelopmentMenu, projectPage } from './menu.js';
 import { configurationSchema } from './configuration-store.js';
 import { DevelopmentConfiguration } from './configuration.js';
+import { DevelopmentRouting } from './routing.js';
+import { sameDestination, type TicketRoute } from './routing-store.js';
 
 const help = developmentHelp.text;
 
@@ -27,6 +29,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
   const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && channels.accessible(project.channel, actor.user);
   const menus = new DevelopmentMenu(store, visible, clickup);
   const configuration = new DevelopmentConfiguration(store, menus, visible, clickup, config.SLACK_BOT_TOKEN, dependencies.fetcher);
+  const routing = new DevelopmentRouting(store, menus, visible, clickup);
 
   async function post(context: IntegrationContext, project: Project, text: string, thread?: string, links?: Array<{ label: string; url: string }>) {
     if (!await channels.accessible(project.channel)) throw new Error('Canal indisponible.');
@@ -38,10 +41,12 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     const row = await store.run(id);
     if (!row || row.state !== 'reporting') return;
     const result = row.result as Result, project = row.config as Project;
+    const batch = await routing.saved.completion(id);
+    const complete = !batch || batch.complete;
     const commitUrl = result.commit && result.outcome === 'pushed' ? commitLink(project.repository, result.commit) : undefined;
-    const text = `${row.ticket.name}\n${result.summary}\n${result.tests.length ? `Vérifications :\n${result.tests.join('\n')}` : ''}\n${result.outcome === 'pushed' ? `Commit poussé sur ${result.branch ?? 'maintenance'}. Statut : to build. À vous de créer le PR/MR.` : result.outcome === 'actionable' ? 'Informations suffisantes. Passez le ticket à Ready for AI pour autoriser le traitement.' : result.commit ? 'Publication à vérifier. Ne relancez pas le code avant réconciliation du commit.' : 'Traitement arrêté. Précisez le ticket puis demandez explicitement une relance.'}`;
+    const text = `Projet : ${project.name}\n${row.ticket.name}\n${result.summary}\n${result.tests.length ? `Vérifications :\n${result.tests.join('\n')}` : ''}\n${result.outcome === 'pushed' ? `Commit poussé sur ${result.branch ?? 'maintenance'}. ${complete ? 'Tous les dépôts de cette correction sont prêts. Statut : to build. À vous de créer les PR/MR.' : 'En attente des autres dépôts sélectionnés ; le statut ClickUp reste inchangé.'}` : result.outcome === 'actionable' ? 'Informations suffisantes pour ce dépôt. Passez le ticket à Ready for AI pour autoriser le traitement.' : result.commit ? 'Publication à vérifier. Ne relancez pas le code avant réconciliation du commit.' : 'Traitement arrêté. Précisez le ticket puis demandez explicitement une relance.'}`;
     try {
-      if (result.outcome === 'pushed') await store.effect(`${id}:status`, () => clickup.built(row.ticket.id));
+      if (result.outcome === 'pushed' && complete) await store.effect(batch ? `routing:${batch.cycle}:status` : `${id}:status`, () => clickup.built(row.ticket.id));
       await store.effect(`${id}:comment`, () => clickup.comment(row.ticket.id, `${text}${commitUrl ? `\nCommit : ${commitUrl}` : ''}`));
       const timestamp = await store.effect(`${id}:slack`, () => post(context, project, text, row.thread ?? undefined,
         [{ label: 'Ticket ClickUp', url: row.ticket.url }, ...(commitUrl ? [{ label: 'Commit', url: commitUrl }] : [])]));
@@ -53,6 +58,14 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     }
   }
 
+  async function requestRouting(route: TicketRoute, project: Project, context: IntegrationContext) {
+    if (route.selected) return;
+    try { await store.effect(`routing:${config.SLACK_TEAM_ID}:${route.ticket}:notice`, () => post(context, project,
+      `${route.snapshot.name}\nChoisissez les dépôts concernés dans votre DM : menu → Développement → Tickets et dépôts. Vous pouvez sélectionner Frontend, Backend ou les deux. Aucun traitement ne démarre avant ce choix, même si le ticket est Ready for AI.`, route.thread ?? undefined,
+      [{ label: 'Ticket ClickUp', url: route.snapshot.url }])); }
+    catch { /* An uncertain notice is not replayed and cannot block other tickets. The DM list remains available. */ }
+  }
+
   return {
     id: 'development', name: 'Développement', description: 'Analyse et correction des tickets de maintenance avec un worker Cursor local',
     help: developmentHelp,
@@ -61,9 +74,9 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       await sql.query(configurationSchema);
       await new JobStore(sql).enqueueIntegration(`development:poll:${config.SLACK_TEAM_ID}`, identity, { type: 'poll' }, 'development');
     },
-    menuActions: ['propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel'],
+    menuActions: ['propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel', 'routing_begin', 'routing_add', 'routing_remove', 'routing_check', 'routing_confirm', 'routing_cancel'],
     forms: configuration.forms,
-    menu: (actor, page) => menus.page(actor, page),
+    menu: (actor, page) => /^routes?_/.test(page) ? routing.page(actor, page) : menus.page(actor, page),
     async receiveChannel(actor, payload, eventId) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
       const projects = (await store.projects()).filter(project => project.enabled && project.channel === actor.channel);
@@ -74,6 +87,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     },
     async handle(actor, payload, eventId, context) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
+      if (payload.type === 'menu_action' && String(payload.action).startsWith('routing_')) return routing.handle(actor, payload, eventId, context);
       if (String(payload.type).startsWith('configuration_') || (payload.type === 'menu_action' && String(payload.action).startsWith('configuration_'))) return configuration.handle(actor, payload, eventId, context);
       if (payload.type !== 'text') return menus.handle(actor, payload, eventId, context);
       const text = String(payload.text ?? '').trim();
@@ -124,28 +138,69 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       if (actor.team !== identity.team || actor.integration !== identity.integration) throw new Error('Intégration inconnue.');
       if (payload.type === 'finish') return finish(String(payload.run), context);
       if (payload.type === 'poll') {
-        for (const project of await store.projects()) {
+        const projects = await store.projects(), handled = new Set<string>();
+        for (const project of projects) {
           if (!project.enabled) continue;
+          if (handled.has(project.folder)) continue;
+          handled.add(project.folder);
+          const siblings = projects.filter(p => p.folder === project.folder);
           try {
             for (const task of await clickup.tasks(project)) {
+              const existing = await routing.saved.get(task.id);
+              if (siblings.length > 1 || existing) {
+                if (!ready(task.status) && !existing) continue;
+                const ticket = await clickup.ticket(project, task.id);
+                const route = existing ?? await routing.saved.ensure(project, ticket);
+                if (!route || route.folder !== project.folder) continue;
+                const destination = siblings.find(p => p.channel === route.channel);
+                if (!destination) continue;
+                await requestRouting(route, destination, context);
+                if (route.selected && (await Promise.all(route.selected.map(p => channels.accessible(p.channel)))).every(Boolean)) await routing.saved.observe(ticket);
+                continue;
+              }
               const snapshot = ready(task.status) && await store.needsSnapshot(project.id, task.id) ? await clickup.ticket(project, task.id) : undefined;
               await store.observe(project, task.id, snapshot?.status ?? task.status, snapshot);
             }
-            await store.health(project.id, null);
-          } catch { await store.health(project.id, 'Lecture ClickUp indisponible ou incomplète. La file existante est conservée ; nouvelle vérification dans une minute.'); }
+            for (const sibling of siblings) await store.health(sibling.id, null);
+          } catch { for (const sibling of siblings) await store.health(sibling.id, 'Lecture ClickUp ou routage indisponible. La file existante est conservée ; nouvelle vérification dans une minute.'); }
         }
         return new Date(Date.now() + 60_000);
       }
       if (payload.type !== 'channel') return;
       const user = payload.actor as Actor;
-      for (const project of await store.projects()) {
-        if (!project.enabled || project.channel !== user.channel || !await visible(user, project)) continue;
-        const links = ticketIds(String(payload.text)), thread = String(payload.thread);
-        const ids = links.length ? links : await store.threads(project.id, thread);
-        for (const id of ids) {
+      const projects = await store.projects(), accessible: Project[] = [];
+      for (const project of projects) if (project.enabled && project.channel === user.channel && await visible(user, project)) accessible.push(project);
+      const links = ticketIds(String(payload.text)), thread = String(payload.thread);
+      const ids = new Set(links);
+      if (!links.length) {
+        for (const p of accessible) for (const id of await store.threads(p.id, thread)) ids.add(id);
+        for (const route of await routing.saved.list()) if (route.channel === user.channel && route.thread === thread) ids.add(route.ticket);
+      }
+      for (const id of ids) {
+        let matched = false;
+        const folders = new Set<string>();
+        for (const project of accessible) {
+          if (folders.has(project.folder)) continue;
+          folders.add(project.folder);
           try {
             // Folder ownership is established before posting comments or sharing task content.
             const ticket = await clickup.ticket(project, id);
+            matched = true;
+            const existing = await routing.saved.get(id);
+            if (projects.filter(p => p.folder === project.folder).length > 1 || existing) {
+              const route = await routing.saved.ensure(project, ticket, thread);
+              if (!route) continue;
+              await requestRouting(route, project, context);
+              if (!route.selected || route.selected.some(p => !accessible.some(c => sameDestination(c, p)))) continue;
+              if (!links.length) {
+                if (ready(ticket.status) || (await Promise.all(route.selected.map(p => store.frozen(p.id, id)))).some(Boolean)) continue;
+                const clarification = `Précision Slack (${user.user}) :\n${String(payload.text)}`;
+                await store.effect(`${eventId}:${id}:clarification`, () => clickup.comment(id, clarification));
+                ticket.comments.push(clarification);
+              }
+              await routing.saved.observe(ticket, eventId, thread);
+              continue;
+            }
             if (!links.length) {
               // Requirements are immutable after authorization, including thread responses.
               if (ready(ticket.status) || await store.frozen(project.id, id)) continue;
@@ -154,10 +209,13 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
               ticket.comments.push(clarification);
             }
             await store.review(project, ticket, thread, eventId);
-          } catch {
+          } catch (error) {
+            if (error instanceof TicketOutsideFolder) continue;
             await store.effect(`${eventId}:${project.id}:${id}:unavailable`, () => post(context, project, 'Ce ticket ne peut pas être analysé. Vérifiez son appartenance au dossier configuré et les accès ClickUp.', thread));
+            matched = true;
           }
         }
+        if (!matched && accessible[0]) await store.effect(`${eventId}:${id}:unavailable`, () => post(context, accessible[0]!, 'Ce ticket ne peut pas être analysé. Vérifiez son appartenance au dossier configuré et les accès ClickUp.', thread));
       }
     },
     registerRoutes(app) {

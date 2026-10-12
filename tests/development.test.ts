@@ -21,7 +21,7 @@ const project = projectSchema.parse({ id: 'pilot', name: 'Projet pilote', channe
 let db: PGlite;
 const apps: Array<{ close(): Promise<void> }> = [];
 beforeAll(async () => { db = new PGlite(); await db.exec(coreSchema); });
-beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations,development_configuration_forms CASCADE'); });
+beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations,development_configuration_forms,development_ticket_routes,development_route_proposals,development_route_runs CASCADE'); });
 afterAll(async () => { for (const app of apps) await app.close(); await db.close(); });
 
 async function harness(failure?: 'conversations.info' | 'conversations.members' | 'clickup') {
@@ -42,6 +42,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     if (target.hostname === 'api.clickup.com') {
       if (accessFailure === 'clickup') return Response.json({}, { status: 403 });
       if (target.pathname.endsWith('/folder/123/list')) return Response.json({ lists: [{ id: 'list1' }] });
+      if (target.pathname.endsWith('/folder/456/list')) return Response.json({ lists: [{ id: 'list2' }] });
       if (target.pathname.endsWith('/list/list1/task')) return Response.json({ tasks: [...tasks.values()].map(task => ({ id: task.id, status: { status: task.status } })), last_page: true });
       const match = /\/task\/([^/]+)(\/comment)?$/.exec(target.pathname);
       if (!match || !tasks.has(match[1]!)) return Response.json({}, { status: 404 });
@@ -124,6 +125,174 @@ async function newForm(h: Awaited<ReturnType<typeof harness>>) {
   await h.click(prepared, 'Remplir le formulaire');
   return { prepared, view: h.views.at(-1) };
 }
+
+async function sharedProjects(h: Awaited<ReturnType<typeof harness>>) {
+  await h.configure();
+  await h.store.save({ ...project, id: 'backend', name: 'Backend', repository: 'https://github.com/example/backend' }, 'backend');
+}
+async function chooseRepositories(h: Awaited<ReturnType<typeof harness>>, names = ['Projet pilote', 'Backend']) {
+  const menu = await h.click(await h.dm('menu'), 'Développement');
+  const list = await h.click(menu, 'Tickets et dépôts');
+  const detail = await h.click(list, 'Ouvrir');
+  let picker = await h.click(detail, 'Choisir les dépôts');
+  for (const name of names) picker = await h.click(picker, `Ajouter ${name}`);
+  return h.click(picker, 'Vérifier les dépôts');
+}
+async function finishRepository(h: Awaited<ReturnType<typeof harness>>, projectId: string, outcome = 'pushed') {
+  const work = (await h.api('claim', { worker: randomUUID(), projects: [projectId] })).json().work;
+  expect(work).toBeTruthy();
+  await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 });
+  expect((await h.api('result', { id: work.id, lease: work.lease, result: { outcome, summary: `${projectId} terminé`, tests: ['Checks passed'], ...(outcome === 'pushed' ? { commit: (projectId === 'backend' ? 'b' : 'a').repeat(40) } : {}) } })).statusCode).toBe(200);
+  await h.run(`development:finish:${work.id}`);
+  return work;
+}
+
+it('keeps the same channel, list and folder and routes a ticket to both repositories only after confirmation', async () => {
+  const h = await harness(); await sharedProjects(h);
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  expect(h.posts.at(-1).text).toContain('Tickets et dépôts');
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  const confirmation = await chooseRepositories(h);
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  await h.click(confirmation, 'Confirmer les dépôts');
+  await h.click(confirmation, 'Confirmer les dépôts');
+  const runs = (await h.sql.query('SELECT * FROM development_runs ORDER BY project')).rows;
+  expect(runs.map(r => r.project)).toEqual(['backend', 'pilot']);
+  expect(runs.every(r => r.kind === 'review' && r.config.folder === '123' && r.config.channel === 'CPROJECT' && r.thread === '1700000000.000001')).toBe(true);
+  expect(h.comments).toEqual([]); expect(h.statuses).toEqual([]);
+  expect(h.posts.some(p => p.text.includes('ne peut pas être analysé'))).toBe(false);
+  const reply = await h.ingress('Précision commune.', { thread: '1700000000.000001' }); await h.run(reply.id);
+  expect(h.comments).toHaveLength(1);
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(4);
+});
+
+it('holds Ready for AI without a choice and changes the shared status only after both pushes', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI';
+  await h.poll(); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  expect(h.posts.filter(p => p.text.includes('Choisissez les dépôts concernés'))).toHaveLength(1);
+  const confirmation = await chooseRepositories(h); await h.click(confirmation, 'Confirmer les dépôts');
+  await h.poll(); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(2);
+  h.tasks.get('abc123')!.description = 'Changed after authorization';
+  const front = await finishRepository(h, 'pilot');
+  expect(front.ticket.description).toBe('Le menu ne se ferme pas au clic.');
+  expect(h.statuses).toEqual([]);
+  expect(h.posts.at(-1).text).toContain('En attente des autres dépôts');
+  await finishRepository(h, 'backend');
+  expect(h.statuses).toEqual(['to build']);
+  expect(h.comments).toHaveLength(2);
+  await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(2);
+});
+
+it('can select only one repository without dispatching to its sibling', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI';
+  await h.poll(); await h.click(await chooseRepositories(h, ['Backend']), 'Confirmer les dépôts'); await h.poll();
+  expect(await h.store.history('pilot')).toHaveLength(0);
+  await finishRepository(h, 'backend');
+  expect(h.statuses).toEqual(['to build']);
+});
+
+it('keeps to build pending after one blocked repository and retries only that repository', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI';
+  await h.poll(); await h.click(await chooseRepositories(h), 'Confirmer les dépôts'); await h.poll();
+  await finishRepository(h, 'pilot'); const failed = await finishRepository(h, 'backend', 'blocked');
+  await h.poll(); expect(h.statuses).toEqual([]);
+  const retry = await h.click(await h.click(await h.dm('development status backend'), 'Voir les traitements'), 'Ouvrir');
+  await h.click(await h.click(retry, 'Relancer…'), 'Confirmer la relance');
+  await finishRepository(h, 'backend');
+  expect(h.statuses).toEqual(['to build']);
+  expect(await h.store.history('pilot')).toHaveLength(1);
+  expect(await h.store.history('backend')).toHaveLength(2);
+  await h.dm(`development retry ${failed.id}`);
+  expect(await h.store.history('backend')).toHaveLength(2);
+});
+
+it('binds routing choices to the owner, DM and message and rejects changed project snapshots', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI';
+  await h.poll(); const confirmation = await chooseRepositories(h);
+  for (const actor of [{ ...alice, user: 'UBOB' }, { ...alice, channel: 'DOTHER' }]) await h.click(confirmation, 'Confirmer les dépôts', actor);
+  await h.click(confirmation, 'Confirmer les dépôts', alice, '9.000001');
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  await h.store.save({ ...project, skill: 'changed' }, 'change-destination');
+  await h.click(confirmation, 'Confirmer les dépôts'); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+});
+
+it('does not reinterpret a disabled sibling as permission to use the remaining repository', async () => {
+  const h = await harness(); await sharedProjects(h);
+  await h.store.save({ ...(await h.store.project('backend'))!, enabled: false }, 'pause-backend');
+  h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  expect(h.posts.at(-1).text).toContain('Choisissez les dépôts');
+});
+
+it('holds historical unassigned queued work when a folder becomes shared', async () => {
+  const h = await harness(); await h.configure(); h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  await h.store.save({ ...project, id: 'backend', name: 'Backend', repository: 'https://github.com/example/backend' }, 'backend');
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot', 'backend'] })).json().work).toBeNull();
+  await h.poll(); await h.click(await chooseRepositories(h), 'Confirmer les dépôts');
+  expect(h.posts.at(-1).text).toContain('traitements antérieurs');
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(1);
+});
+
+it('cancels and expires routing proposals and lets only the first confirmed choice win', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  const cancelled = await chooseRepositories(h); await h.click(cancelled, 'Annuler'); await h.click(cancelled, 'Confirmer les dépôts');
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  const expired = await chooseRepositories(h); await h.sql.query("UPDATE development_route_proposals SET created_at=now()-interval '25 hours'");
+  await h.click(expired, 'Confirmer les dépôts');
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  const first = await chooseRepositories(h, ['Backend']), second = await chooseRepositories(h, ['Projet pilote']);
+  await h.click(first, 'Confirmer les dépôts'); await h.click(second, 'Confirmer les dépôts'); await h.poll();
+  expect(await h.store.history('pilot')).toHaveLength(0); expect(await h.store.history('backend')).toHaveLength(1);
+});
+
+it('rechecks provider access and holds an entire new correction if a selected project changes or pauses', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  const choice = await chooseRepositories(h);
+  h.accessFailure('clickup'); await h.click(choice, 'Confirmer les dépôts');
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  h.accessFailure(undefined); await h.click(choice, 'Confirmer les dépôts');
+  const backend = (await h.store.project('backend'))!;
+  await h.store.save({ ...backend, enabled: false }, 'pause'); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  await h.store.save({ ...backend, repository: 'https://github.com/example/replaced' }, 'change'); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  await h.store.save(backend, 'restore'); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(2);
+});
+
+it('retains both results and does not repeat an uncertain shared status write', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  await h.click(await chooseRepositories(h), 'Confirmer les dépôts'); await h.poll();
+  await finishRepository(h, 'pilot'); h.failStatus(); const backend = await finishRepository(h, 'backend');
+  expect((await h.store.run(backend.id))!.state).toBe('reporting_error');
+  expect(h.statuses).toEqual(['to build']);
+  await h.poll(); h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(2);
+  expect(h.statuses).toEqual(['to build']);
+});
+
+it('continues discovering other shared tickets after an uncertain routing notice', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI';
+  h.tasks.set('def456', { ...h.tasks.get('abc123')!, id: 'def456', name: 'Second ticket' });
+  h.failPost(); await h.poll(); await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_ticket_routes')).rows).toHaveLength(2);
+  expect(h.posts.filter(p => p.text.includes('Choisissez les dépôts concernés'))).toHaveLength(2);
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+});
+
+it('does not post a false mismatch for another folder using the same Slack channel', async () => {
+  const h = await harness(); await h.configure();
+  await h.store.save({ ...project, id: 'unrelated', folder: '456', repository: 'https://github.com/example/unrelated' }, 'unrelated');
+  const before = h.posts.length;
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  expect(await h.store.history('pilot')).toHaveLength(1);
+  expect(await h.store.history('unrelated')).toHaveLength(0);
+  expect(h.posts).toHaveLength(before);
+});
 
 it('creates a project entirely through the signed form, validates asynchronously, and confirms once', async () => {
   const h = await harness();

@@ -1,5 +1,7 @@
 import type { Project, Ticket } from './domain.js';
 
+export class TicketOutsideFolder extends Error {}
+
 export class ClickupDevelopment {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
   private async request(path: string, method = 'GET', body?: unknown) {
@@ -33,7 +35,7 @@ export class ClickupDevelopment {
   }
   async ticket(project: Project, id: string): Promise<Ticket> {
     const task = await this.request(`/task/${encodeURIComponent(id)}`);
-    if (String(task.id) !== id || !(await this.lists(project.folder)).includes(String(task.list?.id))) throw new Error('Ce ticket ne fait pas partie du dossier configuré.');
+    if (String(task.id) !== id || !(await this.lists(project.folder)).includes(String(task.list?.id))) throw new TicketOutsideFolder('Ce ticket ne fait pas partie du dossier configuré.');
     const comments: string[] = [], seen = new Set<string>();
     let cursor = '';
     for (;;) {

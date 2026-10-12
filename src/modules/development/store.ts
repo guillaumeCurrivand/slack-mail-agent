@@ -5,6 +5,7 @@ import { JobStore } from '../../core/store.js';
 import { transaction, type Database } from '../../core/transactions.js';
 import { ownerKey, type Actor } from '../../core/identity.js';
 import { ready, repositoryKey, type Project, type Result, type Ticket, type Work, type Run } from './domain.js';
+import { routingSchema } from './routing-store.js';
 
 type Confirmation = { id: string; project: Project; run_id: string | null; operation: 'pause' | 'resume' | 'retry'; state: string };
 
@@ -41,7 +42,7 @@ CREATE TABLE IF NOT EXISTS development_confirmations (
  project jsonb NOT NULL, run_id text, operation text NOT NULL, state text NOT NULL DEFAULT 'pending',
  created_at timestamptz NOT NULL DEFAULT now()
 );
-`;
+` + routingSchema;
 
 export class DevelopmentStore {
   constructor(readonly db: Database, readonly team: string) {}
@@ -92,6 +93,11 @@ export class DevelopmentStore {
       let row = (await sql.query("SELECT * FROM development_runs WHERE team=$1 AND worker=$2 AND state='running' ORDER BY created_at LIMIT 1", [this.team, worker])).rows[0];
       if (!row) row = (await sql.query(`SELECT r.* FROM development_runs r JOIN development_projects p ON p.team=r.team AND p.id=r.project
         WHERE r.team=$1 AND r.project=ANY($2::text[]) AND r.state='queued' AND (p.config->>'enabled')::boolean
+        AND ((NOT EXISTS (SELECT 1 FROM development_ticket_routes route WHERE route.team=r.team AND route.ticket=r.ticket->>'id')
+          AND (SELECT count(*) FROM development_projects siblings WHERE siblings.team=r.team AND siblings.config->>'folder'=p.config->>'folder')=1)
+          OR EXISTS (SELECT 1 FROM development_route_runs mapped WHERE mapped.team=r.team AND mapped.run=r.id))
+        AND r.config->>'repository'=p.config->>'repository' AND r.config->>'folder'=p.config->>'folder'
+        AND r.config->>'channel'=p.config->>'channel' AND r.config->>'skill'=p.config->>'skill'
         AND NOT EXISTS (SELECT 1 FROM development_runs busy WHERE busy.team=r.team AND busy.state IN ('running','reporting') AND busy.repository_key=r.repository_key)
         ORDER BY r.created_at,r.id LIMIT 1`, [this.team, projects])).rows[0];
       if (!row) return null;
@@ -130,6 +136,8 @@ export class DevelopmentStore {
   }
   private async retryLocked(sql: Sql, id: string, eventId: string, project: string, ticket?: Ticket) {
     const retryId = `retry:${eventId}`;
+    const routed = (await sql.query("SELECT 1 FROM development_runs r JOIN development_ticket_routes route ON route.team=r.team AND route.ticket=r.ticket->>'id' WHERE r.team=$1 AND r.id=$2", [this.team, id])).rows.length;
+    if (routed && !(await sql.query('SELECT 1 FROM development_route_runs WHERE team=$1 AND run=$2', [this.team, id])).rows.length) return false;
     // A blocked run without a commit keeps its frozen ticket. A pushed reporting_error may be explicitly retried; the previous commit stays where it was published.
     const inserted = await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
       SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND project=$4 AND (
@@ -139,6 +147,7 @@ export class DevelopmentStore {
       AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.state IN ('queued','running','reporting'))
       ON CONFLICT DO NOTHING RETURNING id`, [retryId, id, this.team, project]);
     if (!inserted.rows.length) return false;
+    await sql.query('UPDATE development_route_runs SET run=$3 WHERE team=$1 AND run=$2', [this.team, id, retryId]);
     if (ticket) await sql.query('UPDATE development_runs SET ticket=$2::jsonb WHERE id=$1', [retryId, JSON.stringify(ticket)]);
     return true;
   }

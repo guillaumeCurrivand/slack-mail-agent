@@ -44,6 +44,12 @@ A connection between a project's Slack channel, ClickUp Folder, repository and m
 **Maintenance ticket**:
 A ClickUp task or subtask in a Development project's configured Folder, describing requested maintenance work.
 
+**Ticket repository selection**:
+The Development projects whose repositories a team member explicitly chooses for a shared Maintenance ticket.
+
+**Maintenance batch**:
+The corrections for all repositories selected for one Authorized maintenance request; each repository has its own result.
+
 **Authorized maintenance request**:
 The fixed requirements of a Maintenance ticket accepted after a person selects Ready for AI.
 

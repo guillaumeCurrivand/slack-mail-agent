@@ -4,6 +4,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { coreSchema } from '../src/core/store.js';
 import { developmentSchema, DevelopmentStore } from '../src/modules/development/store.js';
 import { configurationSchema, ConfigurationStore } from '../src/modules/development/configuration-store.js';
+import { RoutingStore } from '../src/modules/development/routing-store.js';
 import type { Project, Ticket } from '../src/modules/development/domain.js';
 
 const url = process.env.TEST_DATABASE_URL;
@@ -21,7 +22,7 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
   it('admits one snapshot under concurrent polls and one worker across projects sharing a repository', async () => {
     await Promise.all(Array.from({ length: 4 }, () => store.observe(project, ticket.id, ticket.status, ticket)));
     expect(await store.history(project.id)).toHaveLength(1);
-    const other = { ...project, id: 'other', repository: `${project.repository}.git` }; await store.save(other, 'setup-other'); await store.observe(other, ticket.id, ticket.status, ticket);
+    const other = { ...project, id: 'other', folder: '456', repository: `${project.repository}.git` }; await store.save(other, 'setup-other'); await store.observe(other, ticket.id, ticket.status, ticket);
     const claims = await Promise.all(Array.from({ length: 4 }, () => store.claim(randomUUID(), ['pilot', 'other'])));
     expect(claims.filter(Boolean)).toHaveLength(1);
   });
@@ -73,5 +74,25 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
     await forms.finish(alice, 'edit-alice', false);
     await forms.finish(bob, 'edit-bob', false);
     expect(await store.project(candidate.id)).toEqual(saved);
+  });
+  it('serializes competing repository selections and atomically admits one complete correction batch', async () => {
+    const front = { ...project, id: 'front-routing', folder: '789', repository: 'https://github.com/example/front-routing' };
+    const back = { ...front, id: 'back-routing', repository: 'https://github.com/example/back-routing' };
+    await store.save(front, 'front-routing'); await store.save(back, 'back-routing');
+    const routing = new RoutingStore(pool, 'TTEAM'), task = { ...ticket, id: 'routing123' };
+    await routing.ensure(front, task);
+    const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' }, bob = { team: 'TTEAM', user: 'UBOB', channel: 'DBOB' };
+    for (const [actor, id] of [[alice, 'route-alice'], [bob, 'route-bob']] as const) {
+      await routing.propose(actor, id, task.id, [front, back]);
+      await routing.choose(actor, id, front.id, true, `${id}:front`);
+      await routing.choose(actor, id, back.id, true, `${id}:back`);
+      await routing.seal(actor, id);
+    }
+    expect((await Promise.all([routing.confirm(alice, 'route-alice', false, task), routing.confirm(bob, 'route-bob', false, task)])).sort()).toEqual(['applied', 'changed']);
+    await Promise.all(Array.from({ length: 4 }, () => routing.observe(task)));
+    expect(await store.history(front.id)).toHaveLength(1); expect(await store.history(back.id)).toHaveLength(1);
+    const claims = await Promise.all([store.claim(randomUUID(), [front.id]), store.claim(randomUUID(), [back.id])]);
+    expect(claims.filter(Boolean)).toHaveLength(2);
+    expect(claims[0]!.ticket).toEqual(claims[1]!.ticket);
   });
 });

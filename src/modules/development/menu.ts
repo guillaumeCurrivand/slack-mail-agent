@@ -27,8 +27,8 @@ export class DevelopmentMenu {
   }
 
   async page(actor: Actor, page: string): Promise<MenuPage> {
-    if (page === 'main') return { kind: 'Développement', text: 'Suivez vos projets et leurs tickets de maintenance. Un lien de ticket dans le canal lance une analyse ; Ready for AI dans ClickUp autorise la correction. Les appels Cursor sont facturés séparément.',
-      links: [{ label: 'Projets et traitements', page: 'projects_0' }, { label: 'Aide du module', page: 'help' }], buttons: [configureButton] };
+    if (page === 'main') return { kind: 'Développement', text: 'Suivez vos projets et leurs tickets de maintenance. Pour un dossier partagé, choisissez un ou plusieurs dépôts dans Tickets et dépôts avant l’analyse. Ready for AI dans ClickUp autorise la correction dans les dépôts choisis. Les appels Cursor sont facturés séparément.',
+      links: [{ label: 'Projets et traitements', page: 'projects_0' }, { label: 'Tickets et dépôts', page: 'routes_0' }, { label: 'Aide du module', page: 'help' }], buttons: [configureButton] };
     if (page === 'configure') return this.configuration();
     const list = /^projects_(\d{1,6})$/.exec(page);
     if (list) {
