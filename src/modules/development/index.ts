@@ -5,7 +5,7 @@ import type { AssistantModule, IntegrationContext } from '../../core/modules.js'
 import { JobStore } from '../../core/store.js';
 import type { Database } from '../../core/transactions.js';
 import type { DevelopmentConfig } from './config.js';
-import { canRetry, commitLink, projectSchema, ready, resultSchema, ticketIds, type Project, type Result, type Ticket } from './domain.js';
+import { canRetry, commitLink, projectSchema, projectIdSchema, projectFolders, projectTargets, ready, resultSchema, ticketIds, type Project, type Result, type Ticket } from './domain.js';
 import { ClickupDevelopment, DevelopmentChannels, TicketOutsideFolder } from './providers.js';
 import { developmentSchema, DevelopmentStore } from './store.js';
 import { developmentHelp } from './help.js';
@@ -65,7 +65,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     try { await store.effect(`routing:${config.SLACK_TEAM_ID}:${route.ticket}:channel-notice`, async () => {
       if (!await channels.accessible(project.channel) || !context.messenger.postInteractiveThread) throw new Error('Canal indisponible.');
       return context.messenger.postInteractiveThread({ team: config.SLACK_TEAM_ID, channel: project.channel, ...(route.thread ? { thread: route.thread } : {}) }, {
-        kind: 'Dépôts du ticket', text: `${route.snapshot.name}\nChoisissez les dépôts concernés ici : Frontend, Backend ou les deux. Tickets et dépôts reste accessible avec development menu dans ce canal. Aucun traitement ne démarre avant confirmation, même si le ticket est Ready for AI. Chaque membre peut ouvrir ses propres contrôles.`,
+        kind: 'Dépôts du ticket', text: `${route.snapshot.name}\nChoisissez les dépôts concernés ici : un ou plusieurs dépôts pour ce ticket. Tickets et dépôts reste accessible avec development menu dans ce canal. Aucun traitement ne démarre avant confirmation, même si le ticket est Ready for AI. Chaque membre peut ouvrir ses propres contrôles.`,
         resourceLinks: [{ label: 'Ticket ClickUp', url: route.snapshot.url }], buttons: [{ label: 'Choisir les dépôts', action: 'development:channel_ticket', value: route.ticket }, { label: 'Menu Développement', action: 'development:channel_home', value: 'main' }],
       });
     }); }
@@ -117,6 +117,9 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
           // Slack can turn a pasted URL into <url> or <url|label> inside the JSON string.
           input = { ...input, repository: input.repository.replace(/^<(https:\/\/[^<>\s|]+)(?:\|[^<>]*)?>$/, '$1') };
         }
+        if (input && typeof input === 'object' && 'repositories' in input && Array.isArray(input.repositories)) {
+          input = { ...input, repositories: input.repositories.map(value => typeof value === 'string' ? value.replace(/^<(https:\/\/[^<>\s|]+)(?:\|[^<>]*)?>$/, '$1') : value) };
+        }
         const parsed = projectSchema.safeParse(input);
         if (!parsed.success) return send('Configuration invalide. ' + help);
         const existing = await store.project(parsed.data.id);
@@ -124,7 +127,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
         try { accessible = await visible(actor, parsed.data) && (!existing || await visible(actor, existing)); }
         catch { return send('Configuration non enregistrée : vérification des accès Slack indisponible. Vérifiez les permissions du bot, puis renvoyez la commande development configure.'); }
         if (!accessible) return send('Vous et le bot devez avoir accès au canal actuel et au canal configuré.');
-        try { await clickup.lists(parsed.data.folder); }
+        try { for (const folder of projectFolders(parsed.data)) await clickup.lists(folder); }
         catch { return send('Configuration non enregistrée : lecture du dossier ClickUp indisponible. Vérifiez son identifiant et les accès du jeton Development, puis renvoyez la commande development configure.'); }
         await store.save(parsed.data, eventId);
         return menus.show(actor, eventId, context, { kind: 'Développement', text: `Projet ${parsed.data.name} enregistré. ${parsed.data.enabled ? 'Les tickets Ready for AI sont autorisés pour le worker local.' : 'Nouveaux traitements suspendus.'}`, links: [{ label: 'Ouvrir le projet', page: projectPage(parsed.data.id) }] });
@@ -156,7 +159,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       if (actor.team !== identity.team || actor.integration !== identity.integration) throw new Error('Intégration inconnue.');
       if (payload.type === 'finish') return finish(String(payload.run), context);
       if (payload.type === 'poll') {
-        const projects = await store.projects(), handled = new Set<string>();
+        const projects = (await store.projects()).flatMap(p => projectTargets(p)), handled = new Set<string>(), health = new Map<string, string | null>();
         for (const project of projects) {
           if (!project.enabled) continue;
           if (handled.has(project.folder)) continue;
@@ -173,21 +176,22 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
                 const destination = siblings.find(p => p.channel === route.channel);
                 if (!destination) continue;
                 await requestRouting(route, destination, context);
-                if (route.selected && (await Promise.all(route.selected.map(p => channels.accessible(p.channel)))).every(Boolean)) await routing.saved.observe(ticket);
+                if (route.selected && (await Promise.all([...new Set(route.selected.map(p => p.channel))].map(channel => channels.accessible(channel)))).every(Boolean)) await routing.saved.observe(ticket);
                 continue;
               }
               const snapshot = ready(task.status) && await store.needsSnapshot(project.id, task.id) ? await clickup.ticket(project, task.id) : undefined;
               await store.observe(project, task.id, snapshot?.status ?? task.status, snapshot);
             }
-            for (const sibling of siblings) await store.health(sibling.id, null);
-          } catch { for (const sibling of siblings) await store.health(sibling.id, 'Lecture ClickUp ou routage indisponible. La file existante est conservée ; nouvelle vérification dans une minute.'); }
+            for (const sibling of siblings) if (!health.has(sibling.id)) health.set(sibling.id, null);
+          } catch { for (const sibling of siblings) health.set(sibling.id, 'Lecture ClickUp ou routage indisponible. La file existante est conservée ; nouvelle vérification dans une minute.'); }
         }
+        for (const [id, issue] of health) await store.health(id, issue);
         return new Date(Date.now() + 60_000);
       }
       if (payload.type !== 'channel') return;
       const user = payload.actor as Actor;
-      const projects = await store.projects(), accessible: Project[] = [];
-      for (const project of projects) if (project.enabled && project.channel === user.channel && await visible(user, project)) accessible.push(project);
+      const configured = await store.projects(), projects = configured.flatMap(p => projectTargets(p)), accessible: Project[] = [];
+      for (const project of configured) if (project.enabled && project.channel === user.channel && await visible(user, project)) accessible.push(...projectTargets(project));
       const links = ticketIds(String(payload.text)), thread = String(payload.thread);
       const ids = new Set(links);
       if (!links.length) {
@@ -244,8 +248,8 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       const body = (request: { body: unknown }) => JSON.parse(String(request.body ?? '{}'));
       app.post('/development/worker/claim', async (request, reply) => {
         if (!authorized(request.headers.authorization)) return reply.code(401).send();
-        const input = z.object({ worker: z.uuid(), projects: z.array(projectSchema.shape.id).min(1).max(100) }).strict().parse(body(request));
-        return { work: await store.claim(input.worker, input.projects) };
+        const input = z.object({ worker: z.uuid(), projects: z.array(projectIdSchema).min(1).max(100), targets: z.array(z.object({ id: projectIdSchema, repository: z.string().min(1).max(2000), skill: z.string().min(1).max(200) }).strict()).min(1).max(100).optional() }).strict().parse(body(request));
+        return { work: await store.claim(input.worker, input.projects, input.targets) };
       });
       app.post('/development/worker/attempt', async (request, reply) => {
         if (!authorized(request.headers.authorization)) return reply.code(401).send();

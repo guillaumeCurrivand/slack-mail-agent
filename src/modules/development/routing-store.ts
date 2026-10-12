@@ -3,7 +3,7 @@ import { isDeepStrictEqual } from 'node:util';
 import { ownerKey, type Actor } from '../../core/identity.js';
 import { transaction, type Database } from '../../core/transactions.js';
 import type { Sql } from '../../core/store.js';
-import { ready, repositoryKey, type Project, type Ticket } from './domain.js';
+import { ready, repositoryKey, projectTargets, type Project, type Ticket } from './domain.js';
 
 export const routingSchema = `
 CREATE TABLE IF NOT EXISTS development_ticket_routes (
@@ -23,6 +23,9 @@ CREATE TABLE IF NOT EXISTS development_route_runs (
 
 export type TicketRoute = { ticket: string; folder: string; channel: string; snapshot: Ticket; thread: string | null; selected: Project[] | null; armed: boolean };
 export type RouteProposal = { id: string; ticket: string; candidates: Project[]; selected: string[]; state: string };
+// ':' cannot occur in a project ID, keeping new keys disjoint from legacy choices.
+export const destinationKey = (p: Project) => `${p.id}:${createHash('sha256').update(repositoryKey(p.repository)).digest('hex')}`;
+export const selectedDestination = (selected: string[], p: Project) => selected.includes(destinationKey(p)) || selected.includes(p.id);
 const identity = (p: Project) => [p.id, p.channel, p.folder, p.repository, p.skill];
 export const sameDestination = (a: Project, b: Project) => isDeepStrictEqual(identity(a), identity(b));
 
@@ -53,10 +56,11 @@ export class RoutingStore {
   async choose(actor: Actor, id: string, project: string, include: boolean, receipt: string) {
     await transaction(this.db, async sql => {
       const proposal = (await sql.query("SELECT * FROM development_route_proposals WHERE id=$1 AND owner=$2 AND channel=$3 AND state='pending' AND created_at>=now()-interval '24 hours' FOR UPDATE", [id, ownerKey(actor), actor.channel])).rows[0] as RouteProposal | undefined;
-      if (!proposal?.candidates.some(p => p.id === project)) return;
+      const destination = proposal?.candidates.find(p => destinationKey(p) === project || p.id === project);
+      if (!proposal || !destination) return;
       if (!(await sql.query('INSERT INTO development_receipts(team,id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id', [this.team, receipt])).rows.length) return;
-      const selected = new Set(proposal.selected);
-      if (include) selected.add(project); else selected.delete(project);
+      const selected = new Set(proposal.candidates.filter(p => selectedDestination(proposal.selected, p)).map(destinationKey));
+      if (include) selected.add(destinationKey(destination)); else selected.delete(destinationKey(destination));
       await sql.query('UPDATE development_route_proposals SET selected=$2 WHERE id=$1', [id, JSON.stringify([...selected])]);
     });
     return this.proposal(actor, id);
@@ -68,11 +72,11 @@ export class RoutingStore {
       if (!['pending', 'ready'].includes(proposal.state)) return proposal.state;
       if (cancel) { await sql.query("UPDATE development_route_proposals SET state='cancelled' WHERE id=$1", [id]); return 'cancelled'; }
       if (proposal.state !== 'ready') return 'unavailable';
-      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.map(row => row.config as Project);
+      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.flatMap(row => projectTargets(row.config as Project));
       const route = (await sql.query('SELECT * FROM development_ticket_routes WHERE team=$1 AND ticket=$2 FOR UPDATE', [this.team, proposal.ticket])).rows[0] as TicketRoute | undefined;
-      const selected = proposal.candidates.filter(p => proposal.selected.includes(p.id));
+      const selected = proposal.candidates.filter(p => selectedDestination(proposal.selected, p));
       if (!route || route.selected || !selected.length || !ticket || ticket.id !== route.ticket ||
-        selected.some(p => !p.enabled || p.folder !== route.folder || p.channel !== route.channel || !isDeepStrictEqual(current.find(c => c.id === p.id), p))) return 'changed';
+        selected.some(p => !p.enabled || p.folder !== route.folder || p.channel !== route.channel || !isDeepStrictEqual(current.find(c => sameDestination(c, p)), p))) return 'changed';
       // Pre-routing work cannot safely be adopted into a new multi-repository authorization.
       if ((await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 LIMIT 1", [this.team, route.ticket])).rows.length) return 'legacy';
       await sql.query('UPDATE development_ticket_routes SET selected=$3,snapshot=$4 WHERE team=$1 AND ticket=$2', [this.team, route.ticket, JSON.stringify(selected), JSON.stringify(ticket)]);
@@ -88,16 +92,19 @@ export class RoutingStore {
   }
   private async queue(sql: Sql, route: TicketRoute, ticket: Ticket, kind: 'review' | 'build', cycle: string, thread = route.thread) {
     for (const project of route.selected!) {
-      const id = `${cycle}:${project.id}`;
+      // Preserve legacy event IDs on replay; only sibling repositories under the
+      // same project need an additional discriminator in this frozen batch.
+      const key = route.selected!.filter(p => p.id === project.id).length > 1 ? destinationKey(project) : project.id;
+      const id = `${cycle}:${key}`;
       await sql.query(`INSERT INTO development_runs(id,team,project,config,repository_key,kind,ticket,thread)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING`, [id, this.team, project.id, JSON.stringify(project), repositoryKey(project.repository), kind, JSON.stringify(ticket), thread]);
-      await sql.query('INSERT INTO development_route_runs(team,ticket,cycle,project,run) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [this.team, ticket.id, cycle, project.id, id]);
+      await sql.query('INSERT INTO development_route_runs(team,ticket,cycle,project,run) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [this.team, ticket.id, cycle, key, id]);
       if (thread) await sql.query('INSERT INTO development_threads(team,project,thread,ticket) VALUES($1,$2,$3,$4) ON CONFLICT DO NOTHING', [this.team, project.id, thread, ticket.id]);
     }
   }
   async observe(ticket: Ticket, reviewEvent?: string, thread?: string) {
     return transaction(this.db, async sql => {
-      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.map(row => row.config as Project);
+      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.flatMap(row => projectTargets(row.config as Project));
       const route = (await sql.query('SELECT * FROM development_ticket_routes WHERE team=$1 AND ticket=$2 FOR UPDATE', [this.team, ticket.id])).rows[0] as TicketRoute | undefined;
       if (!route) return;
       if (!ready(ticket.status)) await sql.query('UPDATE development_ticket_routes SET armed=true WHERE team=$1 AND ticket=$2', [this.team, ticket.id]);

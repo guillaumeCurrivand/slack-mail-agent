@@ -11,7 +11,7 @@ export const workerConfigSchema = z.object({
   server: z.url().refine(value => { const url = new URL(value); return !url.username && !url.password && !url.search && !url.hash && url.pathname === '/' && (url.protocol === 'https:' || url.protocol === 'http:' && ['127.0.0.1', 'localhost'].includes(url.hostname)); }),
   stateDirectory: z.string().min(1), agent: z.array(z.string().min(1)).min(1).default(['agent']),
   projects: z.array(localProjectSchema).min(1),
-}).strict().refine(value => new Set(value.projects.map(project => project.id)).size === value.projects.length, 'Duplicate local project.');
+}).strict().refine(value => new Set(value.projects.map(project => `${project.id}\n${project.repository}`)).size === value.projects.length, 'Duplicate local project/repository.');
 
 export async function runWorker(filename: string, once = false) {
   if (Number(process.versions.node.split('.')[0]) < 24 || typeof fetch !== 'function') {
@@ -45,9 +45,10 @@ export async function runWorker(filename: string, once = false) {
     let lastIdleLog = 0;
     do {
       try {
-        const { work } = await request('claim', { worker, projects: config.projects.map(project => project.id) }) as { work: Work | null };
+        const { work } = await request('claim', { worker, projects: [...new Set(config.projects.map(project => project.id))],
+          targets: config.projects.map(({ id, repository, skill }) => ({ id, repository, skill })) }) as { work: Work | null };
         if (work) {
-          const project = config.projects.find(project => project.id === work.project.id);
+          const project = config.projects.find(project => project.id === work.project.id && project.repository === work.project.repository && project.skill === work.project.skill);
           if (!project) throw new Error('Projet local introuvable ; restaurez sa configuration pour terminer le traitement.');
           console.log(`Pris ${work.kind} ${work.project.id}/${work.ticket.id} sur ${project.branch ?? 'maintenance'}.`);
           const result = await runner.run(work, project, async expected => (await request('attempt', { id: work.id, lease: work.lease, expected })).attempt);

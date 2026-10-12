@@ -4,7 +4,7 @@ import type { JobPayload, ModuleContext } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { formatDate } from '../../core/presentation.js';
 import { menuButton } from '../../core/slack.js';
-import { canRetry, commitLink, type Project } from './domain.js';
+import { canRetry, commitLink, projectFolders, projectRepositories, repositoryName, type Project } from './domain.js';
 import type { ClickupDevelopment } from './providers.js';
 import type { DevelopmentStore } from './store.js';
 
@@ -49,8 +49,8 @@ export class DevelopmentMenu {
       if (projectMatch[1] === 'configure') return this.configuration(project);
       if (projectMatch[1] === 'history') return this.history(actor, project, Number(projectMatch[3] ?? 0));
       const health = (await this.store.db.query('SELECT issue,checked_at FROM development_health WHERE team=$1 AND project=$2', [actor.team, project.id])).rows[0];
-      return { kind: `Projet — ${project.name}`, text: `${project.enabled ? 'Activé' : 'Suspendu'}\nIdentifiant : ${project.id}\nCanal : ${project.channel}\nDossier ClickUp : ${project.folder}\nSkill : ${project.skill}\n${health ? `Dernière vérification ClickUp : ${formatDate(health.checked_at)}\n${health.issue ?? 'Aucun problème signalé à cette vérification.'}` : 'Aucune vérification ClickUp enregistrée.'}\n\nOuvrez le canal pour partager un lien de ticket. Dans un traitement, ouvrez le ticket pour sélectionner Ready for AI. Le worker doit être connecté ; cet écran ne mesure pas sa disponibilité.`,
-        resourceLinks: [{ label: 'Ouvrir le canal Slack', url: `https://app.slack.com/client/${actor.team}/${project.channel}` }, { label: 'Dépôt', url: project.repository }],
+      return { kind: `Projet — ${project.name}`, text: `${project.enabled ? 'Activé' : 'Suspendu'}\nIdentifiant : ${project.id}\nCanal : ${project.channel}\nDossiers ClickUp : ${projectFolders(project).join(', ')}\nSkill : ${project.skill}\n${health ? `Dernière vérification ClickUp : ${formatDate(health.checked_at)}\n${health.issue ?? 'Aucun problème signalé à cette vérification.'}` : 'Aucune vérification ClickUp enregistrée.'}\n\nOuvrez le canal pour partager un lien de ticket. Dans un traitement, ouvrez le ticket pour sélectionner Ready for AI. Le worker doit être connecté ; cet écran ne mesure pas sa disponibilité.`,
+        resourceLinks: [{ label: 'Ouvrir le canal Slack', url: `https://app.slack.com/client/${actor.team}/${project.channel}` }, ...projectRepositories(project).map(url => ({ label: repositoryName(url), url }))],
         links: [{ label: 'Voir les traitements', page: `history_${project.id}_0` }, { label: 'Actualiser', page }, ...back],
         buttons: [{ label: 'Modifier la configuration', action: 'configuration_prepare', value: `project:${project.id}`, bound: true }, { label: project.enabled ? 'Suspendre le projet' : 'Réactiver le projet', action: 'propose_state', value: project.id, bound: true }] };
     }
@@ -60,7 +60,7 @@ export class DevelopmentMenu {
       const project = run && await this.store.project(run.project);
       if (!run || !project || !await this.accessible(actor, project) || !await this.accessible(actor, run.config)) return unavailable;
       const result = run.result;
-      return { kind: `${run.kind === 'build' ? 'Correction' : 'Analyse'} — ${run.ticket.name}`, text: `Projet : ${project.name}\nTraitement : ${run.id}\nÉtat : ${labels[run.state] ?? run.state}\nEssais : ${run.attempts}/2\nMis à jour : ${formatDate(run.updated_at)}\n\n${result?.summary ?? 'Le worker local prendra en charge la demande. Aucun résultat enregistré.'}${result?.tests.length ? `\n\nVérifications :\n${result.tests.join('\n')}` : ''}${result?.commit ? `\n\nCommit : ${result.commit}\nBranche : ${result.branch ?? 'maintenance'}` : ''}\n\n${run.state === 'reporting_error' ? 'Vérifiez les publications ClickUp/Slack avant toute relance. Un commit déjà poussé reste sur sa branche ; une relance lance du nouveau travail.' : result?.outcome === 'actionable' ? 'Ouvrez le ticket et sélectionnez Ready for AI pour autoriser la correction.' : result?.outcome === 'pushed' ? 'Créez le PR/MR, faites relire, fusionnez et déployez selon votre procédure.' : run.state === 'blocked' ? 'Corrigez le blocage avant de relancer. La relance conserve les exigences figées ; pour les changer, faites observer un autre statut puis Ready for AI.' : 'Actualiser relit uniquement le suivi enregistré.'}`,
+      return { kind: `${run.kind === 'build' ? 'Correction' : 'Analyse'} — ${run.ticket.name}`, text: `Projet : ${project.name}\nDépôt : ${run.config.repository}\nTraitement : ${run.id}\nÉtat : ${labels[run.state] ?? run.state}\nEssais : ${run.attempts}/2\nMis à jour : ${formatDate(run.updated_at)}\n\n${result?.summary ?? 'Le worker local prendra en charge la demande. Aucun résultat enregistré.'}${result?.tests.length ? `\n\nVérifications :\n${result.tests.join('\n')}` : ''}${result?.commit ? `\n\nCommit : ${result.commit}\nBranche : ${result.branch ?? 'maintenance'}` : ''}\n\n${run.state === 'reporting_error' ? 'Vérifiez les publications ClickUp/Slack avant toute relance. Un commit déjà poussé reste sur sa branche ; une relance lance du nouveau travail.' : result?.outcome === 'actionable' ? 'Ouvrez le ticket et sélectionnez Ready for AI pour autoriser la correction.' : result?.outcome === 'pushed' ? 'Créez le PR/MR, faites relire, fusionnez et déployez selon votre procédure.' : run.state === 'blocked' ? 'Corrigez le blocage avant de relancer. La relance conserve les exigences figées ; pour les changer, faites observer un autre statut puis Ready for AI.' : 'Actualiser relit uniquement le suivi enregistré.'}`,
         resourceLinks: [{ label: 'Ouvrir le ticket ClickUp', url: run.ticket.url }, ...(result?.commit ? [{ label: 'Ouvrir le commit', url: commitLink(run.config.repository, result.commit) }] : [])],
         links: [{ label: 'Actualiser', page }, { label: 'Retour aux traitements', page: `history_${project.id}_0` }, { label: 'Retour au projet', page: projectPage(project.id) }],
         buttons: project.enabled && canRetry(run) ? [{ label: 'Relancer…', action: 'propose_retry', value: runPage(run.id).slice(4), bound: true }] : [] };
@@ -70,7 +70,7 @@ export class DevelopmentMenu {
 
   private configuration(project?: Project): MenuPage {
     return { kind: project ? `Configuration — ${project.name}` : 'Configurer un projet',
-      text: 'Configurez le projet dans un formulaire Slack : nom, canal, dossier ClickUp, dépôt, skill et activation. En message privé, choisissez le canal du projet ; dans un canal, celui-ci reste fixe. Après validation des accès, confirmez les valeurs dans la conversation de départ. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
+      text: 'Configurez le projet dans un formulaire Slack : nom, canal unique, plusieurs dossiers ClickUp, dépôts (une URL HTTPS par ligne), skill commun et activation. En message privé, choisissez le canal du projet ; dans un canal, celui-ci reste fixe. Après validation des accès, confirmez les valeurs dans la conversation de départ. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
       buttons: [{ label: 'Préparer le formulaire', action: 'configuration_prepare', value: project ? `project:${project.id}` : 'new', bound: true }],
       links: project ? [{ label: 'Retour au projet', page: projectPage(project.id) }] : back };
   }
@@ -84,8 +84,8 @@ export class DevelopmentMenu {
       if (access.get(run.config.channel)) rows.push(run);
     }
     return { kind: `Traitements — ${project.name}`, text: `Page ${index + 1}. ${rows.length ? 'Ouvrez un traitement pour voir le résultat, les vérifications et les actions disponibles.' : 'Aucun traitement sur cette page.'}`,
-      ...(rows.length ? { table: { columns: ['Ticket', 'Type', 'État', 'Essais'], rows: rows.map(run => [run.ticket.name.length > 300 ? `${run.ticket.name.slice(0, 299)}…` : run.ticket.name, run.kind === 'build' ? 'Correction' : 'Analyse', labels[run.state] ?? run.state, `${run.attempts}/2`]) },
-        recordChoices: rows.map(run => ({ label: run.ticket.name, page: runPage(run.id) })) } : {}),
+      ...(rows.length ? { table: { columns: ['Ticket / dépôt', 'Type', 'État', 'Essais'], rows: rows.map(run => [`${run.ticket.name} / ${repositoryName(run.config.repository)}`.slice(0, 300), run.kind === 'build' ? 'Correction' : 'Analyse', labels[run.state] ?? run.state, `${run.attempts}/2`]) },
+        recordChoices: rows.map(run => ({ label: `${run.ticket.name} / ${repositoryName(run.config.repository)}`.slice(0, 300), page: runPage(run.id) })) } : {}),
       links: [...(index ? [{ label: 'Précédent', page: `history_${project.id}_${index - 1}` }] : []), ...(found.length > pageSize ? [{ label: 'Suivant', page: `history_${project.id}_${index + 1}` }] : []),
         { label: 'Actualiser', page: `history_${project.id}_${index}` }, { label: 'Retour au projet', page: projectPage(project.id) }, ...back] };
   }

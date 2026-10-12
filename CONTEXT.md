@@ -39,13 +39,13 @@ The Module for privately consulting a person's assigned ClickUp tasks through th
 The Module for investigating project maintenance tickets and preparing fixes authorized by the team.
 
 **Development project**:
-A connection between a project's Slack channel, ClickUp Folder, repository and maintenance skill.
+A maintenance workspace connecting one Slack channel, one or more ClickUp Folders, one or more repositories and a common maintenance skill.
 
 **Maintenance ticket**:
-A ClickUp task or subtask in a Development project's configured Folder, describing requested maintenance work.
+A ClickUp task or subtask in one of a Development project's configured Folders, describing requested maintenance work.
 
 **Ticket repository selection**:
-The Development projects whose repositories a team member explicitly chooses for a shared Maintenance ticket.
+The repositories a team member explicitly chooses for a shared Maintenance ticket.
 
 **Maintenance batch**:
 The corrections for all repositories selected for one Authorized maintenance request; each repository has its own result.

@@ -4,7 +4,7 @@ import type { Sql } from '../../core/store.js';
 import { JobStore } from '../../core/store.js';
 import { transaction, type Database } from '../../core/transactions.js';
 import { ownerKey, type Actor } from '../../core/identity.js';
-import { ready, repositoryKey, type Project, type Result, type Ticket, type Work, type Run } from './domain.js';
+import { ready, repositoryKey, projectTargets, projectRepositories, type Project, type Result, type Ticket, type Work, type Run } from './domain.js';
 import { routingSchema } from './routing-store.js';
 
 type Confirmation = { id: string; project: Project; run_id: string | null; operation: 'pause' | 'resume' | 'retry'; state: string };
@@ -86,20 +86,28 @@ export class DevelopmentStore {
     const row = (await this.db.query('SELECT armed FROM development_ticket_state WHERE team=$1 AND project=$2 AND ticket=$3', [this.team, project, ticket])).rows[0];
     return !row || row.armed;
   }
-  async claim(worker: string, projects: string[]): Promise<Work | null> {
+  async claim(worker: string, projects: string[], targets?: Array<{ id: string; repository: string; skill: string }>): Promise<Work | null> {
     return transaction(this.db, async sql => {
       // Project row locks serialize all users/workers; a running job never expires.
-      await sql.query('SELECT id FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team]);
+      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.map(row => row.config as Project);
+      const destinations = current.flatMap(p => projectTargets(p));
       let row = (await sql.query("SELECT * FROM development_runs WHERE team=$1 AND worker=$2 AND state='running' ORDER BY created_at LIMIT 1", [this.team, worker])).rows[0];
-      if (!row) row = (await sql.query(`SELECT r.* FROM development_runs r JOIN development_projects p ON p.team=r.team AND p.id=r.project
-        WHERE r.team=$1 AND r.project=ANY($2::text[]) AND r.state='queued' AND (p.config->>'enabled')::boolean
-        AND ((NOT EXISTS (SELECT 1 FROM development_ticket_routes route WHERE route.team=r.team AND route.ticket=r.ticket->>'id')
-          AND (SELECT count(*) FROM development_projects siblings WHERE siblings.team=r.team AND siblings.config->>'folder'=p.config->>'folder')=1)
-          OR EXISTS (SELECT 1 FROM development_route_runs mapped WHERE mapped.team=r.team AND mapped.run=r.id))
-        AND r.config->>'repository'=p.config->>'repository' AND r.config->>'folder'=p.config->>'folder'
-        AND r.config->>'channel'=p.config->>'channel' AND r.config->>'skill'=p.config->>'skill'
-        AND NOT EXISTS (SELECT 1 FROM development_runs busy WHERE busy.team=r.team AND busy.state IN ('running','reporting') AND busy.repository_key=r.repository_key)
-        ORDER BY r.created_at,r.id LIMIT 1`, [this.team, projects])).rows[0];
+      if (!row) {
+        const queued = (await sql.query(`SELECT r.*,
+          EXISTS (SELECT 1 FROM development_ticket_routes route WHERE route.team=r.team AND route.ticket=r.ticket->>'id') AS routed,
+          EXISTS (SELECT 1 FROM development_route_runs mapped WHERE mapped.team=r.team AND mapped.run=r.id) AS mapped
+          FROM development_runs r WHERE r.team=$1 AND r.project=ANY($2::text[]) AND r.state='queued'
+          AND NOT EXISTS (SELECT 1 FROM development_runs busy WHERE busy.team=r.team AND busy.state IN ('running','reporting') AND busy.repository_key=r.repository_key)
+          ORDER BY r.created_at,r.id`, [this.team, projects])).rows;
+        row = queued.find(run => {
+          const frozen = run.config as Project;
+          const parent = current.find(p => p.id === run.project);
+          if (!parent?.enabled || !destinations.some(p => p.id === frozen.id && p.folder === frozen.folder && p.repository === frozen.repository && p.channel === frozen.channel && p.skill === frozen.skill)) return false;
+          if (!run.mapped && (run.routed || destinations.filter(p => p.folder === frozen.folder).length !== 1)) return false;
+          // Old workers only advertise IDs: they cannot distinguish repositories in a group.
+          return targets ? targets.some(p => p.id === frozen.id && p.repository === frozen.repository && p.skill === frozen.skill) : projectRepositories(parent).length === 1;
+        });
+      }
       if (!row) return null;
       if (!row.lease) {
         row.lease = randomUUID();
@@ -144,7 +152,7 @@ export class DevelopmentStore {
         (state='blocked' AND result->>'commit' IS NULL) OR
         (kind='build' AND state='reporting_error' AND result->>'outcome'='pushed' AND result->>'commit' IS NOT NULL)
       )
-      AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.state IN ('queued','running','reporting'))
+      AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.repository_key=r.repository_key AND active.state IN ('queued','running','reporting'))
       ON CONFLICT DO NOTHING RETURNING id`, [retryId, id, this.team, project]);
     if (!inserted.rows.length) return false;
     await sql.query('UPDATE development_route_runs SET run=$3 WHERE team=$1 AND run=$2', [this.team, id, retryId]);

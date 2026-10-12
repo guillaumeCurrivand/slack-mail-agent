@@ -5,7 +5,7 @@ import type { AssistantModule, JobPayload, ModuleContext } from '../../core/modu
 import { Navigation } from '../../core/navigation.js';
 import { JobStore } from '../../core/store.js';
 import { ConfigurationStore, type ConfigurationForm } from './configuration-store.js';
-import { projectSchema, type Project } from './domain.js';
+import { projectSchema, projectFolders, projectRepositories, type Project } from './domain.js';
 import { DevelopmentMenu, projectPage } from './menu.js';
 import type { ClickupDevelopment, FolderChoice } from './providers.js';
 import type { DevelopmentStore } from './store.js';
@@ -25,19 +25,20 @@ export function configurationView(form: ConfigurationForm) {
   const input = (key: string, label: string, max: number, hint?: string) => ({ type: 'input', block_id: key, label: plain(label), ...(hint ? { hint: plain(hint) } : {}),
     element: { type: 'plain_text_input', action_id: 'value', max_length: max, ...(value?.[key as keyof Project] ? { initial_value: String(value[key as keyof Project]) } : {}) } });
   const enabled = { text: plain('Activer le projet'), value: 'enabled' };
-  const selected = form.folders?.find(folder => folder.id === value?.folder);
+  const selected = form.folders?.filter(folder => value && projectFolders(value).includes(folder.id)) ?? [];
   const privateConversation = /^D/.test(form.channel);
   return { type: 'modal', callback_id: 'development:configuration', private_metadata: form.id, title: plain(form.base ? 'Modifier le projet' : 'Configurer un projet'), submit: plain('Vérifier'), close: plain('Annuler'), blocks: [
     { type: 'section', text: plain(`Remplissez les champs puis vérifiez la proposition ${privateConversation ? 'dans votre message privé' : 'dans le fil du canal'}. Rien ne sera enregistré avant votre confirmation.`) },
-    form.base ? { type: 'section', text: plain(`Identifiant du projet : ${form.base.id} (conservé)`) } : input('id', 'Identifiant du projet', 64, 'Lettres minuscules, chiffres et tirets ; commencez par une lettre. Doit correspondre au worker local.'),
+    form.base ? { type: 'section', text: plain(`Identifiant du projet : ${form.base.id} (conservé)`) } : input('id', 'Identifiant du projet', 64, 'Lettres, chiffres et tirets ; commencez par une lettre. Les majuscules deviennent minuscules. Identifiant commun aux dépôts du worker.'),
     input('name', 'Nom du projet', 100),
     privateConversation
       ? { type: 'input', block_id: 'channel', label: plain('Canal Slack du projet'), hint: plain('Vous et le bot devez être membres du canal choisi.'), element: { type: 'conversations_select', action_id: 'value', filter: { include: ['public', 'private'] }, ...(value?.channel ? { initial_conversation: value.channel } : {}) } }
       : { type: 'section', block_id: 'channel', text: plain(`Canal du projet : ${form.channel}. La configuration reste dans le canal où ce formulaire a été ouvert.`) },
-    ...(value?.folder && !selected ? [{ type: 'section', text: plain('Le dossier enregistré ne figure plus dans les choix disponibles. Sélectionnez un dossier accessible avant de vérifier.') }] : []),
-    { type: 'input', block_id: 'folder', label: plain('Dossier ClickUp'), hint: plain('Recherchez un nom de dossier, d’espace, de Workspace ou un identifiant. 100 résultats maximum ; précisez la recherche.'),
-      element: { type: 'external_select', action_id: 'value', min_query_length: 0, placeholder: plain('Choisir un dossier ClickUp'), ...(selected ? { initial_option: folderOption(selected) } : {}) } },
-    input('repository', 'URL HTTPS du dépôt', 2000, 'Sans identifiants, paramètres ni fragment.'),
+    ...(value && selected.length !== projectFolders(value).length ? [{ type: 'section', text: plain('Certains dossiers enregistrés ne figurent plus dans les choix disponibles. Vérifiez la sélection avant de confirmer leur retrait.') }] : []),
+    { type: 'input', block_id: 'folder', label: plain('Dossiers ClickUp'), hint: plain('Sélectionnez un ou plusieurs dossiers. Recherchez par nom, espace, Workspace ou identifiant. 100 résultats maximum.'),
+      element: { type: 'multi_external_select', action_id: 'value', min_query_length: 0, max_selected_items: 100, placeholder: plain('Choisir les dossiers ClickUp'), ...(selected.length ? { initial_options: selected.map(folderOption) } : {}) } },
+    { type: 'input', block_id: 'repository', label: plain('Dépôts — une URL HTTPS par ligne'), hint: plain('1 à 20 dépôts, sans identifiants, paramètres ni fragment. Chaque ticket peut cibler un ou plusieurs dépôts.'),
+      element: { type: 'plain_text_input', action_id: 'value', multiline: true, max_length: 3000, ...(value ? { initial_value: projectRepositories(value).join('\n') } : {}) } },
     input('skill', 'Skill du worker', 200, 'Nom correspondant à la configuration locale du worker.'),
     { type: 'input', block_id: 'enabled', optional: true, label: plain('Activation'), hint: plain('Activer rend la file et les tickets déjà Ready for AI éligibles. Les appels Cursor sont facturés séparément.'), element: { type: 'checkboxes', action_id: 'value', options: [enabled], ...(value?.enabled ? { initial_options: [enabled] } : {}) } },
   ] };
@@ -83,13 +84,15 @@ export class DevelopmentConfiguration {
       const data = parsedFields.data;
       const enabled = data.enabled?.value?.selected_options ?? [];
       if (enabled.some(option => option.value !== 'enabled')) return { response_action: 'errors', errors: { enabled: 'Choix d’activation invalide.' } };
-      const candidate = projectSchema.safeParse({ id: form.base?.id ?? data.id?.value?.value, name: data.name?.value?.value, channel: /^D/.test(form.channel) ? data.channel?.value?.selected_conversation : form.channel,
-        folder: data.folder?.value?.selected_option?.value, repository: data.repository?.value?.value, skill: data.skill?.value?.value, enabled: enabled.length > 0 });
+      const folders = data.folder?.value?.selected_options?.map(option => option.value) ?? (data.folder?.value?.selected_option ? [data.folder.value.selected_option.value] : []);
+      const repositories = data.repository?.value?.value?.split(/\r?\n/).map(url => url.trim()).filter(Boolean) ?? [];
+      const candidate = projectSchema.safeParse({ id: form.base?.id ?? data.id?.value?.value?.trim().toLowerCase(), name: data.name?.value?.value, channel: /^D/.test(form.channel) ? data.channel?.value?.selected_conversation : form.channel,
+        folder: folders[0], repository: repositories[0], ...(folders.length > 1 ? { folders } : {}), ...(repositories.length > 1 ? { repositories } : {}), skill: data.skill?.value?.value, enabled: enabled.length > 0 });
       if (!candidate.success) {
         const messages: Record<string, string> = { id: 'Utilisez 1 à 64 lettres minuscules, chiffres ou tirets, en commençant par une lettre.', name: 'Saisissez un nom de 1 à 100 caractères.', channel: 'Sélectionnez un canal public ou privé.', folder: 'Choisissez un dossier ClickUp dans la liste.', repository: 'Saisissez une URL HTTPS sans identifiants, paramètres ni fragment.', skill: 'Saisissez un skill de 1 à 200 caractères.' };
-        return { response_action: 'errors', errors: Object.fromEntries(candidate.error.issues.map(issue => { const field = String(issue.path[0]); return [field, messages[field] ?? 'Valeur invalide.']; })) };
+        return { response_action: 'errors', errors: Object.fromEntries(candidate.error.issues.map(issue => { const key = String(issue.path[0]), field = key === 'folders' ? 'folder' : key === 'repositories' ? 'repository' : key; return [field, key === 'repositories' || key === 'folders' ? 'Sélection invalide : respectez les limites et retirez les doublons.' : messages[field] ?? 'Valeur invalide.']; })) };
       }
-      if (!form.folders.some(folder => folder.id === candidate.data.folder)) return { response_action: 'errors', errors: { folder: 'Ce dossier ne fait pas partie des choix proposés. Fermez le formulaire et actualisez les dossiers.' } };
+      if (projectFolders(candidate.data).some(id => !form.folders!.some(folder => folder.id === id))) return { response_action: 'errors', errors: { folder: 'Ce dossier ne fait pas partie des choix proposés. Fermez le formulaire et actualisez les dossiers.' } };
       if (!form.base && form.state === 'editing' && await this.store.project(candidate.data.id)) return { response_action: 'errors', errors: { id: 'Cet identifiant existe déjà. Choisissez-en un autre ou ouvrez ce projet pour le modifier.' } };
       if (!await this.saved.submit(actor, form.id, candidate.data)) return errors('Ce formulaire a déjà été transmis ou annulé. Ouvrez-en un nouveau depuis le menu.');
       return {}; // Durable submission closes the modal; provider validation runs in the queue.
@@ -108,7 +111,7 @@ export class DevelopmentConfiguration {
     if (!form.candidate || !await this.access(actor, form.base) || !await this.access(actor, form.candidate)) return 'Vous et le bot devez accéder au canal actuel du projet et au canal choisi. Vérifiez les accès Slack puis rouvrez le formulaire.';
     const current = await this.store.project(form.candidate.id);
     if (!isDeepStrictEqual(current ?? null, form.base)) return 'Le projet a été modifié ou cet identifiant vient d’être utilisé. Rouvrez sa configuration depuis la liste des projets.';
-    try { await this.clickup.lists(form.candidate.folder); } catch { return 'Le dossier ClickUp est inaccessible. Vérifiez son identifiant et les accès de l’intégration, puis corrigez le formulaire.'; }
+    try { for (const folder of projectFolders(form.candidate)) await this.clickup.lists(folder); } catch { return 'Un dossier ClickUp est inaccessible. Vérifiez les accès de l’intégration, puis corrigez le formulaire.'; }
   }
 
   async handle(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {
@@ -121,7 +124,7 @@ export class DevelopmentConfiguration {
       if (problem) return show(`${problem}\nAucune configuration enregistrée.`, [{ label: 'Corriger le formulaire', action: 'configuration_prepare', value: `form:${form.id}`, bound: true }]);
       await this.saved.validated(actor, form.id);
       const value = form.candidate!;
-      return show(`Vérifiez la configuration avant de l’enregistrer :\nIdentifiant : ${value.id}\nNom : ${value.name}\nCanal : ${value.channel}\nDossier ClickUp : ${folderLabel(form, value.folder)}\nDépôt : ${value.repository}\nSkill : ${value.skill}\nÉtat : ${value.enabled ? 'Activé' : 'Suspendu'}\n\n${value.enabled ? 'Les tickets déjà Ready for AI et la file pourront démarrer ; appels Cursor facturés séparément.' : 'Le projet reste suspendu ; les travaux déjà démarrés peuvent terminer.'}\nLe worker local doit avoir la configuration correspondante. Cette confirmation personnelle expire 24 heures après la préparation du formulaire.`, [
+      return show(`Vérifiez la configuration avant de l’enregistrer :\nIdentifiant : ${value.id}\nNom : ${value.name}\nCanal : ${value.channel}\nDossiers ClickUp :\n${projectFolders(value).map(id => folderLabel(form, id)).join('\n')}\nDépôts :\n${projectRepositories(value).join('\n')}\nSkill : ${value.skill}\nÉtat : ${value.enabled ? 'Activé' : 'Suspendu'}\n\n${value.enabled ? 'Les tickets déjà Ready for AI et la file pourront démarrer ; appels Cursor facturés séparément.' : 'Le projet reste suspendu ; les travaux déjà démarrés peuvent terminer.'}\nLe worker local doit avoir la configuration correspondante. Cette confirmation personnelle expire 24 heures après la préparation du formulaire.`, [
         { label: 'Enregistrer la configuration', action: 'configuration_save', value: form.id, bound: true, style: 'primary' },
         { label: 'Corriger le formulaire', action: 'configuration_prepare', value: `form:${form.id}`, bound: true },
         { label: 'Annuler', action: 'configuration_cancel', value: form.id, bound: true },

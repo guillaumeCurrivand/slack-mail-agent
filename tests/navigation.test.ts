@@ -142,8 +142,14 @@ it('opens complete built-in help through signed DM dispatch without connections,
       const clicked = await h.click(guide, `Aide : ${name}`);
       expect(clicked.method).toBe('chat.update');
       expect(clicked.ts).toBe(guide.ts);
-      expect(renderedText(clicked)).toContain(capability);
-      expect(renderedText(clicked)).toContain(other);
+      let helpPage = clicked, completeHelp = renderedText(clicked), pages = 1;
+      while (findButton(helpPage, 'Suivant')) {
+        expect(pages++).toBeLessThan(20);
+        helpPage = await h.click(helpPage, 'Suivant');
+        completeHelp += renderedText(helpPage);
+      }
+      expect(completeHelp).toContain(capability);
+      expect(completeHelp).toContain(other);
       for (const text of [prefix!, `${prefix} aide`, `${prefix} help`]) {
         const direct = await h.dm(text);
         expect(renderedText(direct)).toBe(renderedText(clicked));

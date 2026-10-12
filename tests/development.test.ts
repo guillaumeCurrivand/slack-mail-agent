@@ -33,6 +33,8 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
   const requests: string[] = [];
   const folders = [{ id: '123', name: 'Maintenance', archived: false }, { id: '456', name: 'Autre dossier', archived: false }];
   const accessibleChannels = new Set(['CPROJECT']);
+  const taskLists = new Map<string, string>();
+  const unavailableFolders = new Set<string>();
   const fetcher = (async (url: URL | string, init?: RequestInit) => {
     const target = new URL(String(url)), body = init?.body ? JSON.parse(String(init.body)) : undefined;
     requests.push(target.pathname);
@@ -46,9 +48,10 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
       if (target.pathname.endsWith('/team')) return Response.json({ teams: [{ id: '1', name: 'Maya' }] });
       if (target.pathname.endsWith('/team/1/space')) return Response.json({ spaces: [{ id: '2', name: 'Projets' }] });
       if (target.pathname.endsWith('/space/2/folder')) return Response.json({ folders });
+      if ([...unavailableFolders].some(id => target.pathname.endsWith(`/folder/${id}/list`))) return Response.json({}, { status: 403 });
       if (target.pathname.endsWith('/folder/123/list')) return Response.json({ lists: [{ id: 'list1' }] });
       if (target.pathname.endsWith('/folder/456/list')) return Response.json({ lists: [{ id: 'list2' }] });
-      if (target.pathname.endsWith('/list/list1/task')) return Response.json({ tasks: [...tasks.values()].map(task => ({ id: task.id, status: { status: task.status } })), last_page: true });
+      if (/\/list\/list[12]\/task$/.test(target.pathname)) return Response.json({ tasks: [...tasks.values()].filter(task => target.pathname.endsWith(`/list/${taskLists.get(task.id) ?? 'list1'}/task`)).map(task => ({ id: task.id, status: { status: task.status } })), last_page: true });
       const match = /\/task\/([^/]+)(\/comment)?$/.exec(target.pathname);
       if (!match || !tasks.has(match[1]!)) return Response.json({}, { status: 404 });
       const task = tasks.get(match[1]!)!;
@@ -60,7 +63,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
         return Response.json({ id: task.id });
       }
       snapshots++;
-      return Response.json({ id: task.id, name: task.name, description: task.description, status: { status: task.status }, list: { id: 'list1' } });
+      return Response.json({ id: task.id, name: task.name, description: task.description, status: { status: task.status }, list: { id: taskLists.get(task.id) ?? 'list1' } });
     }
     if (target.pathname.startsWith('/api/conversations.')) {
       // Match the production rejection: JSON POST arguments were not accepted.
@@ -116,7 +119,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     return posts.at(-1);
   };
   const submit = async (view: any, values: Record<string, unknown>, actor = alice, signed = true) => {
-    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'folder' ? { type: 'external_select', selected_option: value ? { value } : null } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
+    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'folder' ? { type: 'multi_external_select', selected_options: (Array.isArray(value) ? value : value ? [value] : []).map(value => ({ value })) } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
     const stamp = String(Math.floor(Date.now() / 1000));
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'view_submission', team: { id: actor.team }, user: { id: actor.user }, view: { id: 'V1', callback_id: view.callback_id, private_metadata: view.private_metadata, state: { values: state } } }) }).toString();
     return app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': signed ? `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` : 'invalid' } });
@@ -127,7 +130,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     return app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': signed ? `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` : 'invalid' } });
   };
   const api = async (route: string, body: unknown, bearer = token) => app.inject({ method: 'POST', url: `/development/worker/${route}`, payload: JSON.stringify(body), headers: { 'content-type': 'application/json', authorization: `Bearer ${bearer}` } });
-  return { sql, store, tasks, comments, statuses, posts, views, requests, submit, suggest, folders, run, command, dm, click, ingress, api, module, modules, app, accessibleChannels,
+  return { sql, store, tasks, comments, statuses, posts, views, requests, submit, suggest, folders, run, command, dm, click, ingress, api, module, modules, app, accessibleChannels, taskLists, unavailableFolders,
     poll: () => run('development:poll:TTEAM'), configure: () => command(`development configure ${JSON.stringify(project)}`),
     snapshotCount: () => snapshots, failStatus: () => { rejectStatus = true; }, failPost: () => { rejectPost = true; }, failView: () => { rejectView = true; }, accessFailure: (value: typeof failure) => { accessFailure = value; } };
 }
@@ -158,6 +161,147 @@ async function finishRepository(h: Awaited<ReturnType<typeof harness>>, projectI
   await h.run(`development:finish:${work.id}`);
   return work;
 }
+
+const backendRepository = 'https://github.com/example/backend';
+const groupedProject = () => projectSchema.parse({ ...project, folders: ['123', '456'], repositories: [project.repository, backendRepository] });
+
+it('saves and edits one project with multiple named folders and repositories through signed Slack forms', async () => {
+  const h = await harness(); const { view } = await newForm(h);
+  const values = { ...project, id: 'EOA-maintenance-backend', folder: ['123', '456'], repository: `${project.repository}\n${backendRepository}` };
+  expect((await h.submit(view, values)).json()).toEqual({});
+  await h.run(`development:configuration:${view.private_metadata}`);
+  expect(h.posts.at(-1).text).toContain('Autre dossier (456)');
+  expect(h.posts.at(-1).text).toContain(backendRepository);
+  expect(await h.store.projects()).toEqual([]);
+  const saved = await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  const [group] = await h.store.projects();
+  expect(group).toEqual({ ...groupedProject(), id: 'eoa-maintenance-backend' });
+  const detail = await h.click(saved, 'Ouvrir le projet');
+  expect(detail.text).toContain('123, 456');
+  await h.click(await h.click(detail, 'Modifier la configuration'), 'Remplir le formulaire');
+  const edited = h.views.at(-1);
+  expect(edited.blocks.find((b: any) => b.block_id === 'folder').element.initial_options.map((o: any) => o.value)).toEqual(['456', '123']);
+  expect(edited.blocks.find((b: any) => b.block_id === 'repository').element.initial_value).toBe(values.repository);
+  const another = await newForm(h);
+  expect((await h.submit(another.view, values)).json().errors.id).toBeTruthy();
+});
+
+it('rejects duplicate, invalid and unoffered collection entries and rechecks every folder before saving', async () => {
+  const h = await harness(); const { view } = await newForm(h);
+  for (const repository of [`${project.repository}\n${project.repository}.git`, `${project.repository}\nnot-a-url`, `${project.repository}\nhttps://user:password@example.com/repo`]) {
+    expect((await h.submit(view, { ...project, repository })).json().errors.repository).toBeTruthy();
+  }
+  for (const folder of [['123', '123'], ['123', '999']]) expect((await h.submit(view, { ...project, folder })).json().errors.folder).toBeTruthy();
+  await h.submit(view, { ...project, folder: ['123', '456'] });
+  await h.run(`development:configuration:${view.private_metadata}`);
+  const confirm = h.posts.at(-1); h.unavailableFolders.add('456');
+  await h.click(confirm, 'Enregistrer la configuration');
+  expect(h.posts.at(-1).text).toContain('inaccessible');
+  expect(await h.store.projects()).toEqual([]);
+});
+
+it.each(['123', '456'])('routes a ticket in folder %s to both repositories of one project and completes only after both pushes', async folder => {
+  const h = await harness(); await h.command(`development configure ${JSON.stringify(groupedProject())}`);
+  if (folder === '456') h.taskLists.set('abc123', 'list2');
+  h.tasks.get('abc123')!.status = 'Ready for AI';
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(0);
+  const confirmation = await chooseRepositories(h, ['1. project — Projet pilote', '2. backend — Projet pilote']);
+  await h.click(confirmation, 'Confirmer les dépôts'); await h.click(confirmation, 'Confirmer les dépôts');
+  await h.poll(); await h.poll();
+  const runs = (await h.sql.query('SELECT * FROM development_runs')).rows;
+  expect(runs).toHaveLength(2);
+  expect(runs.every(r => r.project === 'pilot' && r.config.folder === folder)).toBe(true);
+  expect(runs[0]!.ticket).toEqual(runs[1]!.ticket);
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'] })).json().work).toBeNull();
+  for (const repository of [project.repository, backendRepository]) {
+    const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [{ id: 'pilot', repository, skill: 'maintenance' }] })).json().work;
+    expect(work.project.repository).toBe(repository);
+    await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 });
+    expect((await h.api('result', { id: work.id, lease: work.lease, result: { outcome: 'pushed', summary: 'Terminé', tests: ['Build passed'], commit: 'a'.repeat(40) } })).statusCode).toBe(200);
+    await h.run(`development:finish:${work.id}`);
+    expect(h.statuses).toHaveLength(repository === project.repository ? 0 : 1);
+  }
+  expect(h.statuses).toEqual(['to build']);
+  expect(h.posts.filter(p => p.text.includes('Commit poussé')).every(p => p.channel === 'CPROJECT')).toBe(true);
+  expect(await h.store.projects()).toHaveLength(1);
+});
+
+it('discovers unlinked Ready tickets in every folder and allows selecting only one repository', async () => {
+  const h = await harness(); await h.store.save(groupedProject(), 'group');
+  h.taskLists.set('abc123', 'list2'); h.tasks.get('abc123')!.status = 'Ready for AI';
+  await h.poll();
+  await h.click(await chooseRepositories(h, ['2. backend — Projet pilote']), 'Confirmer les dépôts');
+  await h.poll();
+  expect((await h.sql.query('SELECT config FROM development_runs')).rows.map(r => r.config.repository)).toEqual([backendRepository]);
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [{ id: 'pilot', repository: project.repository, skill: 'maintenance' }] })).json().work).toBeNull();
+  const target = { id: 'pilot', repository: backendRepository, skill: 'maintenance' };
+  const worker = randomUUID();
+  const first = (await h.api('claim', { worker, projects: ['pilot'], targets: [target] })).json().work;
+  expect(first.project.repository).toBe(backendRepository);
+  expect((await h.api('claim', { worker, projects: ['pilot'], targets: [target] })).json().work).toEqual(first);
+});
+
+it('holds queued grouped destinations removed from configuration without redirecting them', async () => {
+  const h = await harness(); await h.store.save(groupedProject(), 'group');
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  await h.click(await chooseRepositories(h, ['2. backend — Projet pilote']), 'Confirmer les dépôts');
+  await h.store.save(project, 'remove-backend');
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [{ id: 'pilot', repository: backendRepository, skill: 'maintenance' }] })).json().work).toBeNull();
+  expect((await h.sql.query('SELECT state FROM development_runs')).rows[0]!.state).toBe('queued');
+});
+
+it('retains a folder failure in project health when another configured folder succeeds', async () => {
+  const h = await harness(); await h.store.save(groupedProject(), 'group'); h.unavailableFolders.add('123');
+  await h.poll();
+  expect((await h.sql.query('SELECT issue FROM development_health')).rows[0]!.issue).toContain('indisponible');
+  h.unavailableFolders.clear(); await h.poll();
+  expect((await h.sql.query('SELECT issue FROM development_health')).rows[0]!.issue).toBeNull();
+});
+
+it('distinguishes three repositories with identical names even when Slack truncates long labels', async () => {
+  const h = await harness(), name = 'Long project '.repeat(7);
+  const repositories = ['one', 'two', 'three'].map(org => `https://github.com/${org}/api`);
+  await h.command(`development configure ${JSON.stringify({ ...project, name, repositories })}`);
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  const detail = await h.click(h.posts.at(-1), 'Choisir les dépôts');
+  let picker = await h.click(detail, 'Choisir les dépôts');
+  for (const index of [1, 3]) picker = await h.click(picker, `Ajouter ${index}. api — ${name}`.slice(0, 75));
+  const confirm = await h.click(picker, 'Vérifier les dépôts');
+  await h.click(confirm, 'Confirmer les dépôts');
+  expect((await h.sql.query('SELECT config FROM development_runs ORDER BY config->>\'repository\'')).rows.map(r => r.config.repository)).toEqual([repositories[0], repositories[2]].sort());
+});
+
+it('retries only a blocked repository while its sibling is queued in the same project', async () => {
+  const h = await harness(); await h.store.save(groupedProject(), 'group');
+  h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  await h.click(await chooseRepositories(h, ['1. project — Projet pilote', '2. backend — Projet pilote']), 'Confirmer les dépôts');
+  await h.poll();
+  const targets = [{ id: 'pilot', repository: backendRepository, skill: 'maintenance' }];
+  const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets })).json().work;
+  await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 });
+  await h.api('result', { id: work.id, lease: work.lease, result: { outcome: 'blocked', summary: 'Build failed', tests: [] } });
+  await h.run(`development:finish:${work.id}`);
+  await h.command(`development retry ${work.id}`);
+  const runs = (await h.sql.query("SELECT * FROM development_runs WHERE state='queued'")).rows;
+  expect(runs).toHaveLength(2);
+  expect(runs.map(r => r.config.repository).sort()).toEqual([project.repository, backendRepository].sort());
+  const retried = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets })).json().work;
+  expect(retried.id).not.toBe(work.id); expect(retried.ticket).toEqual(work.ticket);
+  expect((await h.sql.query('SELECT run FROM development_route_runs WHERE run=$1', [retried.id])).rows).toHaveLength(1);
+});
+
+it.each(['pause', 'remove-folder'])('holds grouped queued runs after %s', async change => {
+  const h = await harness(); await h.store.save(groupedProject(), 'group');
+  h.taskLists.set('abc123', 'list2'); h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  await h.click(await chooseRepositories(h, ['2. backend — Projet pilote']), 'Confirmer les dépôts'); await h.poll();
+  if (change === 'pause') {
+    const detail = await h.command('development status pilot');
+    await h.click(await h.click(detail, 'Suspendre le projet'), 'Confirmer la suspension');
+  } else await h.store.save({ ...groupedProject(), folders: ['123'] }, 'removed');
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [{ id: 'pilot', repository: backendRepository, skill: 'maintenance' }] })).json().work).toBeNull();
+});
 
 it('creates a project through channel controls and returns modal validation to the initiating thread', async () => {
   const h = await harness();
@@ -490,7 +634,7 @@ it('creates a project entirely through the signed form, validates asynchronously
   expect(await h.store.project('pilot')).toBeUndefined();
   await h.run(`development:configuration:${view.private_metadata}`);
   const confirmation = h.posts.at(-1);
-  expect(confirmation.text).toContain('Dossier ClickUp : Maya / Projets / Maintenance (123)');
+  expect(confirmation.text).toContain('Maya / Projets / Maintenance (123)');
   expect(await h.store.project('pilot')).toBeUndefined();
   await h.click(confirmation, 'Enregistrer la configuration');
   expect(await h.store.project('pilot')).toEqual({ ...project, enabled: false });
@@ -529,7 +673,7 @@ it('searches named ClickUp folders beyond the first 100 from an owner-bound prep
   h.folders.push({ id: '9876', name: 'Réparations', archived: false }, { id: '9877', name: 'Archivé', archived: true });
   const { view } = await newForm(h);
   const input = view.blocks.find((block: any) => block.block_id === 'folder');
-  expect(input.element.type).toBe('external_select');
+  expect(input.element.type).toBe('multi_external_select');
   const before = h.requests.length;
   expect((await h.suggest(view)).json().options).toHaveLength(100);
   const result = (await h.suggest(view, 'maya reparations')).json().options;
@@ -558,7 +702,7 @@ it('prefills the selected folder and refuses a forged or missing selection befor
   const h = await harness(); await h.configure();
   const prepared = await h.click(await h.command('development status pilot'), 'Modifier la configuration');
   await h.click(prepared, 'Remplir le formulaire'); const view = h.views.at(-1);
-  expect(view.blocks.find((block: any) => block.block_id === 'folder').element.initial_option.value).toBe('123');
+  expect(view.blocks.find((block: any) => block.block_id === 'folder').element.initial_options[0].value).toBe('123');
   for (const folder of ['99999', null]) expect((await h.submit(view, { ...project, folder })).json().errors.folder).toBeTruthy();
   expect((await h.sql.query("SELECT * FROM jobs WHERE payload->>'type'='configuration_validate'")).rows).toHaveLength(0);
   await h.submit(view, { ...project, folder: '456' });
@@ -581,8 +725,8 @@ it('offers refresh when folder discovery is empty or fails and preserves the pro
   h.accessFailure(undefined); h.folders.push({ id: '456', name: 'Nouveau dossier', archived: false });
   const ready = await h.click(failed, 'Actualiser les dossiers');
   await h.click(ready, 'Remplir le formulaire'); const view = h.views.at(-1);
-  expect(view.blocks.find((block: any) => block.block_id === 'folder').element.initial_option).toBeUndefined();
-  expect(JSON.stringify(view)).toContain('ne figure plus');
+  expect(view.blocks.find((block: any) => block.block_id === 'folder').element.initial_options).toBeUndefined();
+  expect(JSON.stringify(view)).toContain('ne figurent plus');
   expect((await h.suggest(view)).json().options[0].value).toBe('456');
 });
 

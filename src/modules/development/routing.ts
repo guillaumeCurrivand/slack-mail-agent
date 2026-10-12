@@ -2,8 +2,8 @@ import type { Actor } from '../../core/identity.js';
 import type { JobPayload, ModuleContext } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { DevelopmentMenu } from './menu.js';
-import { RoutingStore, sameDestination, type RouteProposal, type TicketRoute } from './routing-store.js';
-import type { Project } from './domain.js';
+import { RoutingStore, sameDestination, destinationKey, selectedDestination, type RouteProposal, type TicketRoute } from './routing-store.js';
+import { projectTargets, type Project } from './domain.js';
 import type { ClickupDevelopment } from './providers.js';
 import type { DevelopmentStore } from './store.js';
 
@@ -18,8 +18,10 @@ export class DevelopmentRouting {
   private async candidates(actor: Actor, route: TicketRoute) {
     const result: Project[] = [];
     for (const project of await this.store.projects()) {
-      if (project.folder !== route.folder || project.channel !== route.channel) continue;
-      try { if (await this.visible(actor, project)) result.push(project); } catch { /* Fail closed. */ }
+      if (project.channel !== route.channel) continue;
+      const targets = projectTargets(project, route.folder);
+      if (!targets.length) continue;
+      try { if (await this.visible(actor, project)) result.push(...targets); } catch { /* Fail closed. */ }
     }
     return result;
   }
@@ -47,8 +49,8 @@ export class DevelopmentRouting {
       links: [...(selected ?? []).filter(p => candidates.some(c => sameDestination(c, p))).map(p => ({ label: `Suivre ${p.name}`, page: `history_${p.id}_0` })), { label: 'Actualiser', page }, ...back] };
   }
   private picker(proposal: RouteProposal): MenuPage {
-    return { kind: 'Choisir les dépôts', text: `Sélectionnez Frontend, Backend ou plusieurs projets avec Ajouter/Retirer, puis vérifiez votre choix.\nSélection : ${proposal.candidates.filter(p => proposal.selected.includes(p.id)).map(p => p.name).join(', ') || 'aucun dépôt'}\n\n${proposal.candidates.map(p => `${p.name} — ${p.repository}${p.enabled ? '' : ' (suspendu)'}`).join('\n')}`,
-      buttons: [...proposal.candidates.filter(p => p.enabled).map(p => ({ label: `${proposal.selected.includes(p.id) ? 'Retirer' : 'Ajouter'} ${p.name}`, action: proposal.selected.includes(p.id) ? 'routing_remove' : 'routing_add', value: `${proposal.id}|${p.id}`, bound: true })),
+    return { kind: 'Choisir les dépôts', text: `Sélectionnez un ou plusieurs dépôts du projet avec Ajouter/Retirer, puis vérifiez votre choix.\nSélection : ${proposal.candidates.filter(p => selectedDestination(proposal.selected, p)).map(p => p.name).join(', ') || 'aucun dépôt'}\n\n${proposal.candidates.map(p => `${p.name} — ${p.repository}${p.enabled ? '' : ' (suspendu)'}`).join('\n')}`,
+      buttons: [...proposal.candidates.filter(p => p.enabled).map(p => ({ label: `${selectedDestination(proposal.selected, p) ? 'Retirer' : 'Ajouter'} ${p.name}`, action: selectedDestination(proposal.selected, p) ? 'routing_remove' : 'routing_add', value: `${proposal.id}|${destinationKey(p)}`, bound: true })),
         ...(proposal.selected.length ? [{ label: 'Vérifier les dépôts', action: 'routing_check', value: proposal.id, bound: true, style: 'primary' as const }] : []),
         { label: 'Annuler', action: 'routing_cancel', value: proposal.id, bound: true }], links: back };
   }
@@ -75,18 +77,18 @@ export class DevelopmentRouting {
     if (changing) {
       if (proposal.state !== 'pending' || route.selected) return show(unavailable);
       const project = bound.value.slice(separator + 1);
-      if (!candidates.some(p => p.enabled && p.id === project)) return show(unavailable);
+      if (!candidates.some(p => p.enabled && (destinationKey(p) === project || p.id === project))) return show(unavailable);
       proposal = await this.saved.choose(actor, id, project, payload.action === 'routing_add', eventId);
       return show(proposal ? this.picker(proposal) : unavailable);
     }
     if (payload.action === 'routing_check') {
       proposal = await this.saved.seal(actor, id);
       if (!proposal || proposal.state !== 'ready') return show(unavailable);
-      return show({ kind: 'Confirmer les dépôts', text: `Ticket : ${route.snapshot.name}\n${proposal.candidates.filter(p => proposal!.selected.includes(p.id)).map(p => `${p.name} — ${p.repository}`).join('\n')}\n\nConfirmer lance les analyses dans ces dépôts, ou autorise leur prise en charge si le ticket est déjà Ready for AI. Les appels Cursor sont facturés séparément pour chaque dépôt. Le choix est partagé avec le canal et conservé pour ce ticket. Confirmation personnelle valable 24 heures.`, buttons: [
+      return show({ kind: 'Confirmer les dépôts', text: `Ticket : ${route.snapshot.name}\n${proposal.candidates.filter(p => selectedDestination(proposal!.selected, p)).map(p => `${p.name} — ${p.repository}`).join('\n')}\n\nConfirmer lance les analyses dans ces dépôts, ou autorise leur prise en charge si le ticket est déjà Ready for AI. Les appels Cursor sont facturés séparément pour chaque dépôt. Le choix est partagé avec le canal et conservé pour ce ticket. Confirmation personnelle valable 24 heures.`, buttons: [
         { label: 'Confirmer les dépôts', action: 'routing_confirm', value: id, bound: true, style: 'primary' }, { label: 'Annuler', action: 'routing_cancel', value: id, bound: true }], links: back });
     }
     if (!['routing_confirm', 'routing_cancel'].includes(String(payload.action))) return show(unavailable);
-    const selected = proposal.candidates.filter(p => proposal!.selected.includes(p.id));
+    const selected = proposal.candidates.filter(p => selectedDestination(proposal!.selected, p));
     let ticket;
     if (payload.action === 'routing_confirm' && proposal.state === 'ready') {
       if (!selected.length || selected.some(p => !candidates.some(c => c.enabled && sameDestination(c, p)))) return show(unavailable);

@@ -230,6 +230,16 @@ it('rejects unsafe base branch names and publishing directly to the base branch'
   }
 });
 
+it('allows separate repository settings under one local project ID but rejects ambiguous duplicates', () => {
+  const frontend = { id: 'eoa', repository: 'https://gitlab.com/example/frontend', skill: 'maintenance', skillPath: 'skill', checks: [['frontend-check']], branch: 'maintenance/frontend', baseBranch: 'preprod' };
+  const backend = { ...frontend, repository: 'https://gitlab.com/example/backend', checks: [['backend-check']], branch: 'stage/maintenance-ai' };
+  const config = { server: 'https://agent.example.com', stateDirectory: 'state', projects: [frontend, backend] };
+  expect(workerConfigSchema.parse(config).projects.map(p => [p.repository, p.checks, p.branch])).toEqual([
+    [frontend.repository, frontend.checks, frontend.branch], [backend.repository, backend.checks, backend.branch],
+  ]);
+  expect(workerConfigSchema.safeParse({ ...config, projects: [frontend, { ...frontend, skill: 'other' }] }).success).toBe(false);
+});
+
 it('does not publish a visual change without configured browser verification', async () => {
   const h = await fixture({ browser: true });
   const result = await h.runner.run(h.work, h.local, h.attempt);
