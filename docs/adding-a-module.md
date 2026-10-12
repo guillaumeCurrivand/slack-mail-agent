@@ -16,6 +16,14 @@ Pass logical action IDs without presentation suffixes. The Slack renderer assign
 
 `legacyActions` exists solely for exact pre-module button IDs already posted to Slack. New modules should not use it. Duplicate module IDs, reserved IDs, and ambiguous legacy action registrations are rejected.
 
+### Opted-in channel interfaces
+
+Development explicitly opts into `channelAccess(actor)` and an allowlist of `channelActions`; channel commands require a recognized module prefix. Signed ingress rejects other channel action namespaces, and durable dispatch rechecks access before invoking a handler. Provider failures throw for retry; denied membership returns false without revealing data. `channelOnly` blocks operational DM dispatch and replaces the private module menu with a handoff; static DM help stays readable. Other modules retain their private boundaries.
+
+A channel module uses `new Navigation(db, messenger, moduleId)` so generated `navigate` and `controls` actions remain in its namespace. Resolve only local destinations and validate the same owner/channel/message binding before navigation or mutation. Public launchers may create a fresh user-owned screen, never authorize effects. `Actor.thread` carries a signed event/action origin and the transport uses it for fresh channel replies. Persist it with modal drafts; view submissions recover it from stored state. Opening a prepared modal remains provider-free apart from the immediate Slack trigger exchange, with access checks and effects in durable jobs.
+
+`Messenger.postInteractiveThread` supports a module-authorized channel/thread notice with launch buttons; ordinary `postChannel` and `postThread` remain non-interactive. Persist delivery intent before posting, and do not replay uncertain sends. Module handlers must confine reads/writes to their authorized channel, and shared dispatch must not emit personal budget messages there. See [Development’s channel contract](development.md#clickable-channel-interface).
+
 ### Private DM menus
 
 Optional `name` supplies the user-facing Module name. Optional `menu(actor, page, { sql })` returns a `MenuPage` with a kind header, text, local workflow buttons and optional `{ label, page }` navigation links. It reads the Module's current state without AI calls or workflow mutations. The shared runtime supplies Back to menu, namespaces local page destinations and keeps state queries inside the Module. Without a menu callback, the core shows the Module description and its help command.
@@ -40,7 +48,7 @@ Core records posted menu identities and their full display content against owner
 
 Modules may opt into `forms: { openActions, callbacks, open, submit }`. Declare each opening action in `menuActions` and bind its button. Signed DM ingress checks owner/DM/message identity before calling `open` with the bound value and short-lived trigger; the Module exchanges it immediately with Slack rather than sending it through a worker. Only draft reads, opening checkpoints and the bounded Slack modal call belong on that path. A failed/uncertain open must not be blindly replayed. Existing actions keep their durable dispatch.
 
-Signed `view_submission` callbacks use `<module>:<callback>` and route only to an enabled Module's registered callback. They have no trustworthy originating DM field: recover it from the actor-owned saved draft, never from client metadata. `submit` must validate bounded field values and transactionally persist/enqueue accepted input within Slack's acknowledgement window; return inline field errors or an empty acknowledgement. Keep provider access checks, separate confirmations and domain effects in ordinary durable jobs. Modal fields may use native selectors; this does not introduce dropdown navigation on message menus. Development demonstrates the [form contract](development.md#clickable-private-interface) and [dispatch decision](adr/0009-native-module-forms.md).
+Signed `view_submission` callbacks use `<module>:<callback>` and route only to an enabled Module's registered callback. They have no trustworthy originating conversation/thread fields: recover them from the actor-owned saved draft, never from client metadata. `submit` must validate bounded field values and transactionally persist/enqueue accepted input within Slack's acknowledgement window; return inline field errors or an empty acknowledgement. Keep provider access checks, separate confirmations and domain effects in ordinary durable jobs. Modal fields may use native selectors; this does not introduce dropdown navigation on message menus. Development demonstrates the [form contract](development.md#clickable-channel-interface) and [dispatch decision](adr/0009-native-module-forms.md).
 
 ## State and retries
 

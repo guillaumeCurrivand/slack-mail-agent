@@ -14,6 +14,8 @@ export async function dispatchJob(sql: Sql, options: RuntimeOptions, modules: Mo
   if (isIntegration(job.actor)) return modules.dispatchIntegration(job, job.actor, job.id, { sql, messenger, requestedAt });
   const budget = new Budget(sql, Math.round(options.AI_MONTHLY_LIMIT_USD * 1e6), Math.round(options.AI_USER_MONTHLY_LIMIT_USD * 1e6), job.module);
   await modules.dispatch(job, job.actor, job.id, { sql, budget, messenger, requestedAt });
+  // Channel-capable Modules do not expose private budget notices in shared conversations.
+  if (/^[CG]/.test(job.actor.channel)) return;
   if (await budget.claimAlert(Math.round(options.AI_ALERT_USD * 1e6))) {
     const recipient = options.SLACK_ADMIN_USER_ID ? { ...job.actor, user: options.SLACK_ADMIN_USER_ID, channel: options.SLACK_ADMIN_USER_ID } : job.actor;
     try { await messenger.send(recipient, { text: "Le budget d’IA de l’équipe a atteint le seuil d’alerte, y compris les demandes en attente ou incertaines. Utilisez budget pour consulter les totaux. Les nouveaux traitements payants s’arrêteront à la limite configurée." }); }

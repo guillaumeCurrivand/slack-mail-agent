@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto';
 
-export type Actor = { team: string; user: string; channel: string };
+export type Actor = { team: string; user: string; channel: string; thread?: string };
 export type IntegrationActor = { kind: 'integration'; team: string; integration: string };
 export type WorkIdentity = Actor | IntegrationActor;
 export const isIntegration = (actor: WorkIdentity): actor is IntegrationActor => 'kind' in actor && actor.kind === 'integration';

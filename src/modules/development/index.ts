@@ -2,7 +2,6 @@ import { timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, IntegrationContext } from '../../core/modules.js';
-import { menuButton } from '../../core/slack.js';
 import { JobStore } from '../../core/store.js';
 import type { Database } from '../../core/transactions.js';
 import type { DevelopmentConfig } from './config.js';
@@ -15,6 +14,7 @@ import { configurationSchema } from './configuration-store.js';
 import { DevelopmentConfiguration } from './configuration.js';
 import { DevelopmentRouting } from './routing.js';
 import { sameDestination, type TicketRoute } from './routing-store.js';
+import { Navigation } from '../../core/navigation.js';
 
 const help = developmentHelp.text;
 
@@ -26,10 +26,12 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
   const channels = dependencies.channels ?? new DevelopmentChannels(config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const identity = { kind: 'integration' as const, team: config.SLACK_TEAM_ID, integration: 'development' };
   const token = Buffer.from(config.DEVELOPMENT_WORKER_TOKEN);
-  const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && channels.accessible(project.channel, actor.user);
+  const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && actor.channel === project.channel && channels.accessible(project.channel, actor.user);
   const menus = new DevelopmentMenu(store, visible, clickup);
   const configuration = new DevelopmentConfiguration(store, menus, visible, clickup, config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const routing = new DevelopmentRouting(store, menus, visible, clickup);
+  const actions = ['propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel', 'routing_begin', 'routing_add', 'routing_remove', 'routing_check', 'routing_confirm', 'routing_cancel', 'navigate', 'controls', 'channel_home', 'channel_ticket'];
+  const page = (actor: Actor, destination: string) => destination === 'help' ? Promise.resolve({ kind: 'Aide — Développement', text: help }) : /^routes?_/.test(destination) ? routing.page(actor, destination) : menus.page(actor, destination);
 
   async function post(context: IntegrationContext, project: Project, text: string, thread?: string, links?: Array<{ label: string; url: string }>) {
     if (!await channels.accessible(project.channel)) throw new Error('Canal indisponible.');
@@ -60,10 +62,14 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
 
   async function requestRouting(route: TicketRoute, project: Project, context: IntegrationContext) {
     if (route.selected) return;
-    try { await store.effect(`routing:${config.SLACK_TEAM_ID}:${route.ticket}:notice`, () => post(context, project,
-      `${route.snapshot.name}\nChoisissez les dépôts concernés dans votre DM : menu → Développement → Tickets et dépôts. Vous pouvez sélectionner Frontend, Backend ou les deux. Aucun traitement ne démarre avant ce choix, même si le ticket est Ready for AI.`, route.thread ?? undefined,
-      [{ label: 'Ticket ClickUp', url: route.snapshot.url }])); }
-    catch { /* An uncertain notice is not replayed and cannot block other tickets. The DM list remains available. */ }
+    try { await store.effect(`routing:${config.SLACK_TEAM_ID}:${route.ticket}:channel-notice`, async () => {
+      if (!await channels.accessible(project.channel) || !context.messenger.postInteractiveThread) throw new Error('Canal indisponible.');
+      return context.messenger.postInteractiveThread({ team: config.SLACK_TEAM_ID, channel: project.channel, ...(route.thread ? { thread: route.thread } : {}) }, {
+        kind: 'Dépôts du ticket', text: `${route.snapshot.name}\nChoisissez les dépôts concernés ici : Frontend, Backend ou les deux. Tickets et dépôts reste accessible avec development menu dans ce canal. Aucun traitement ne démarre avant confirmation, même si le ticket est Ready for AI. Chaque membre peut ouvrir ses propres contrôles.`,
+        resourceLinks: [{ label: 'Ticket ClickUp', url: route.snapshot.url }], buttons: [{ label: 'Choisir les dépôts', action: 'development:channel_ticket', value: route.ticket }, { label: 'Menu Développement', action: 'development:channel_home', value: 'main' }],
+      });
+    }); }
+    catch { /* Never replay uncertain delivery; the channel menu remains available. */ }
   }
 
   return {
@@ -71,10 +77,13 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     help: developmentHelp,
     async initialize(sql) {
       for (const statement of developmentSchema.split(';').map(value => value.trim()).filter(Boolean)) await sql.query(statement);
-      await sql.query(configurationSchema);
+      for (const statement of configurationSchema.split(';').map(value => value.trim()).filter(Boolean)) await sql.query(statement);
       await new JobStore(sql).enqueueIntegration(`development:poll:${config.SLACK_TEAM_ID}`, identity, { type: 'poll' }, 'development');
     },
-    menuActions: ['propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel', 'routing_begin', 'routing_add', 'routing_remove', 'routing_check', 'routing_confirm', 'routing_cancel'],
+    menuActions: actions,
+    channelActions: actions,
+    channelOnly: 'Le module Développement s’utilise dans le canal Slack du projet. Invitez le bot, puis envoyez development menu dans ce canal pour configurer les projets, choisir les dépôts, consulter le suivi ou ouvrir l’aide. Aucun traitement n’a été lancé depuis ce DM.',
+    channelAccess: actor => actor.team === config.SLACK_TEAM_ID ? channels.accessible(actor.channel, actor.user) : Promise.resolve(false),
     forms: configuration.forms,
     menu: (actor, page) => /^routes?_/.test(page) ? routing.page(actor, page) : menus.page(actor, page),
     async receiveChannel(actor, payload, eventId) {
@@ -87,11 +96,21 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     },
     async handle(actor, payload, eventId, context) {
       if (actor.team !== config.SLACK_TEAM_ID) return;
+      if (payload.type === 'menu_action' && ['navigate', 'controls', 'channel_home', 'channel_ticket'].includes(String(payload.action))) {
+        const navigation = new Navigation(context.sql, context.messenger, 'development');
+        if (payload.action === 'controls') return navigation.controls(actor, eventId, payload.value, payload.timestamp);
+        if (payload.action === 'channel_home') return menus.show(actor, eventId, context, await page(actor, 'main'));
+        if (payload.action === 'channel_ticket') return menus.show(actor, eventId, context, await page(actor, `route_${String(payload.value)}`));
+        const target = await navigation.target(actor, payload.value, payload.timestamp);
+        if (!target || target.page.includes(':')) return menus.show(actor, eventId, context, { kind: 'Menu indisponible', text: 'Ces contrôles sont réservés à la personne qui les a ouverts, dans ce canal. Ouvrez votre propre menu avec development menu.' });
+        return menus.show(actor, eventId, context, await page(actor, target.page), target.target);
+      }
       if (payload.type === 'menu_action' && String(payload.action).startsWith('routing_')) return routing.handle(actor, payload, eventId, context);
       if (String(payload.type).startsWith('configuration_') || (payload.type === 'menu_action' && String(payload.action).startsWith('configuration_'))) return configuration.handle(actor, payload, eventId, context);
       if (payload.type !== 'text') return menus.handle(actor, payload, eventId, context);
       const text = String(payload.text ?? '').trim();
-      const send = (message: string) => context.messenger.send(actor, { kind: 'Développement', text: message, buttons: [menuButton] });
+      const send = (message: string) => menus.show(actor, eventId, context, { kind: 'Développement', text: message });
+      if (['menu', 'help'].includes(text.toLowerCase())) return menus.show(actor, eventId, context, await page(actor, text.toLowerCase() === 'help' ? 'help' : 'main'));
       if (text.startsWith('configure ')) {
         let input: unknown;
         try { input = JSON.parse(text.slice(10)); } catch { return send('JSON de configuration invalide. ' + help); }

@@ -25,6 +25,7 @@ export interface Messenger {
   update?(actor: Actor, timestamp: string, message: AgentMessage): Promise<void>;
   postChannel?(destination: { team: string; channel: string }, message: AgentMessage): Promise<string>;
   postThread?(destination: { team: string; channel: string; thread?: string }, message: AgentMessage): Promise<string>;
+  postInteractiveThread?(destination: { team: string; channel: string; thread?: string }, message: AgentMessage): Promise<string>;
 }
 export const menuButton: Button = { label: 'Menu', action: 'menu', value: '', scope: 'core' };
 // Slack accepts more elements per actions block but may hide extras behind "+N autres".
@@ -146,7 +147,15 @@ export class Slack implements Messenger {
     if (typeof result.ts !== 'string' || !/^\d+\.\d+$/.test(result.ts)) throw new Error('Slack message identity unavailable.');
     return result.ts;
   }
-  private async deliver(actor: { channel: string }, message: AgentMessage, timestamp?: string, thread?: string) {
+  async postInteractiveThread(destination: { team: string; channel: string; thread?: string }, message: AgentMessage) {
+    if (!/^[CG][A-Z0-9]+$/.test(destination.channel) || (destination.thread && !/^\d+\.\d+$/.test(destination.thread)))
+      throw new SlackDeliveryRejected('Invalid interactive channel reply.');
+    const result = await this.deliver(destination, message);
+    if (typeof result.ts !== 'string' || !/^\d+\.\d+$/.test(result.ts)) throw new Error('Slack message identity unavailable.');
+    return result.ts;
+  }
+  private async deliver(actor: { channel: string; thread?: string }, message: AgentMessage, timestamp?: string, thread = !timestamp && /^[CG]/.test(actor.channel) ? actor.thread : undefined) {
+    if (thread && !/^\d+\.\d+$/.test(thread)) throw new SlackDeliveryRejected('Invalid thread.');
     const text = message.kind ? message.text : sanitizeReply(message.text);
     if (text.length > 12_000) throw new SlackDeliveryRejected('Message text exceeds Slack limits.');
     const buttons = message.buttons ?? [];

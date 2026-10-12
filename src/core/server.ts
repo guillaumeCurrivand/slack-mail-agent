@@ -21,11 +21,16 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (body.type === 'url_verification') return { challenge: body.challenge };
     if (body.team_id !== config.SLACK_TEAM_ID) return reply.code(403).send();
     const event = body.event;
-    if (modules.all().some(module => module.receiveChannel) && body.type === 'event_callback' && event?.type === 'message' && ['channel', 'group'].includes(event.channel_type) &&
+    if (modules.all().some(module => module.receiveChannel || module.channelAccess) && body.type === 'event_callback' && event?.type === 'message' && ['channel', 'group'].includes(event.channel_type) &&
       !event.subtype && !event.bot_id && /^[UW][A-Z0-9]+$/.test(event.user ?? '') && /^[CG][A-Z0-9]+$/.test(event.channel ?? '') && typeof event.text === 'string') {
       if (typeof body.event_id !== 'string' || !body.event_id || event.text.length > 8000 || !/^\d+\.\d+$/.test(event.ts ?? '') ||
         (event.thread_ts !== undefined && !/^\d+\.\d+$/.test(event.thread_ts))) return reply.code(400).send();
-      const actor = { team: body.team_id, user: event.user, channel: event.channel };
+      const actor = { team: body.team_id, user: event.user, channel: event.channel, thread: event.thread_ts ?? event.ts };
+      const route = modules.text(event.text);
+      if (modules.acceptsChannel(route)) {
+        await store.enqueue(`slack:${body.event_id}`, actor, route.payload, route.module);
+        return { ok: true };
+      }
       for (const module of modules.all()) await module.receiveChannel?.(actor, { text: event.text, timestamp: event.ts, thread: event.thread_ts ?? event.ts }, `slack:${body.event_id}`);
       return { ok: true };
     }
@@ -50,10 +55,10 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
       if (typeof view?.callback_id !== 'string' || typeof view.private_metadata !== 'string' || view.private_metadata.length > 200) return reply.code(400).send();
       const forms = modules.formSubmission(view.callback_id);
       if (!forms) return reply.code(403).send();
-      // The Module recovers the original DM from its actor-owned saved form.
+      // The Module recovers the originating conversation from its actor-owned saved form.
       return forms.submit({ team: body.team.id, user: body.user.id }, view);
     }
-    if (!/^D[A-Z0-9]+$/.test(body.channel?.id ?? '')) return reply.code(403).send();
+    if (!/^[DCG][A-Z0-9]+$/.test(body.channel?.id ?? '')) return reply.code(403).send();
     const action = body.actions?.[0];
     // Only the read-only navigation action accepts a static-select payload.
     if (action?.type === 'static_select') {
@@ -64,17 +69,21 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
       (action.value !== undefined && (typeof action.value !== 'string' || action.value.length > 500))) return reply.code(400).send();
     if (logicalAction(action.action_id) === undefined) return reply.code(400).send();
     const route = modules.action(action.action_id, action.value ?? '');
+    const channel = /^[CG]/.test(body.channel.id);
+    if (channel && !modules.acceptsChannel(route)) return reply.code(403).send();
     if ((route.module === 'core' && ['navigation', 'control_navigation'].includes(String(route.payload.type))) || route.payload.type === 'menu_action') {
       const timestamp = body.message?.ts;
       if (typeof timestamp !== 'string' || !/^\d+\.\d+$/.test(timestamp)) return reply.code(400).send();
       route.payload.timestamp = timestamp;
     }
-    const actor = { team: body.team.id, user: body.user.id, channel: body.channel.id };
+    const thread = channel ? body.message?.thread_ts ?? body.message?.ts : undefined;
+    if (channel && (typeof thread !== 'string' || !/^\d+\.\d+$/.test(thread))) return reply.code(400).send();
+    const actor = { team: body.team.id, user: body.user.id, channel: body.channel.id, ...(thread ? { thread } : {}) };
     const forms = modules.formAction(route);
     if (forms) {
       const bound = await boundMenuTarget(store.sql, actor, route.payload.value, route.payload.timestamp);
       if (!bound) {
-        await store.enqueue(`action:${digest(raw)}`, actor, { type: 'unavailable' }, 'core');
+        await store.enqueue(`action:${digest(raw)}`, actor, { type: 'unavailable' }, channel ? route.module : 'core');
       } else {
         if (typeof body.trigger_id !== 'string' || !body.trigger_id || body.trigger_id.length > 300) return reply.code(400).send();
         await forms.open(actor, { value: bound.value, trigger: body.trigger_id }, `action:${digest(raw)}`);

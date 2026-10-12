@@ -4,7 +4,7 @@ This is the project-specific setup for the approved Orientaction pilot. The [Dev
 
 ## Project mapping
 
-Send this command in a private DM to Mayassistant:
+Use `development menu` in the configured project Slack channel for the clickable interface. The optional command equivalent below must be sent in that same channel:
 
 ```text
 development configure {"id":"pilot","name":"Orientaction frontend","channel":"C0624L2EUA0","folder":"901515523304","repository":"https://gitlab.com/mayasquad/orient-action/orient-action-frontend","skill":"maintenance","enabled":true}
@@ -210,7 +210,7 @@ Inspect the newest run beneath `C:\Work\mayassistant-development-state\runs`. Ea
 
 | Symptom | Meaning and correction |
 | --- | --- |
-| Configuration receives no response / no saved project | Verify server version, signed DM delivery and job diagnostics. Earlier fixes changed Slack membership API calls to GET query parameters, normalized Slack-formatted repository URLs and added safe error type/location logs. Send a new configure message after correcting the cause; do not reset exhausted database jobs. |
+| Configuration receives no response / no saved project | Verify server version, signed channel event delivery and job diagnostics. Earlier fixes changed Slack membership API calls to GET query parameters, normalized Slack-formatted repository URLs and added safe error type/location logs. Send a new configure message after correcting the cause; do not reset exhausted database jobs. |
 | Ticket link gets no visible reply | Use the short `/t/<task-id>` URL in the configured channel, check `development status pilot`, and ensure the local worker is running. A queued review with zero attempts has not yet been investigated. |
 | Remote `test` branch absent | Set EOA `baseBranch` to `preprod`; `branch` remains `stage/maintenance-ia`. Restart the worker and explicitly retry the blocked run. |
 | `npm error code ERESOLVE` | The known Chart.js/plugin peer conflict needs `npm ci --legacy-peer-deps` for this existing dependency tree. |

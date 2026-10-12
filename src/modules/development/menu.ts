@@ -70,7 +70,7 @@ export class DevelopmentMenu {
 
   private configuration(project?: Project): MenuPage {
     return { kind: project ? `Configuration — ${project.name}` : 'Configurer un projet',
-      text: 'Configurez le projet dans un formulaire Slack : nom, canal, dossier ClickUp, dépôt, skill et activation. Après validation des accès, confirmez les valeurs dans votre DM. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
+      text: 'Configurez le projet dans un formulaire Slack : nom, dossier ClickUp, dépôt, skill et activation. Le canal est celui où vous avez ouvert le menu. Après validation des accès, confirmez les valeurs dans le fil du canal. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
       buttons: [{ label: 'Préparer le formulaire', action: 'configuration_prepare', value: project ? `project:${project.id}` : 'new', bound: true }],
       links: project ? [{ label: 'Retour au projet', page: projectPage(project.id) }] : back };
   }
@@ -91,9 +91,10 @@ export class DevelopmentMenu {
   }
 
   async show(actor: Actor, eventId: string, context: ModuleContext, page: MenuPage, target?: Parameters<Navigation['show']>[3]) {
-    return new Navigation(context.sql, context.messenger).show(actor, eventId, { ...page,
-      links: [...(page.links ?? []).map(link => ({ ...link, page: `development:${link.page}` })), { label: 'Aide du module', page: 'help:module_development' }],
-      recordChoices: page.recordChoices?.map(link => ({ ...link, page: `development:${link.page}` })), buttons: [...page.buttons ?? [], menuButton] }, target);
+    const channel = /^[CG]/.test(actor.channel);
+    return new Navigation(context.sql, context.messenger, channel ? 'development' : 'core').show(actor, eventId, { ...page,
+      links: [...(page.links ?? []).map(link => ({ ...link, page: channel ? link.page : `development:${link.page}` })), { label: 'Aide du module', page: channel ? 'help' : 'help:module_development' }],
+      recordChoices: page.recordChoices?.map(link => ({ ...link, page: channel ? link.page : `development:${link.page}` })), buttons: [...page.buttons ?? [], channel ? { label: 'Retour au menu', action: 'channel_home', value: 'main' } : menuButton] }, target);
   }
 
   async handle(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {

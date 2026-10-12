@@ -81,7 +81,7 @@ const splitText = (value: string, reply: boolean): string[] => {
   return pages;
 };
 
-function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0): AgentMessage {
+function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0, namespace = 'core'): AgentMessage {
   const textPages = splitText(message.text, !message.kind);
   const textPage = Math.max(0, Math.min(requestedText, textPages.length - 1));
   // Ordinary screens keep all choices visible in short Slack action rows.
@@ -89,7 +89,7 @@ function visiblePage(message: AgentMessage, id: string, requestedControl = 0, re
     ? controlPages(message.buttons ?? [], textPages.length > 1)
     : { pages: [message.buttons ?? []], pinned: [] as Button[] };
   const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
-  const pageButton = (label: string, nextControl: number, nextText: number) => ({ label, action: 'core:controls', value: `${id}|${nextControl}|${nextText}`, scope: 'core' as const });
+  const pageButton = (label: string, nextControl: number, nextText: number) => ({ label, action: `${namespace}:controls`, value: `${id}|${nextControl}|${nextText}`, ...(namespace === 'core' ? { scope: 'core' as const } : {}) });
   return { ...message, text: textPages.length > 1 ? `Réponse — page ${textPage + 1}/${textPages.length}\n${textPages[textPage]}` : message.text,
     ...(textPage && message.table ? { table: undefined } : {}),
     buttons: [...pages[controlPage]!, ...pinned,
@@ -101,7 +101,7 @@ function visiblePage(message: AgentMessage, id: string, requestedControl = 0, re
 
 /** Recorded Agent messages can update only through owner- and message-bound controls. */
 export class Navigation {
-  constructor(private sql: Sql, private messenger: Messenger) {}
+  constructor(private sql: Sql, private messenger: Messenger, private namespace = 'core') {}
 
   async target(actor: Actor, value: unknown, timestamp: unknown): Promise<{ target: MenuTarget; page: string } | undefined> {
     const bound = await this.boundTarget(actor, value, timestamp);
@@ -129,18 +129,18 @@ export class Navigation {
     const rowChoices = !!content.table && recordChoices.length === content.table.rows.length;
     const bind = (button: Button) => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button;
     const rawMessage: AgentMessage = { ...content,
-      ...(content.table ? { table: { ...content.table, ...(rowChoices ? { rowButtons: recordChoices.map(link => ({ label: 'Ouvrir', action: 'core:navigate', value: `${id}|${link.page}` })) }
+      ...(content.table ? { table: { ...content.table, ...(rowChoices ? { rowButtons: recordChoices.map(link => ({ label: 'Ouvrir', action: `${this.namespace}:navigate`, value: `${id}|${link.page}` })) }
         : content.table.rowButtons ? { rowButtons: content.table.rowButtons.map(button => button ? bind(button) : null) } : {}) } } : {}),
       buttons: [...(content.buttons ?? []).map(bind),
-      ...(!rowChoices ? recordChoices.map(link => ({ label: link.label, action: 'core:navigate', value: `${id}|${link.page}` })) : []),
-      ...links.map(link => ({ label: link.label, action: 'core:navigate', value: `${id}|${link.page}` }))] };
+      ...(!rowChoices ? recordChoices.map(link => ({ label: link.label, action: `${this.namespace}:navigate`, value: `${id}|${link.page}` })) : []),
+      ...links.map(link => ({ label: link.label, action: `${this.namespace}:navigate`, value: `${id}|${link.page}` }))] };
     const message = this.messenger.prepare?.(rawMessage) ?? rawMessage;
     return this.deliver(actor, eventId, id, message, target, true);
   }
 
   private async deliver(actor: Actor, eventId: string, id: string, fullMessage: AgentMessage, target?: MenuTarget,
     replaceContent = true, controlPage = 0, textPage = 0) {
-    const message = visiblePage(fullMessage, id, controlPage, textPage);
+    const message = visiblePage(fullMessage, id, controlPage, textPage, this.namespace);
     // Record intent before contacting Slack: an uncertain response must not be resent.
     const claimed = await this.sql.query('INSERT INTO core_navigation_deliveries(event_id,owner) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING event_id', [eventId, ownerKey(actor)]);
     if (!claimed.rows.length) return;

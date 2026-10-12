@@ -30,6 +30,11 @@ export interface AssistantModule {
   normalizeText?(text: string): string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
   menuActions?: readonly string[];
+  /** Explicit opt-in to signed channel commands/actions; access is checked again at dispatch. */
+  channelActions?: readonly string[];
+  channelAccess?(actor: Actor): Promise<boolean>;
+  /** A static handoff shown instead of running this Module in a DM. */
+  channelOnly?: string;
   /** Slack's short-lived form triggers must be exchanged before queued work. */
   forms?: {
     openActions: readonly string[];
@@ -69,6 +74,10 @@ export class ModuleRegistry {
   }
   all() { return [...this.modules.values()]; }
   enabledIds() { return ['core', ...this.modules.keys()]; }
+  acceptsChannel(job: RoutedJob) {
+    const module = this.modules.get(job.module);
+    return !!module?.channelAccess && (job.payload.type === 'text' || module.channelActions?.includes(String(job.payload.action)) === true);
+  }
   formAction(job: RoutedJob) {
     const forms = this.modules.get(job.module)?.forms;
     return job.payload.type === 'menu_action' && forms?.openActions.includes(String(job.payload.action)) ? forms : undefined;
@@ -114,6 +123,11 @@ export class ModuleRegistry {
     return { module: 'core', payload: { type: 'unavailable' } };
   }
   async dispatch(job: RoutedJob, actor: Actor, eventId: string, context: ModuleContext) {
+    const channel = /^[CG]/.test(actor.channel);
+    if (channel) {
+      const module = this.modules.get(job.module);
+      if (!module?.channelAccess || !await module.channelAccess(actor)) return;
+    }
     if (job.module === 'core') {
       const navigation = new Navigation(context.sql, context.messenger);
       if (job.payload.type === 'operation_busy') return navigation.show(actor, eventId, {
@@ -136,16 +150,17 @@ export class ModuleRegistry {
     }
     const module = this.modules.get(job.module);
     if (!module) throw new Error('Module is not enabled.');
-    if (module.help && job.payload.type === 'text' && String(job.payload.text).trim().toLowerCase() === 'help') {
+    if (!channel && module.help && job.payload.type === 'text' && String(job.payload.text).trim().toLowerCase() === 'help') {
       return new Navigation(context.sql, context.messenger).show(actor, eventId, await this.page(`help:module_${module.id}`, actor, context));
     }
+    if (!channel && module.channelOnly) return context.messenger.send(actor, { kind: module.name, text: module.channelOnly });
     const namespace = (message: MenuPage) => namespaceMessage(message, module.id);
     let pagedMessageIndex = 0;
     const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
       const prepared = namespace(message);
       if ((prepared.text.length > 10_000 || (!prepared.kind && sanitizeReply(prepared.text).length > 10_000)
         || needsControlPaging(prepared)) && context.messenger.post && context.messenger.update)
-        return new Navigation(context.sql, context.messenger).show(recipient, `${eventId}:answer:${pagedMessageIndex++}`, prepared);
+        return new Navigation(context.sql, context.messenger, channel ? module.id : 'core').show(recipient, `${eventId}:answer:${pagedMessageIndex++}`, prepared);
       return context.messenger.send(recipient, prepared);
     },
       ...(context.messenger.post ? { post: (recipient: Actor, message: MenuPage) => context.messenger.post!(recipient, namespace(message)) } : {}),
@@ -166,7 +181,7 @@ export class ModuleRegistry {
       '*Commandes communes*\n• menu : ouvrir un nouveau menu avec les modules activés.\n• aide (ou help) : ouvrir ce guide.\n• budget : consulter les dépenses d’IA enregistrées et les montants réservés, au total et par module, pour le mois civil UTC.\n• bonjour / salut (hello / hi) : ouvrir le menu.',
       '*Choisir un module*\nCommencez chaque demande écrite par son préfixe, même en langage naturel. <préfixe> aide ouvre son guide ; un préfixe seul ouvre également son aide. Ouvrir un menu ne change pas le routage des messages suivants. Les commandes anglaises restent compatibles.',
       '*Modules activés*\n' + (this.all().map(module => `${module.name ?? module.id} — ${module.description}.\nPréfixe : ${module.aliases?.[0] ?? module.id}. Guide : ${module.aliases?.[0] ?? module.id} aide.`).join('\n\n') || 'Aucun module n’est actuellement activé.'),
-      '*Données et confirmations*\nLes demandes et réponses restent privées en DM. Certains modules gèrent des données partagées ou publient dans des canaux : leur guide précise qui peut voir les données et les changements. Une confirmation porte sur la proposition affichée ; un message en langage naturel ne la remplace pas.',
+      '*Données et confirmations*\nLes modules personnels restent privés en DM. Certains modules proposent une interface dans les canaux, gèrent des données partagées ou publient des notifications : leur guide précise qui peut voir les données et les changements. Une confirmation porte sur la proposition affichée ; un message en langage naturel ne la remplace pas.',
       '*Coûts et démarrage*\nLire l’aide et parcourir les menus n’utilise pas d’IA. Les boutons de lancement peuvent démarrer une analyse payante. Les modules qui utilisent OpenAI partagent le plafond mensuel configuré ; budget affiche l’usage. Les demandes incertaines conservent leur réservation. Les guides identifient les parcours gratuits et les éventuelles facturations externes séparées.',
       '*Reprendre une consultation*\nPrécédent/Suivant parcourent les contenus longs dans le même message. Les boutons sont réservés à leur utilisateur et à leur conversation. Envoyez menu ou aide si un bouton est expiré ou indisponible. Relire une proposition ne renouvelle pas son délai de confirmation.',
     ].join('\n\n'), links: [...this.all().map(module => ({ label: `Aide : ${module.name ?? module.id}`, page: `help:module_${module.id}` })), ...back] };
@@ -189,6 +204,7 @@ export class ModuleRegistry {
     const [id, section = 'main'] = destination.split(':');
     const module = this.modules.get(id!);
     if (!module) return { kind: "Module indisponible", text: "Ce module n’est pas activé. Aucun traitement n’a été lancé.", links: back };
+    if (module.channelOnly && /^D/.test(actor.channel)) return { kind: module.name, text: module.channelOnly, links: [{ label: 'Aide du module', page: `help:module_${module.id}` }, ...back] };
     if (section === 'help' && module.help) return this.page(`help:module_${module.id}`, actor, context);
     const page = module.menu ? await module.menu(actor, section, context) : { kind: module.name ?? module.id, text: `${module.description}. Envoyez ${module.aliases?.[0] ?? module.id} aide.` };
     return { ...namespaceMessage(page, module.id),
