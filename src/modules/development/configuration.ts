@@ -12,7 +12,7 @@ import type { DevelopmentStore } from './store.js';
 
 const plain = (text: string) => ({ type: 'plain_text', text });
 const home = [{ label: 'Retour aux projets', page: 'projects_0' }];
-const expired = 'Formulaire indisponible ou expiré. Fermez-le et ouvrez un nouveau formulaire avec development menu dans le canal.';
+const expired = 'Formulaire indisponible ou expiré. Fermez-le et ouvrez un nouveau formulaire avec development menu, dans le canal ou en message privé.';
 const fields = z.record(z.string(), z.record(z.string(), z.object({ value: z.string().nullable().optional(), selected_option: z.object({ value: z.string() }).passthrough().nullable().optional(), selected_conversation: z.string().nullable().optional(), selected_options: z.array(z.object({ value: z.string() }).passthrough()).optional() }).passthrough()));
 const folderOption = (folder: FolderChoice) => ({ text: plain(`${folder.name.slice(0, 45)} · ${folder.id}`.slice(0, 75)), value: folder.id, description: plain(`${folder.workspace} / ${folder.space}`.slice(0, 75)) });
 const folderLabel = (form: ConfigurationForm, id: string) => {
@@ -26,11 +26,14 @@ export function configurationView(form: ConfigurationForm) {
     element: { type: 'plain_text_input', action_id: 'value', max_length: max, ...(value?.[key as keyof Project] ? { initial_value: String(value[key as keyof Project]) } : {}) } });
   const enabled = { text: plain('Activer le projet'), value: 'enabled' };
   const selected = form.folders?.find(folder => folder.id === value?.folder);
+  const privateConversation = /^D/.test(form.channel);
   return { type: 'modal', callback_id: 'development:configuration', private_metadata: form.id, title: plain(form.base ? 'Modifier le projet' : 'Configurer un projet'), submit: plain('Vérifier'), close: plain('Annuler'), blocks: [
-    { type: 'section', text: plain('Remplissez les champs puis vérifiez la proposition dans le fil du canal. Rien ne sera enregistré avant votre confirmation.') },
+    { type: 'section', text: plain(`Remplissez les champs puis vérifiez la proposition ${privateConversation ? 'dans votre message privé' : 'dans le fil du canal'}. Rien ne sera enregistré avant votre confirmation.`) },
     form.base ? { type: 'section', text: plain(`Identifiant du projet : ${form.base.id} (conservé)`) } : input('id', 'Identifiant du projet', 64, 'Lettres minuscules, chiffres et tirets ; commencez par une lettre. Doit correspondre au worker local.'),
     input('name', 'Nom du projet', 100),
-    { type: 'section', block_id: 'channel', text: plain(`Canal du projet : ${form.channel}. La configuration reste dans le canal où ce formulaire a été ouvert.`) },
+    privateConversation
+      ? { type: 'input', block_id: 'channel', label: plain('Canal Slack du projet'), hint: plain('Vous et le bot devez être membres du canal choisi.'), element: { type: 'conversations_select', action_id: 'value', filter: { include: ['public', 'private'] }, ...(value?.channel ? { initial_conversation: value.channel } : {}) } }
+      : { type: 'section', block_id: 'channel', text: plain(`Canal du projet : ${form.channel}. La configuration reste dans le canal où ce formulaire a été ouvert.`) },
     ...(value?.folder && !selected ? [{ type: 'section', text: plain('Le dossier enregistré ne figure plus dans les choix disponibles. Sélectionnez un dossier accessible avant de vérifier.') }] : []),
     { type: 'input', block_id: 'folder', label: plain('Dossier ClickUp'), hint: plain('Recherchez un nom de dossier, d’espace, de Workspace ou un identifiant. 100 résultats maximum ; précisez la recherche.'),
       element: { type: 'external_select', action_id: 'value', min_query_length: 0, placeholder: plain('Choisir un dossier ClickUp'), ...(selected ? { initial_option: folderOption(selected) } : {}) } },
@@ -51,13 +54,13 @@ export class DevelopmentConfiguration {
     suggest: async (actor, input) => {
       if (input.block !== 'folder' || input.action !== 'value') return { options: [] };
       const form = await this.saved.get(actor, input.form);
-      if (!form || !/^[CG]/.test(form.channel) || form.state !== 'editing' || !form.folders) return { options: [] };
+      if (!form || !/^[DCG]/.test(form.channel) || form.state !== 'editing' || !form.folders) return { options: [] };
       const normalize = (text: string) => text.normalize('NFD').replace(/\p{M}/gu, '').toLocaleLowerCase('fr');
       const terms = normalize(input.query).split(/\s+/).filter(Boolean);
       return { options: form.folders.filter(folder => terms.every(term => normalize(`${folder.workspace} ${folder.space} ${folder.name} ${folder.id}`).includes(term))).slice(0, 100).map(folderOption) };
     },
     open: async (actor, input, eventId) => {
-      if (!/^[CG]/.test(actor.channel)) return;
+      if (!/^[DCG]/.test(actor.channel)) return;
       const form = await this.saved.get(actor, input.value);
       if (!form || form.channel !== actor.channel || form.state !== 'editing' || !form.folders?.length) return this.notice(actor, eventId, expired);
       // The draft holds the values and catalogue prepared for this actor.
@@ -74,13 +77,13 @@ export class DevelopmentConfiguration {
     submit: async (actor, view) => {
       const form = await this.saved.get(actor, view.private_metadata);
       const errors = (message: string) => ({ response_action: 'errors', errors: { name: message } });
-      if (!form || !/^[CG]/.test(form.channel) || !form.folders?.length) return errors(expired);
+      if (!form || !/^[DCG]/.test(form.channel) || !form.folders?.length) return errors(expired);
       const parsedFields = fields.safeParse(view.state?.values);
       if (!parsedFields.success) return errors('Champs invalides. Fermez puis rouvrez le formulaire.');
       const data = parsedFields.data;
       const enabled = data.enabled?.value?.selected_options ?? [];
       if (enabled.some(option => option.value !== 'enabled')) return { response_action: 'errors', errors: { enabled: 'Choix d’activation invalide.' } };
-      const candidate = projectSchema.safeParse({ id: form.base?.id ?? data.id?.value?.value, name: data.name?.value?.value, channel: form.channel,
+      const candidate = projectSchema.safeParse({ id: form.base?.id ?? data.id?.value?.value, name: data.name?.value?.value, channel: /^D/.test(form.channel) ? data.channel?.value?.selected_conversation : form.channel,
         folder: data.folder?.value?.selected_option?.value, repository: data.repository?.value?.value, skill: data.skill?.value?.value, enabled: enabled.length > 0 });
       if (!candidate.success) {
         const messages: Record<string, string> = { id: 'Utilisez 1 à 64 lettres minuscules, chiffres ou tirets, en commençant par une lettre.', name: 'Saisissez un nom de 1 à 100 caractères.', channel: 'Sélectionnez un canal public ou privé.', folder: 'Choisissez un dossier ClickUp dans la liste.', repository: 'Saisissez une URL HTTPS sans identifiants, paramètres ni fragment.', skill: 'Saisissez un skill de 1 à 200 caractères.' };
@@ -102,7 +105,7 @@ export class DevelopmentConfiguration {
     try { return await this.visible(actor, project); } catch { return false; }
   }
   private async problem(actor: Actor, form: ConfigurationForm) {
-    if (!form.candidate || !await this.access(actor, form.base) || !await this.access(actor, form.candidate)) return 'Vous et le bot devez accéder au canal de ce formulaire. Vérifiez les accès Slack puis rouvrez le formulaire.';
+    if (!form.candidate || !await this.access(actor, form.base) || !await this.access(actor, form.candidate)) return 'Vous et le bot devez accéder au canal actuel du projet et au canal choisi. Vérifiez les accès Slack puis rouvrez le formulaire.';
     const current = await this.store.project(form.candidate.id);
     if (!isDeepStrictEqual(current ?? null, form.base)) return 'Le projet a été modifié ou cet identifiant vient d’être utilisé. Rouvrez sa configuration depuis la liste des projets.';
     try { await this.clickup.lists(form.candidate.folder); } catch { return 'Le dossier ClickUp est inaccessible. Vérifiez son identifiant et les accès de l’intégration, puis corrigez le formulaire.'; }
@@ -143,7 +146,7 @@ export class DevelopmentConfiguration {
       }
       const form = await this.saved.create(actor, eventId, base, prior?.candidate ?? base, folders);
       if (!form || form.state !== 'editing') return show(expired);
-      return show('Le formulaire est prêt. Cliquez sur Remplir le formulaire, complétez les champs puis choisissez Vérifier. Une confirmation apparaîtra ensuite dans ce fil du canal. Aucun projet modifié à cette étape.', [
+      return show(`Le formulaire est prêt. Cliquez sur Remplir le formulaire, complétez les champs puis choisissez Vérifier. Une confirmation apparaîtra ensuite ${/^D/.test(actor.channel) ? 'dans ce message privé' : 'dans ce fil du canal'}. Aucun projet modifié à cette étape.`, [
         { label: 'Remplir le formulaire', action: 'configuration_open', value: form.id, bound: true, style: 'primary' },
         { label: 'Actualiser les dossiers', action: 'configuration_prepare', value: `form:${form.id}`, bound: true },
         { label: 'Annuler', action: 'configuration_cancel', value: form.id, bound: true },

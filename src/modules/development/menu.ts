@@ -70,7 +70,7 @@ export class DevelopmentMenu {
 
   private configuration(project?: Project): MenuPage {
     return { kind: project ? `Configuration — ${project.name}` : 'Configurer un projet',
-      text: 'Configurez le projet dans un formulaire Slack : nom, dossier ClickUp, dépôt, skill et activation. Le canal est celui où vous avez ouvert le menu. Après validation des accès, confirmez les valeurs dans le fil du canal. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
+      text: 'Configurez le projet dans un formulaire Slack : nom, canal, dossier ClickUp, dépôt, skill et activation. En message privé, choisissez le canal du projet ; dans un canal, celui-ci reste fixe. Après validation des accès, confirmez les valeurs dans la conversation de départ. Un nouveau projet commence suspendu par défaut. Le worker doit disposer de la configuration locale correspondante.',
       buttons: [{ label: 'Préparer le formulaire', action: 'configuration_prepare', value: project ? `project:${project.id}` : 'new', bound: true }],
       links: project ? [{ label: 'Retour au projet', page: projectPage(project.id) }] : back };
   }

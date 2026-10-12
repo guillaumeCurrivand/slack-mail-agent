@@ -26,7 +26,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
   const channels = dependencies.channels ?? new DevelopmentChannels(config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const identity = { kind: 'integration' as const, team: config.SLACK_TEAM_ID, integration: 'development' };
   const token = Buffer.from(config.DEVELOPMENT_WORKER_TOKEN);
-  const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && actor.channel === project.channel && channels.accessible(project.channel, actor.user);
+  const visible = async (actor: Actor, project: Project) => actor.team === config.SLACK_TEAM_ID && (/^D/.test(actor.channel) || actor.channel === project.channel) && channels.accessible(project.channel, actor.user);
   const menus = new DevelopmentMenu(store, visible, clickup);
   const configuration = new DevelopmentConfiguration(store, menus, visible, clickup, config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const routing = new DevelopmentRouting(store, menus, visible, clickup);
@@ -82,7 +82,6 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     },
     menuActions: actions,
     channelActions: actions,
-    channelOnly: 'Le module Développement s’utilise dans le canal Slack du projet. Invitez le bot, puis envoyez development menu dans ce canal pour configurer les projets, choisir les dépôts, consulter le suivi ou ouvrir l’aide. Aucun traitement n’a été lancé depuis ce DM.',
     channelAccess: actor => actor.team === config.SLACK_TEAM_ID ? channels.accessible(actor.channel, actor.user) : Promise.resolve(false),
     forms: configuration.forms,
     menu: (actor, page) => /^routes?_/.test(page) ? routing.page(actor, page) : menus.page(actor, page),

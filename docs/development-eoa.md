@@ -4,7 +4,7 @@ This is the project-specific setup for the approved Orientaction pilot. The [Dev
 
 ## Project mapping
 
-Use `development menu` in the configured project Slack channel for the clickable interface. The optional command equivalent below must be sent in that same channel:
+Use `development menu` in the configured project Slack channel or in a private DM for the clickable interface. The optional command equivalent below works in either conversation; both you and the bot must belong to the configured project channel:
 
 ```text
 development configure {"id":"pilot","name":"Orientaction frontend","channel":"C0624L2EUA0","folder":"901515523304","repository":"https://gitlab.com/mayasquad/orient-action/orient-action-frontend","skill":"maintenance","enabled":true}
