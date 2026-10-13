@@ -5,9 +5,9 @@ import { JobStore } from '../../core/store.js';
 import { transaction, type Database } from '../../core/transactions.js';
 import { ownerKey, type Actor } from '../../core/identity.js';
 import { ready, repositoryKey, projectTargets, projectRepositories, type Project, type Result, type Ticket, type Work, type Run } from './domain.js';
-import { routingSchema } from './routing-store.js';
+import { routingSchema, sameDestination } from './routing-store.js';
 
-type Confirmation = { id: string; project: Project; run_id: string | null; operation: 'pause' | 'resume' | 'retry'; state: string };
+type Confirmation = { id: string; project: Project; run_id: string | null; operation: 'pause' | 'resume' | 'retry' | 'cancel_run'; state: string };
 
 export const developmentSchema = `
 CREATE TABLE IF NOT EXISTS development_projects (
@@ -144,12 +144,14 @@ export class DevelopmentStore {
   }
   private async retryLocked(sql: Sql, id: string, eventId: string, project: string, ticket?: Ticket) {
     const retryId = `retry:${eventId}`;
+    const target = (await sql.query("SELECT r.config,route.selected FROM development_runs r JOIN development_ticket_routes route ON route.team=r.team AND route.ticket=r.ticket->>'id' WHERE r.team=$1 AND r.id=$2", [this.team, id])).rows[0];
+    if (target && !(target.selected as Project[] | null)?.some(p => sameDestination(p, target.config))) return false;
     const routed = (await sql.query("SELECT 1 FROM development_runs r JOIN development_ticket_routes route ON route.team=r.team AND route.ticket=r.ticket->>'id' WHERE r.team=$1 AND r.id=$2", [this.team, id])).rows.length;
     if (routed && !(await sql.query('SELECT 1 FROM development_route_runs WHERE team=$1 AND run=$2', [this.team, id])).rows.length) return false;
     // A blocked run without a commit keeps its frozen ticket. A pushed reporting_error may be explicitly retried; the previous commit stays where it was published.
     const inserted = await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
       SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND project=$4 AND (
-        (state='blocked' AND result->>'commit' IS NULL) OR
+        (state IN ('blocked','cancelled') AND result->>'commit' IS NULL) OR
         (kind='build' AND state='reporting_error' AND result->>'outcome'='pushed' AND result->>'commit' IS NOT NULL)
       )
       AND NOT EXISTS (SELECT 1 FROM development_runs active WHERE active.team=r.team AND active.project=r.project AND active.ticket->>'id'=r.ticket->>'id' AND active.kind=r.kind AND active.repository_key=r.repository_key AND active.state IN ('queued','running','reporting'))
@@ -177,6 +179,14 @@ export class DevelopmentStore {
       if (state === 'applied') {
         if (proposal.operation === 'retry') {
           if (!current.enabled || !await this.retryLocked(sql, proposal.run_id!, `confirmation:${id}`, current.id, ticket)) state = 'unavailable';
+        } else if (proposal.operation === 'cancel_run') {
+          const run = (await sql.query("UPDATE development_runs SET state='cancelled',updated_at=now() WHERE team=$1 AND id=$2 AND project=$3 AND state='queued' AND worker IS NULL AND lease IS NULL AND attempts=0 AND result IS NULL RETURNING ticket,kind", [this.team, proposal.run_id, current.id])).rows[0];
+          if (!run) state = 'unavailable';
+          else if (run.kind === 'build') {
+            // Retain the consumed Ready authorization: polling must not undo cancellation.
+            await sql.query('UPDATE development_ticket_routes SET armed=false WHERE team=$1 AND ticket=$2', [this.team, run.ticket.id]);
+            await sql.query('UPDATE development_ticket_state SET armed=false WHERE team=$1 AND project=$2 AND ticket=$3', [this.team, current.id, run.ticket.id]);
+          }
         } else {
           await sql.query("UPDATE development_projects SET config=jsonb_set(config,'{enabled}',$3::jsonb) WHERE team=$1 AND id=$2", [this.team, current.id, JSON.stringify(proposal.operation === 'resume')]);
         }

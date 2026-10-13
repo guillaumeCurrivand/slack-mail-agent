@@ -88,6 +88,8 @@ The User approved [Yousign's complete contract](yousign.md) on 02/10/2026 and au
 
 ## Development module
 
+On 13/10/2026 the User approved guided state actions from the ticket/repository and treatment tables: revise eligible repository selections, cancel unclaimed queued work, and retry eligible runs. Each mutation needs a separate owner-bound confirmation, preserves historical results and publication safeguards, and rechecks eligibility against worker claims and concurrent edits. The [guided state contract](development.md#guided-state-actions) owns the transitions and limits; this does not enable arbitrary execution-state or ClickUp-status editing.
+
 On 12/10/2026 the User required frontend/backend maintenance to retain the same Slack channel, ClickUp Folder and List, and approved selecting both repositories for one ticket. Development now requires a separately confirmed repository choice for shared-folder tickets, supports one or several project repositories, and holds unassigned Ready for AI tickets. Each selected repository has its own run, checks and commit; the shared ticket reaches `to build` only after all selected corrections have pushed successfully. No AI repository inference or automatic rollback/merge is introduced. The [shared-ticket contract](development.md#shared-tickets-across-repositories) owns selection, atomic admission, retries and historical-work recovery.
 
 The User's 04/10/2026 authorization to use existing local `.env` files and the EOA backend/tunnel setup are recorded in the [Development environment contract](development.md#local-worker-setup) and [EOA runbook](development-eoa.md). Configuration values stay local; this does not change other Modules' access boundaries or authorize publishing secrets.

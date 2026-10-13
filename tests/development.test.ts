@@ -148,7 +148,7 @@ async function sharedProjects(h: Awaited<ReturnType<typeof harness>>) {
 async function chooseRepositories(h: Awaited<ReturnType<typeof harness>>, names = ['Projet pilote', 'Backend']) {
   const menu = await h.command('menu');
   const list = await h.click(menu, 'Tickets et dépôts');
-  const detail = await h.click(list, 'Ouvrir');
+  const detail = await h.click(list, 'À affecter');
   let picker = await h.click(detail, 'Choisir les dépôts');
   for (const name of names) picker = await h.click(picker, `Ajouter ${name}`);
   return h.click(picker, 'Vérifier les dépôts');
@@ -164,6 +164,150 @@ async function finishRepository(h: Awaited<ReturnType<typeof harness>>, projectI
 
 const backendRepository = 'https://github.com/example/backend';
 const groupedProject = () => projectSchema.parse({ ...project, folders: ['123', '456'], repositories: [project.repository, backendRepository] });
+
+async function assignment(h: Awaited<ReturnType<typeof harness>>, actor = alice) {
+  const menu = actor.channel.startsWith('D') ? await h.dm('development menu') : await h.command('menu');
+  return h.click(await h.click(menu, 'Tickets et dépôts', actor), 'Affecté — gérer', actor);
+}
+
+it('changes repository selection with confirmation, preserves retained analyses and cancels removed queued work', async () => {
+  const h = await harness(); await sharedProjects(h);
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  await h.click(await chooseRepositories(h, ['Projet pilote']), 'Confirmer les dépôts');
+  const original = (await h.store.history('pilot'))[0];
+  const page = await assignment(h);
+  let picker = await h.click(page, 'Modifier les dépôts');
+  picker = await h.click(picker, 'Ajouter Backend');
+  const confirmation = await h.click(picker, 'Vérifier les dépôts');
+  expect(await h.store.history('backend')).toHaveLength(0);
+  await h.click(confirmation, 'Confirmer les dépôts');
+  expect(await h.store.history('pilot')).toHaveLength(1);
+  expect((await h.store.history('pilot'))[0].id).toBe(original.id);
+  expect(await h.store.history('backend')).toHaveLength(1);
+  picker = await h.click(await assignment(h), 'Modifier les dépôts');
+  picker = await h.click(picker, 'Retirer Projet pilote');
+  const removal = await h.click(picker, 'Vérifier les dépôts');
+  await h.click(removal, 'Confirmer les dépôts');
+  await h.click(removal, 'Confirmer les dépôts');
+  expect((await h.store.run(original.id))!.state).toBe('cancelled');
+  expect(await h.store.history('backend')).toHaveLength(1);
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'] })).json().work).toBeNull();
+  expect(await h.store.retry(original.id, 'removed-retry', 'pilot')).toBe(false);
+  const removed = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Annulé');
+  expect(JSON.stringify(removed.blocks)).not.toContain('propose_retry');
+  expect((await h.click(removed, 'Dépôts du ticket')).text).toContain('Dépôts confirmés');
+  expect(h.statuses).toEqual([]);
+});
+
+it('rejects stale repository changes and claims that start before selection confirmation', async () => {
+  const h = await harness(); await sharedProjects(h);
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  await h.click(await chooseRepositories(h, ['Projet pilote']), 'Confirmer les dépôts');
+  const page = await assignment(h);
+  let first = await h.click(page, 'Modifier les dépôts');
+  first = await h.click(first, 'Ajouter Backend');
+  const stale = await h.click(first, 'Vérifier les dépôts');
+  let second = await h.click(page, 'Modifier les dépôts');
+  second = await h.click(second, 'Ajouter Backend');
+  await h.click(await h.click(second, 'Vérifier les dépôts'), 'Confirmer les dépôts');
+  expect((await h.click(stale, 'Confirmer les dépôts')).text).toContain('a changé');
+  let picker = await h.click(await assignment(h), 'Modifier les dépôts');
+  picker = await h.click(picker, 'Retirer Projet pilote');
+  const confirmation = await h.click(picker, 'Vérifier les dépôts');
+  const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'] })).json().work;
+  expect(work).toBeTruthy();
+  expect((await h.click(confirmation, 'Confirmer les dépôts')).text).toContain('a démarré');
+  expect((await h.store.run(work.id))!.state).toBe('running');
+  expect((await h.sql.query('SELECT jsonb_array_length(selected) AS count FROM development_ticket_routes')).rows[0].count).toBe(2);
+});
+
+it('treats unchanged repository confirmation as a no-op and supports editing privately', async () => {
+  const h = await harness(), actor = { ...alice, channel: 'DPRIVATE' }; await sharedProjects(h);
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  await h.click(await chooseRepositories(h), 'Confirmer les dépôts');
+  const picker = await h.click(await assignment(h, actor), 'Modifier les dépôts', actor);
+  const confirmation = await h.click(picker, 'Vérifier les dépôts', actor);
+  expect((await h.click(confirmation, 'Confirmer les dépôts', actor)).text).toContain('inchangés');
+  expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(2);
+});
+
+it('cancels only a queued correction, preserves its batch and permits an explicit frozen retry', async () => {
+  const h = await harness(); await sharedProjects(h); h.tasks.get('abc123')!.status = 'Ready for AI';
+  await h.poll(); await h.click(await chooseRepositories(h), 'Confirmer les dépôts'); await h.poll();
+  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'En attente du worker');
+  const proposal = await h.click(detail, 'Annuler ce traitement…');
+  expect((await h.store.history('pilot'))[0].state).toBe('queued');
+  await h.click(proposal, 'Confirmer l’annulation du traitement', { ...alice, user: 'UBOB' });
+  expect((await h.store.history('pilot'))[0].state).toBe('queued');
+  await h.click(proposal, 'Confirmer l’annulation du traitement');
+  await h.click(proposal, 'Confirmer l’annulation du traitement');
+  await h.poll();
+  expect((await h.store.history('pilot')).map(r => r.state)).toEqual(['cancelled']);
+  await finishRepository(h, 'backend');
+  expect(h.statuses).toEqual([]);
+  const cancelled = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Annulé');
+  const retry = await h.click(cancelled, 'Relancer…');
+  h.tasks.get('abc123')!.description = 'Changed after cancellation';
+  await h.click(retry, 'Confirmer la relance');
+  await h.click(proposal, 'Confirmer l’annulation du traitement');
+  const work = await finishRepository(h, 'pilot');
+  expect(work.ticket.description).toBe('Le menu ne se ferme pas au clic.');
+  expect(h.statuses).toEqual(['to build']);
+});
+
+it('refuses cancellation after a worker claim and allows cancelling queued work in a suspended project from a DM', async () => {
+  const h = await harness(), actor = { ...alice, channel: 'DPRIVATE' }; await h.configure();
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements', actor), 'En attente du worker', actor);
+  const proposal = await h.click(detail, 'Annuler ce traitement…', actor);
+  const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'] })).json().work;
+  expect((await h.click(proposal, 'Confirmer l’annulation du traitement', actor)).text).toContain('indisponible');
+  expect((await h.store.run(work.id))!.state).toBe('running');
+  await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'second');
+  await h.store.save({ ...project, enabled: false }, 'pause');
+  const queued = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements', actor), 'En attente du worker', actor);
+  await h.click(await h.click(queued, 'Annuler ce traitement…', actor), 'Confirmer l’annulation du traitement', actor);
+  expect((await h.store.history('pilot')).map(r => r.state).sort()).toEqual(['cancelled', 'running']);
+  expect(h.posts.at(-1).channel).toBe('DPRIVATE');
+});
+
+it('changes repositories within one grouped project after all queued corrections are cancelled', async () => {
+  const h = await harness(); await h.store.save(groupedProject(), 'grouped');
+  h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  await h.click(await chooseRepositories(h, ['1. project — Projet pilote', '2. backend — Projet pilote']), 'Confirmer les dépôts');
+  await h.poll();
+  const names = (await h.sql.query('SELECT * FROM development_runs')).rows;
+  expect(names).toHaveLength(2);
+  expect(JSON.stringify(await assignment(h))).not.toContain('Modifier les dépôts');
+  for (let index = 0; index < 2; index++) {
+    const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'En attente du worker');
+    await h.click(await h.click(detail, 'Annuler ce traitement…'), 'Confirmer l’annulation du traitement');
+  }
+  await h.poll();
+  expect((await h.sql.query("SELECT * FROM development_runs WHERE state='queued'")).rows).toHaveLength(0);
+  let picker = await h.click(await assignment(h), 'Modifier les dépôts');
+  picker = await h.click(picker, 'Retirer 1. project — Projet pilote');
+  await h.click(await h.click(picker, 'Vérifier les dépôts'), 'Confirmer les dépôts');
+  await h.poll(); await h.poll();
+  const queued = (await h.sql.query("SELECT * FROM development_runs WHERE state='queued'")).rows;
+  expect(queued).toHaveLength(1);
+  expect(queued[0].config.repository).toBe(backendRepository);
+  expect(names.every(run => run.ticket.description === queued[0].ticket.description)).toBe(true);
+});
+
+it('rejects expired and cross-user repository edits and preserves the current selection', async () => {
+  const h = await harness(); await sharedProjects(h);
+  const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+  await h.click(await chooseRepositories(h), 'Confirmer les dépôts');
+  let picker = await h.click(await assignment(h), 'Modifier les dépôts');
+  picker = await h.click(picker, 'Retirer Backend');
+  const confirmation = await h.click(picker, 'Vérifier les dépôts');
+  await h.click(confirmation, 'Confirmer les dépôts', { ...alice, user: 'UBOB' });
+  await h.sql.query("UPDATE development_route_proposals SET created_at=now()-interval '25 hours'");
+  await h.click(confirmation, 'Confirmer les dépôts');
+  expect((await h.sql.query('SELECT jsonb_array_length(selected) AS count FROM development_ticket_routes')).rows[0].count).toBe(2);
+  expect((await h.sql.query("SELECT * FROM development_runs WHERE state='cancelled'")).rows).toHaveLength(0);
+});
 
 it('saves and edits one project with multiple named folders and repositories through signed Slack forms', async () => {
   const h = await harness(); const { view } = await newForm(h);
@@ -399,7 +543,7 @@ it('edits project settings and confirms pause and retry privately without moving
   expect((await h.store.project('pilot'))!.name).toBe('Updated');
   await h.store.review((await h.store.project('pilot'))!, h.tasks.get('abc123')!, '1700000000.123456', 'dm-retry');
   await h.sql.query("UPDATE development_runs SET state='blocked'");
-  const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements', actor), 'Ouvrir', actor);
+  const detail = await h.click(await h.click(await h.dm('development status pilot'), 'Voir les traitements', actor), 'Bloqué', actor);
   const retry = await h.click(detail, 'Relancer…', actor);
   await h.click(retry, 'Confirmer la relance', actor);
   expect(await h.store.history('pilot')).toHaveLength(2);
@@ -434,7 +578,7 @@ it('selects both repositories privately and keeps their runs attached to the sha
   const h = await harness(), actor = { ...alice, channel: 'DPRIVATE' }; await sharedProjects(h);
   const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
   const list = await h.click(await h.dm('development menu'), 'Tickets et dépôts', actor);
-  let picker = await h.click(await h.click(list, 'Ouvrir', actor), 'Choisir les dépôts', actor);
+  let picker = await h.click(await h.click(list, 'À affecter', actor), 'Choisir les dépôts', actor);
   for (const name of ['Projet pilote', 'Backend']) picker = await h.click(picker, `Ajouter ${name}`, actor);
   const confirm = await h.click(picker, 'Vérifier les dépôts', actor);
   await h.click(confirm, 'Confirmer les dépôts', alice);
@@ -527,7 +671,7 @@ it('keeps to build pending after one blocked repository and retries only that re
   await h.poll(); await h.click(await chooseRepositories(h), 'Confirmer les dépôts'); await h.poll();
   await finishRepository(h, 'pilot'); const failed = await finishRepository(h, 'backend', 'blocked');
   await h.poll(); expect(h.statuses).toEqual([]);
-  const retry = await h.click(await h.click(await h.command('development status backend'), 'Voir les traitements'), 'Ouvrir');
+  const retry = await h.click(await h.click(await h.command('development status backend'), 'Voir les traitements'), 'Bloqué');
   await h.click(await h.click(retry, 'Relancer…'), 'Confirmer la relance');
   await finishRepository(h, 'backend');
   expect(h.statuses).toEqual(['to build']);
@@ -873,7 +1017,7 @@ it('browses projects, configuration, history and run details through signed butt
   expect(JSON.stringify(history)).toContain('Ouvrir');
   const next = await h.click(history, 'Suivant');
   expect(next.text).toContain('Page 2');
-  const run = await h.click(next, 'Ouvrir');
+  const run = await h.click(next, 'En attente du worker');
   expect(run.text).toContain('Traitement : review:browse-');
   expect(JSON.stringify(run)).toContain('https://app.clickup.com/t/abc123');
   await h.click(run, 'Actualiser');
@@ -904,7 +1048,7 @@ it('opens long legacy run identifiers through bounded controls and offers intera
   expect(setup.text).toContain('formulaire');
   await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'long-id');
   await h.sql.query("UPDATE development_runs SET id=$1,state='blocked'", ['r'.repeat(300)]);
-  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Ouvrir');
+  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Bloqué');
   expect(detail.text).toContain('r'.repeat(300));
   const confirmation = await h.click(detail, 'Relancer…');
   await h.click(confirmation, 'Confirmer la relance');
@@ -958,7 +1102,7 @@ it('cancels and confirms a blocked-run retry once while retaining its frozen req
   await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'blocked');
   await h.sql.query("UPDATE development_runs SET state='blocked',result=$1", [JSON.stringify({ outcome: 'blocked', summary: 'Service indisponible.', tests: [] })]);
   const history = await h.click(await h.command('development status pilot'), 'Voir les traitements');
-  const detail = await h.click(history, 'Ouvrir');
+  const detail = await h.click(history, 'Bloqué');
   const cancelled = await h.click(detail, 'Relancer…');
   await h.click(cancelled, 'Annuler');
   await h.click(cancelled, 'Confirmer la relance');
@@ -980,7 +1124,7 @@ it('retries an already-pushed reporting failure through a warning and confirmati
   const h = await harness(); await h.configure();
   h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
   await h.sql.query("UPDATE development_runs SET state='reporting_error',result=$1", [JSON.stringify({ outcome: 'pushed', summary: 'Poussé.', tests: ['Tests OK'], commit: 'a'.repeat(40), branch: 'maintenance/old' })]);
-  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Ouvrir');
+  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Publication à vérifier');
   expect(JSON.stringify(detail)).toContain(`/commit/${'a'.repeat(40)}`);
   const proposal = await h.click(detail, 'Relancer…');
   expect(proposal.text).toContain('maintenance/old');
@@ -996,7 +1140,7 @@ it('rechecks channel access on old controls and refuses retry after suspension',
   const h = await harness(); await h.configure();
   await h.store.review(project, h.tasks.get('abc123')!, '1700000000.000001', 'access');
   await h.sql.query("UPDATE development_runs SET state='blocked'");
-  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Ouvrir');
+  const detail = await h.click(await h.click(await h.command('development status pilot'), 'Voir les traitements'), 'Bloqué');
   const proposal = await h.click(detail, 'Relancer…');
   await h.store.save({ ...project, enabled: false }, 'pause');
   await h.click(proposal, 'Confirmer la relance');

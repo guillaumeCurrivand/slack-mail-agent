@@ -55,7 +55,7 @@ export const resultSchema = z.object({
 export type Result = z.infer<typeof resultSchema>;
 export type Run = { id: string; project: string; config: Project; kind: 'review' | 'build'; state: string; attempts: number; ticket: Ticket; result: Result | null; thread: string | null; created_at: Date; updated_at: Date };
 export const canRetry = (run: Pick<Run, 'kind' | 'state' | 'result'>) =>
-  (run.state === 'blocked' && !run.result?.commit) ||
+  (['blocked', 'cancelled'].includes(run.state) && !run.result?.commit) ||
   (run.kind === 'build' && run.state === 'reporting_error' && run.result?.outcome === 'pushed' && !!run.result.commit);
 export const commitLink = (repository: string, commit: string) => `${repository.replace(/\.git\/?$/, '').replace(/\/$/, '')}/${new URL(repository).hostname === 'github.com' ? 'commit' : '-/commit'}/${commit}`;
 export type Work = { id: string; project: Project; kind: 'review' | 'build'; ticket: Ticket; attempts: number; thread: string | null; lease: string };

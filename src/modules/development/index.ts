@@ -30,7 +30,7 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
   const menus = new DevelopmentMenu(store, visible, clickup);
   const configuration = new DevelopmentConfiguration(store, menus, visible, clickup, config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const routing = new DevelopmentRouting(store, menus, visible, clickup);
-  const actions = ['propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel', 'routing_begin', 'routing_add', 'routing_remove', 'routing_check', 'routing_confirm', 'routing_cancel', 'navigate', 'controls', 'channel_home', 'channel_ticket'];
+  const actions = ['open_run', 'propose_cancel_run', 'propose_state', 'propose_retry', 'confirm', 'cancel', 'configuration_prepare', 'configuration_open', 'configuration_save', 'configuration_cancel', 'routing_open', 'routing_begin', 'routing_add', 'routing_remove', 'routing_check', 'routing_confirm', 'routing_cancel', 'navigate', 'controls', 'channel_home', 'channel_ticket'];
   const page = (actor: Actor, destination: string) => destination === 'help' ? Promise.resolve({ kind: 'Aide — Développement', text: help }) : /^routes?_/.test(destination) ? routing.page(actor, destination) : menus.page(actor, destination);
 
   async function post(context: IntegrationContext, project: Project, text: string, thread?: string, links?: Array<{ label: string; url: string }>) {

@@ -95,4 +95,33 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
     expect(claims.filter(Boolean)).toHaveLength(2);
     expect(claims[0]!.ticket).toEqual(claims[1]!.ticket);
   });
+  it('serializes a queued cancellation against a worker claim', async () => {
+    const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+    const configured = { ...project, id: 'cancel-race', folder: '901', repository: 'https://github.com/example/cancel-race' };
+    await store.save(configured, 'cancel-race');
+    await store.review(configured, { ...ticket, id: 'cancelrace' }, '1.000001', 'cancel-race');
+    const run = (await store.history(configured.id))[0];
+    await store.propose(actor, 'cancel-race-confirm', configured, 'cancel_run', run.id);
+    const [cancelled, claimed] = await Promise.all([store.confirm(actor, 'cancel-race-confirm', false), store.claim(randomUUID(), [configured.id])]);
+    expect((await store.run(run.id))!.state).toBe(cancelled === 'applied' ? 'cancelled' : 'running');
+    expect(Boolean(claimed)).toBe(cancelled !== 'applied');
+  });
+  it('serializes repository removal against a worker claim without cancelling running work', async () => {
+    const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+    const front = { ...project, id: 'edit-front', folder: '902', repository: 'https://github.com/example/edit-front' };
+    const back = { ...front, id: 'edit-back', repository: 'https://github.com/example/edit-back' };
+    await store.save(front, 'edit-front'); await store.save(back, 'edit-back');
+    const routing = new RoutingStore(pool, 'TTEAM'), task = { ...ticket, id: 'editrace', status: 'open' };
+    await routing.ensure(front, task);
+    await routing.propose(actor, 'edit-initial', task.id, [front, back]);
+    await routing.choose(actor, 'edit-initial', front.id, true, 'edit-initial-front');
+    await routing.seal(actor, 'edit-initial'); await routing.confirm(actor, 'edit-initial', false, task);
+    await routing.propose(actor, 'edit-race', task.id, [front, back]);
+    await routing.choose(actor, 'edit-race', front.id, false, 'edit-remove');
+    await routing.choose(actor, 'edit-race', back.id, true, 'edit-add');
+    await routing.seal(actor, 'edit-race');
+    const [changed, claimed] = await Promise.all([routing.confirm(actor, 'edit-race', false, task), store.claim(randomUUID(), [front.id])]);
+    expect((await store.history(front.id))[0].state).toBe(changed === 'applied' ? 'cancelled' : 'running');
+    expect(Boolean(claimed)).toBe(changed !== 'applied');
+  });
 });

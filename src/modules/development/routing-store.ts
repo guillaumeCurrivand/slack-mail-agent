@@ -19,10 +19,13 @@ CREATE TABLE IF NOT EXISTS development_route_proposals (
 CREATE TABLE IF NOT EXISTS development_route_runs (
  team text NOT NULL, ticket text NOT NULL, cycle text NOT NULL, project text NOT NULL,
  run text NOT NULL UNIQUE, PRIMARY KEY(team,cycle,project)
-);`;
+);
+ALTER TABLE development_ticket_routes ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 0;
+ALTER TABLE development_route_proposals ADD COLUMN IF NOT EXISTS base_selection jsonb;
+ALTER TABLE development_route_proposals ADD COLUMN IF NOT EXISTS base_revision integer NOT NULL DEFAULT 0;`;
 
-export type TicketRoute = { ticket: string; folder: string; channel: string; snapshot: Ticket; thread: string | null; selected: Project[] | null; armed: boolean };
-export type RouteProposal = { id: string; ticket: string; candidates: Project[]; selected: string[]; state: string };
+export type TicketRoute = { ticket: string; folder: string; channel: string; snapshot: Ticket; thread: string | null; selected: Project[] | null; armed: boolean; revision: number };
+export type RouteProposal = { id: string; ticket: string; candidates: Project[]; selected: string[]; state: string; base_selection: Project[] | null; base_revision: number };
 // ':' cannot occur in a project ID, keeping new keys disjoint from legacy choices.
 export const destinationKey = (p: Project) => `${p.id}:${createHash('sha256').update(repositoryKey(p.repository)).digest('hex')}`;
 export const selectedDestination = (selected: string[], p: Project) => selected.includes(destinationKey(p)) || selected.includes(p.id);
@@ -47,8 +50,13 @@ export class RoutingStore {
     return route?.folder === project.folder && route.channel === project.channel ? route : undefined;
   }
   async propose(actor: Actor, id: string, ticket: string, candidates: Project[]) {
-    await this.db.query('INSERT INTO development_route_proposals(id,owner,channel,ticket,candidates) VALUES($1,$2,$3,$4,$5) ON CONFLICT DO NOTHING', [id, ownerKey(actor), actor.channel, ticket, JSON.stringify(candidates)]);
+    const route = await this.get(ticket);
+    if (!route) return;
+    await this.db.query('INSERT INTO development_route_proposals(id,owner,channel,ticket,candidates,selected,base_selection,base_revision) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING', [id, ownerKey(actor), actor.channel, ticket, JSON.stringify(candidates), JSON.stringify(candidates.filter(p => route.selected?.some(s => sameDestination(s, p))).map(destinationKey)), route.selected && JSON.stringify(route.selected), route.revision]);
     return this.proposal(actor, id);
+  }
+  async changeBlocked(ticket: string, sql: Sql = this.db) {
+    return (await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 AND (state IN ('running','reporting','reporting_error') OR result->>'commit' IS NOT NULL OR (kind='build' AND state<>'cancelled')) LIMIT 1", [this.team, ticket])).rows.length > 0;
   }
   async proposal(actor: Actor, id: string): Promise<RouteProposal | undefined> {
     return (await this.db.query("SELECT * FROM development_route_proposals WHERE id=$1 AND owner=$2 AND channel=$3 AND created_at>=now()-interval '24 hours'", [id, ownerKey(actor), actor.channel])).rows[0] as RouteProposal | undefined;
@@ -75,14 +83,24 @@ export class RoutingStore {
       const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.flatMap(row => projectTargets(row.config as Project));
       const route = (await sql.query('SELECT * FROM development_ticket_routes WHERE team=$1 AND ticket=$2 FOR UPDATE', [this.team, proposal.ticket])).rows[0] as TicketRoute | undefined;
       const selected = proposal.candidates.filter(p => selectedDestination(proposal.selected, p));
-      if (!route || route.selected || !selected.length || !ticket || ticket.id !== route.ticket ||
+      if (!route || route.revision !== proposal.base_revision || !isDeepStrictEqual(route.selected, proposal.base_selection) || !selected.length || !ticket || ticket.id !== route.ticket ||
         selected.some(p => !p.enabled || p.folder !== route.folder || p.channel !== route.channel || !isDeepStrictEqual(current.find(c => sameDestination(c, p)), p))) return 'changed';
       // Pre-routing work cannot safely be adopted into a new multi-repository authorization.
-      if ((await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 LIMIT 1", [this.team, route.ticket])).rows.length) return 'legacy';
-      await sql.query('UPDATE development_ticket_routes SET selected=$3,snapshot=$4 WHERE team=$1 AND ticket=$2', [this.team, route.ticket, JSON.stringify(selected), JSON.stringify(ticket)]);
+      if (!route.selected && (await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 LIMIT 1", [this.team, route.ticket])).rows.length) return 'legacy';
+      if (route.selected && await this.changeBlocked(route.ticket, sql)) return 'busy';
+      if (route.selected && selected.length === route.selected.length && selected.every(p => route.selected!.some(s => sameDestination(s, p)))) {
+        await sql.query("UPDATE development_route_proposals SET state='unchanged' WHERE id=$1", [id]);
+        return 'unchanged';
+      }
+      // Project locks also guard claims, so a removed queued analysis cannot start concurrently.
+      for (const previous of route.selected ?? []) if (!selected.some(p => sameDestination(p, previous))) {
+        await sql.query("UPDATE development_runs SET state='cancelled',updated_at=now() WHERE team=$1 AND ticket->>'id'=$2 AND project=$3 AND repository_key=$4 AND kind='review' AND state='queued' AND worker IS NULL AND lease IS NULL AND attempts=0 AND result IS NULL", [this.team, route.ticket, previous.id, repositoryKey(previous.repository)]);
+      }
+      await sql.query('UPDATE development_ticket_routes SET selected=$3,snapshot=$4,revision=revision+1,armed=CASE WHEN $5 THEN true ELSE armed END WHERE team=$1 AND ticket=$2', [this.team, route.ticket, JSON.stringify(selected), JSON.stringify(ticket), ready(ticket.status)]);
       await sql.query("UPDATE development_route_proposals SET state='applied' WHERE id=$1", [id]);
       // A Ready ticket is admitted by polling as one atomic batch. Otherwise selection starts analysis.
-      if (!ready(ticket.status)) await this.queue(sql, { ...route, selected }, ticket, 'review', `selection:${id}`);
+      const added = selected.filter(p => !route.selected?.some(s => sameDestination(s, p)));
+      if (!ready(ticket.status) && added.length) await this.queue(sql, { ...route, selected: added }, ticket, 'review', `selection:${id}`);
       return 'applied';
     });
   }
