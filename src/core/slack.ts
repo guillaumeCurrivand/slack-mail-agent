@@ -19,6 +19,7 @@ export const buttonDisplayLabel = (button: Button) => {
   return navigation ? `${navigationCue} ${button.label}` : button.label;
 };
 export interface Messenger {
+  replyTarget?(actor: Actor): { id: string; timestamp: string } | undefined;
   prepare?(message: AgentMessage): AgentMessage;
   send(actor: Actor, message: AgentMessage): Promise<void>;
   post?(actor: Actor, message: AgentMessage): Promise<string>;

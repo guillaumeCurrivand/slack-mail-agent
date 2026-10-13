@@ -73,7 +73,7 @@ export class JobStore {
     )
     INSERT INTO jobs(id,owner,actor,payload,module)
     SELECT $1,$2,$3,CASE WHEN slot.job_id=$1 THEN $4::jsonb
-      ELSE jsonb_build_object('type','operation_busy','operation', $7::text,'original',slot.job_id) END,
+      ELSE jsonb_build_object('type','operation_busy','operation', $7::text,'original',slot.job_id,'timestamp',$4::jsonb->'timestamp') END,
       CASE WHEN slot.job_id=$1 THEN $5 ELSE 'core' END
     FROM slot ON CONFLICT DO NOTHING`, [id, ownerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module, operation, label]);
   }

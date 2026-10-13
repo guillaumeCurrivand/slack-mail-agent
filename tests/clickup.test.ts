@@ -834,10 +834,10 @@ it('renders the result as a native Slack table with literal values and ClickUp l
 
 it('recovers a confirmed connection after definite delivery rejection without repeating its effect', async () => {
   const p = provider([]), h = harness(p.fetcher), proposal = await connect(h);
-  const post = h.messenger.post;
-  h.messenger.post = async () => { throw new SlackDeliveryRejected('rejected'); };
+  const update = h.messenger.update;
+  h.messenger.update = async () => { throw new SlackDeliveryRejected('rejected'); };
   await expect(h.click('confirm', proposal, alice, 'approve-retry')).rejects.toThrow('rejected');
-  h.messenger.post = post;
+  h.messenger.update = update;
   await h.click('confirm', proposal, alice, 'approve-retry');
   expect(h.messages.at(-1)!.text).toContain('connecté');
   await h.text('clickup tasks'); expect(h.messages.at(-1)!.text).toContain('0 tâches');

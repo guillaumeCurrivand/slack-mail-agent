@@ -134,7 +134,7 @@ The limit governs this app's recorded generation usage at its configured prices.
 
 Send `menu`, `bonjour` or `salut` in a private DM with the bot (`hello` and `hi` also work) to choose an enabled Module. Send `aide` or `help`, or click **Aide**, for the complete French guide: shared commands, enabled Module overviews and detailed capabilities, examples, prerequisites, approvals and costs. A bare Module prefix, `<prefix> aide` or `<prefix> help` opens its guide directly; Module menus also offer Help. Documentation's guide includes topic buttons for structured commands and field constraints. Reading help performs no AI or provider work. See the [help contract](docs/product-spec.md#detailed-help).
 
-Navigation updates its menu/help message; results and approvals remain separate Cards. If a menu is unavailable, send `menu` for a fresh one.
+Buttons update the clicked Card, including menus, results and approval screens; approval still requires an explicit confirmation. Typed commands start fresh messages. Shared public launchers and unavailable legacy Cards open personal controls or recovery guidance instead. See [in-place interactions](docs/product-spec.md#in-place-button-interactions). If a menu is unavailable, send `menu` for a fresh one.
 
 Every typed Module request, including a natural-language follow-up, needs its prefix. Opening a menu does not select a destination for later unprefixed messages. `mail` and its French alias `courrier` address the same Module.
 

@@ -9,16 +9,17 @@ export const configurationSchema = `CREATE TABLE IF NOT EXISTS development_confi
  id text PRIMARY KEY, owner text NOT NULL, channel text NOT NULL, base jsonb, candidate jsonb,
  state text NOT NULL DEFAULT 'editing', created_at timestamptz NOT NULL DEFAULT now()
 ); ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS thread text;
-ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS folders jsonb`;
-export type ConfigurationForm = { id: string; owner: string; channel: string; thread?: string; folders?: FolderChoice[] | null; base: Project | null; candidate: Project | null; state: string };
+ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS folders jsonb;
+ALTER TABLE development_configuration_forms ADD COLUMN IF NOT EXISTS timestamp text`;
+export type ConfigurationForm = { id: string; owner: string; channel: string; thread?: string; timestamp?: string | null; folders?: FolderChoice[] | null; base: Project | null; candidate: Project | null; state: string };
 
 export class ConfigurationStore {
   constructor(private db: Database) {}
   async get(actor: Pick<Actor, 'team' | 'user'>, id: string): Promise<ConfigurationForm | undefined> {
     return (await this.db.query("SELECT * FROM development_configuration_forms WHERE id=$1 AND owner=$2 AND created_at>=now()-interval '24 hours'", [id, ownerKey(actor)])).rows[0] as ConfigurationForm | undefined;
   }
-  async create(actor: Actor, id: string, base: Project | null, candidate = base, folders?: FolderChoice[]) {
-    await this.db.query('INSERT INTO development_configuration_forms(id,owner,channel,base,candidate,thread,folders) VALUES($1,$2,$3,$4,$5,$6,$7) ON CONFLICT DO NOTHING', [id, ownerKey(actor), actor.channel, base && JSON.stringify(base), candidate && JSON.stringify(candidate), actor.thread ?? null, folders ? JSON.stringify(folders) : null]);
+  async create(actor: Actor, id: string, base: Project | null, candidate = base, folders?: FolderChoice[], timestamp?: string) {
+    await this.db.query('INSERT INTO development_configuration_forms(id,owner,channel,base,candidate,thread,folders,timestamp) VALUES($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT DO NOTHING', [id, ownerKey(actor), actor.channel, base && JSON.stringify(base), candidate && JSON.stringify(candidate), actor.thread ?? null, folders ? JSON.stringify(folders) : null, timestamp ?? null]);
     return this.get(actor, id);
   }
   async submit(actor: Pick<Actor, 'team' | 'user'>, id: string, candidate: Project) {
@@ -27,7 +28,7 @@ export class ConfigurationStore {
       if (!form || (form.base && form.base.id !== candidate.id)) return false;
       if (form.state !== 'editing') return isDeepStrictEqual(form.candidate, candidate) && ['submitted', 'ready', 'applied'].includes(form.state);
       await sql.query("UPDATE development_configuration_forms SET candidate=$2,state='submitted' WHERE id=$1", [id, JSON.stringify(candidate)]);
-      await new JobStore(sql).enqueue(`development:configuration:${id}`, { ...actor, channel: form.channel, ...(form.thread ? { thread: form.thread } : {}) }, { type: 'configuration_validate', form: id }, 'development');
+      await new JobStore(sql).enqueue(`development:configuration:${id}`, { ...actor, channel: form.channel, ...(form.thread ? { thread: form.thread } : {}) }, { type: 'configuration_validate', form: id, ...(form.timestamp ? { timestamp: form.timestamp } : {}) }, 'development');
       return true;
     });
   }

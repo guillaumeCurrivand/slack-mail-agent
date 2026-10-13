@@ -80,7 +80,7 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     const route = modules.action(action.action_id, action.value ?? '');
     const channel = /^[CG]/.test(body.channel.id);
     if (channel && !modules.acceptsChannel(route)) return reply.code(403).send();
-    if ((route.module === 'core' && ['navigation', 'control_navigation'].includes(String(route.payload.type))) || route.payload.type === 'menu_action') {
+    if (body.message?.ts !== undefined || (route.module === 'core' && ['navigation', 'control_navigation'].includes(String(route.payload.type))) || route.payload.type === 'menu_action') {
       const timestamp = body.message?.ts;
       if (typeof timestamp !== 'string' || !/^\d+\.\d+$/.test(timestamp)) return reply.code(400).send();
       route.payload.timestamp = timestamp;
@@ -95,7 +95,7 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
         await store.enqueue(`action:${digest(raw)}`, actor, { type: 'unavailable' }, channel ? route.module : 'core');
       } else {
         if (typeof body.trigger_id !== 'string' || !body.trigger_id || body.trigger_id.length > 300) return reply.code(400).send();
-        await forms.open(actor, { value: bound.value, trigger: body.trigger_id }, `action:${digest(raw)}`);
+        await forms.open(actor, { value: bound.value, trigger: body.trigger_id, timestamp: bound.target.timestamp }, `action:${digest(raw)}`);
       }
       return { ok: true };
     }

@@ -4,6 +4,8 @@ status: accepted
 
 # Authoritative shared inventory in Documentation
 
+Presentation update, 13/10/2026: the [in-place reply decision](0013-in-place-button-replies.md) supersedes the separate result-Card display described below. Saved confirmations and authorization remain independent of the current display.
+
 During the design interview, the user selected the database as the authoritative company inventory after importing the existing spreadsheet. Independently editing both Google Sheets and the database would require synchronization and conflict rules; one authority keeps shared edits and their history consistent. Documentation will expose this shared inventory through private Agent interactions, with inventory facts and documentation links as its initial knowledge scope.
 
 The user chose to apply confirmed field changes even when another person edits the record after the preview, favoring simple collaborative editing over rejecting stale confirmations. An implementation must serialize commits, preserve unrelated fields, and record the actual before/after values atomically with each mutation. Record versions may support history but must not become a reason to reject these confirmations.

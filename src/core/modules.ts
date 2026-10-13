@@ -2,8 +2,8 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { budgetReport, type Budget } from './budget.js';
 import type { Actor, IntegrationActor } from './identity.js';
-import { sanitizeReply, type Button, type Messenger } from './slack.js';
-import { Navigation, needsControlPaging, type MenuPage } from './navigation.js';
+import type { Button, Messenger } from './slack.js';
+import { Navigation, type MenuPage } from './navigation.js';
 import type { Sql } from './store.js';
 import { logicalAction } from './presentation.js';
 
@@ -39,7 +39,7 @@ export interface AssistantModule {
   forms?: {
     openActions: readonly string[];
     callbacks: readonly string[];
-    open(actor: Actor, input: { value: string; trigger: string }, eventId: string): Promise<void>;
+    open(actor: Actor, input: { value: string; trigger: string; timestamp?: string }, eventId: string): Promise<void>;
     submit(actor: Pick<Actor, 'team' | 'user'>, view: { callback_id: string; private_metadata: string; state?: { values?: unknown } }): Promise<Record<string, unknown>>;
     suggest?(actor: Pick<Actor, 'team' | 'user'>, input: { form: string; block: string; action: string; query: string }): Promise<Record<string, unknown>>;
   };
@@ -157,10 +157,9 @@ export class ModuleRegistry {
     if (!channel && module.channelOnly) return context.messenger.send(actor, { kind: module.name, text: module.channelOnly });
     const namespace = (message: MenuPage) => namespaceMessage(message, module.id);
     let pagedMessageIndex = 0;
-    const messenger: Messenger = { prepare: namespace, send: (recipient, message) => {
+    const messenger: Messenger = { prepare: namespace, replyTarget: context.messenger.replyTarget?.bind(context.messenger), send: (recipient, message) => {
       const prepared = namespace(message);
-      if ((prepared.text.length > 10_000 || (!prepared.kind && sanitizeReply(prepared.text).length > 10_000)
-        || needsControlPaging(prepared)) && context.messenger.post && context.messenger.update)
+      if (context.messenger.post && context.messenger.update)
         return new Navigation(context.sql, context.messenger, channel ? module.id : 'core').show(recipient, `${eventId}:answer:${pagedMessageIndex++}`, prepared);
       return context.messenger.send(recipient, prepared);
     },

@@ -123,7 +123,7 @@ export class Navigation {
     return this.deliver(actor, eventId, bound.target.id, saved, bound.target, false, controlPage, textPage);
   }
 
-  async show(actor: Actor, eventId: string, page: MenuPage, target?: MenuTarget) {
+  async show(actor: Actor, eventId: string, page: MenuPage, target = this.messenger.replyTarget?.(actor)) {
     const id = target?.id ?? uid();
     const { links = [], recordChoices = [], bindButtons = false, ...content } = page;
     const rowChoices = !!content.table && recordChoices.length === content.table.rows.length;

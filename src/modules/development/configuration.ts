@@ -63,7 +63,7 @@ export class DevelopmentConfiguration {
     open: async (actor, input, eventId) => {
       if (!/^[DCG]/.test(actor.channel)) return;
       const form = await this.saved.get(actor, input.value);
-      if (!form || form.channel !== actor.channel || form.state !== 'editing' || !form.folders?.length) return this.notice(actor, eventId, expired);
+      if (!form || form.channel !== actor.channel || form.state !== 'editing' || !form.folders?.length) return this.notice(actor, eventId, expired, input.timestamp);
       // The draft holds the values and catalogue prepared for this actor.
       // No membership/ClickUp requests may consume Slack's three-second trigger here.
       const claimed = await this.store.db.query('INSERT INTO development_receipts(team,id) VALUES($1,$2) ON CONFLICT DO NOTHING RETURNING id', [actor.team, `form-open:${eventId}`]);
@@ -72,7 +72,7 @@ export class DevelopmentConfiguration {
         const response = await this.fetcher('https://slack.com/api/views.open', { method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' }, body: JSON.stringify({ trigger_id: input.trigger, view: { ...configurationView(form), external_id: `development:${eventId}` } }), signal: AbortSignal.timeout(1800) });
         if (!response.ok || !(await response.json() as { ok?: boolean }).ok) throw new Error('Form unavailable');
       } catch {
-        await this.notice(actor, eventId, 'Le formulaire n’a pas pu être ouvert avec certitude. S’il apparaît, vous pouvez le remplir. Sinon, recliquez sur Remplir le formulaire. Aucun projet modifié.');
+        await this.notice(actor, eventId, 'Le formulaire n’a pas pu être ouvert avec certitude. S’il apparaît, vous pouvez le remplir. Sinon, recliquez sur Remplir le formulaire. Aucun projet modifié.', input.timestamp, form.id);
       }
     },
     submit: async (actor, view) => {
@@ -99,8 +99,8 @@ export class DevelopmentConfiguration {
     },
   };
 
-  private notice(actor: Actor, eventId: string, text: string) {
-    return new JobStore(this.store.db).enqueue(`development:form-notice:${eventId}`, actor, { type: 'configuration_notice', text }, 'development').then(() => undefined);
+  private notice(actor: Actor, eventId: string, text: string, timestamp?: string, form?: string) {
+    return new JobStore(this.store.db).enqueue(`development:form-notice:${eventId}`, actor, { type: 'configuration_notice', text, ...(timestamp ? { timestamp } : {}), ...(form ? { form } : {}) }, 'development').then(() => undefined);
   }
 
   private async access(actor: Actor, project: Project | null) {
@@ -116,7 +116,11 @@ export class DevelopmentConfiguration {
 
   async handle(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {
     const show = (text: string, buttons: NonNullable<Parameters<DevelopmentMenu['show']>[3]['buttons']> = [], links = home) => this.menus.show(actor, eventId, context, { kind: 'Configuration — Développement', text, buttons, links });
-    if (payload.type === 'configuration_notice') return show(String(payload.text));
+    if (payload.type === 'configuration_notice') {
+      const form = typeof payload.form === 'string' ? await this.saved.get(actor, payload.form) : undefined;
+      return show(String(payload.text), form?.channel === actor.channel && form.state === 'editing'
+        ? [{ label: 'Remplir le formulaire', action: 'configuration_open', value: form.id, bound: true }] : []);
+    }
     if (payload.type === 'configuration_validate') {
       const form = await this.saved.get(actor, String(payload.form));
       if (!form || form.channel !== actor.channel || !['submitted', 'ready'].includes(form.state)) return show(expired);
@@ -147,7 +151,7 @@ export class DevelopmentConfiguration {
         if (base && !isDeepStrictEqual((await this.store.project(base.id)) ?? null, base)) return show('Configuration modifiée. Ouvrez le projet à nouveau pour récupérer ses valeurs actuelles.');
         await this.saved.finish(actor, prior.id, true);
       }
-      const form = await this.saved.create(actor, eventId, base, prior?.candidate ?? base, folders);
+      const form = await this.saved.create(actor, eventId, base, prior?.candidate ?? base, folders, bound.target.timestamp);
       if (!form || form.state !== 'editing') return show(expired);
       return show(`Le formulaire est prêt. Cliquez sur Remplir le formulaire, complétez les champs puis choisissez Vérifier. Une confirmation apparaîtra ensuite ${/^D/.test(actor.channel) ? 'dans ce message privé' : 'dans ce fil du canal'}. Aucun projet modifié à cette étape.`, [
         { label: 'Remplir le formulaire', action: 'configuration_open', value: form.id, bound: true, style: 'primary' },

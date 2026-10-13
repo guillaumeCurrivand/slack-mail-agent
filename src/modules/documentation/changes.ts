@@ -17,6 +17,13 @@ export class InventoryChanges {
   constructor(private store: DocumentationStore) {}
 
   async handle(actor: Actor, payload: Record<string, unknown>, eventId: string, source = 'Slack structured'): Promise<AgentMessage | undefined> {
+    if (payload.type === 'action' && payload.action === 'review_confirmation') {
+      const saved = typeof payload.value === 'string' ? await this.store.confirmation(actor, payload.value) : undefined;
+      if (!saved || !['create', 'edit'].includes(saved.operation)) return unavailable();
+      const operation = saved.operation as Operation;
+      return saved.applied_at || new Date(saved.created_at).getTime() + 24 * 3600_000 <= Date.now()
+        ? this.outcome(actor, saved, operation) : this.preview(actor, saved, operation);
+    }
     // Project controls predate typed records and must keep their original names.
     const action = /^confirm_(create|edit)(?:_(technology|component|host|hosting|tool))?$/.exec(String(payload.action));
     if (payload.type === 'action' && action) {
@@ -129,7 +136,7 @@ export class InventoryChanges {
 
   private async outcome(actor: Actor, saved: Confirmation, operation: Operation): Promise<AgentMessage> {
     const kind = saved.record_kind, label = recordTitle(kind), presentation = new InventoryPresentation(this.store, actor);
-    if (saved.outcome === 'archived') return { kind: 'Restauration nécessaire avant modification', text: `${label} ${literal(await presentation.name(kind, saved.target_id))} est archivé. Restaurez-le explicitement, puis réessayez cette confirmation dans son délai d’origine de 24 heures.` };
+    if (saved.outcome === 'archived') return { kind: 'Restauration nécessaire avant modification', text: `${label} ${literal(await presentation.name(kind, saved.target_id))} est archivé. Restaurez-le explicitement, puis réessayez cette confirmation dans son délai d’origine de 24 heures.`, buttons: [{ label: 'Revoir la confirmation', action: 'review_confirmation', value: saved.id }] };
     if (!saved.applied_at) return { kind: 'Confirmation expirée', text: kind === 'project' ? `Cette confirmation a expiré. Envoyez une nouvelle demande documentation ${stateLabel(operation)} pour le projet.` : `Envoyez une nouvelle demande documentation ${stateLabel(operation)} ${kind}.` };
     const values = { buttons: outcomeButtons(saved.id), table: await presentation.values(saved.fields) };
     if (kind === 'project' && operation === 'create') return { ...values, kind: 'Projet créé', text: `Projet : ${literal(String(saved.fields.name))}\nOuvrez Détails de la fiche pour consulter la fiche.` };

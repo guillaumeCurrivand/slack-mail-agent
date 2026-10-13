@@ -390,7 +390,7 @@ it.each(['project', 'tool'] as const)('pages complete %s before/after comparison
     expect(kind(await h.click(proposal, "Examiner les valeurs", bob))).toBe("Confirmation indisponible");
     expect(kind(await h.click(proposal, "Examiner les valeurs", { ...alice, channel: 'DOTHER' }))).toBe("Confirmation indisponible");
     let values = await h.click(proposal, "Examiner les valeurs");
-    expect(values.ts).not.toBe(proposal.ts);
+    expect(values.ts).toBe(proposal.ts);
     let combined = bodyText(values), count = 1;
     while (buttons(values).some(control => control.text.text === "Valeurs suivantes")) {
       values = await h.click(values, "Valeurs suivantes");
@@ -404,7 +404,12 @@ it.each(['project', 'tool'] as const)('pages complete %s before/after comparison
     }
     const after = (await sql.query('SELECT created_at,applied_at FROM documentation_confirmations WHERE id=$1', [confirmationId])).rows[0];
     expect(after).toEqual(before);
-    await h.click(proposal, "Confirmer la modification");
+    const reviewed = await h.click(values, "Retour à la confirmation");
+    expect(reviewed.ts).toBe(proposal.ts);
+    expect(button(reviewed, "Confirmer la modification").value).toBe(confirmationId);
+    expect((await sql.query('SELECT created_at,applied_at FROM documentation_confirmations WHERE id=$1', [confirmationId])).rows[0]).toEqual(before);
+    expect(kind(await h.click(values, "Retour à la confirmation", bob))).toBe("Confirmation indisponible");
+    await h.click(reviewed, "Confirmer la modification");
     expect((await sql.query('SELECT applied_at FROM documentation_confirmations WHERE id=$1', [confirmationId])).rows[0].applied_at).not.toBeNull();
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.app.close(); }
@@ -495,7 +500,8 @@ it('keeps conversational edits actor-bound and exact across overwrite races, lif
     const record = await h.click(result, "Détails de la fiche");
     expect(bodyText(record)).toContain('Description: Alice');
     expect(bodyText(record)).toContain('Notes: Preserved');
-    expect(result.method).toBe('chat.postMessage');
+    expect(result.method).toBe('chat.update');
+    expect(result.ts).toBe(proposal.ts);
     const history = await h.click(result, "Historique");
     expect(kind(history)).toBe("Historique du projet");
     const editHistory = await h.click(await h.click(history, "Suivant"), "Suivant");

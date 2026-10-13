@@ -8,7 +8,7 @@ import { schema } from '../src/app/schema.js';
 import { dispatchJob } from '../src/core/dispatch.js';
 import { createServer } from '../src/core/server.js';
 import { ModuleRegistry, type AssistantModule } from '../src/core/modules.js';
-import { Slack } from '../src/core/slack.js';
+import { menuButton, Slack } from '../src/core/slack.js';
 import { Navigation } from '../src/core/navigation.js';
 import { Vault } from '../src/core/crypto.js';
 import { JobStore, type Sql } from '../src/core/store.js';
@@ -359,21 +359,23 @@ it('starts menu work through the existing module handlers and explains missing p
     expect(buttons(mail).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
     expect(button(mail, "Trier la boîte de réception").style).toBe('primary');
     const sorting = await h.click(mail, "Trier la boîte de réception");
-    expect(sorting.method).toBe('chat.postMessage');
+    expect(sorting.method).toBe('chat.update');
+    expect(sorting.ts).toBe(mail.ts);
     expect(sorting.body.text).toContain("Connectez d’abord Gmail");
     button(sorting, 'Menu');
     const slack = await h.click(await h.click(mail, "Retour au menu"), "Messages Slack sans réponse");
     expect(buttons(slack).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
     expect(button(slack, "Chercher les messages sans réponse").style).toBe('primary');
     const search = await h.click(slack, "Chercher les messages sans réponse");
-    expect(search.method).toBe('chat.postMessage');
+    expect(search.method).toBe('chat.update');
+    expect(search.ts).toBe(slack.ts);
     expect(search.body.text).toContain('Choisissez les sources');
     button(search, 'Menu');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
 });
 
-it('runs one paid mail Preview from signed menu starts and keeps approval separate', async () => {
+it('runs one paid mail Preview in place from signed menu starts and still requires approval', async () => {
   const state = await new Store(sql).load(alice);
   state.connection = { id: 'connected', subject: 'alice', email: 'alice@example.com', encryptedTokens: new Vault(Buffer.from(mailEnv.ENCRYPTION_KEY, 'base64'))
     .seal({ access_token: 'fake', refresh_token: 'fake', expires_at: Date.now() + 3600_000 }, 'TTEAM:UALICE') };
@@ -405,9 +407,12 @@ it('runs one paid mail Preview from signed menu starts and keeps approval separa
     expect(paidCalls).toBe(1);
     const preview = h.messages.find(message => title(message) === "Aperçu")!;
     expect(preview).toBeTruthy();
+    expect(preview.method).toBe('chat.update');
+    expect(preview.ts).toBe(mail.ts);
     button(preview, "Confirmer les modifications");
     button(preview, 'Menu');
     expect(h.messages.some(message => title(message) === "Traitement en cours")).toBe(true);
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
     expect((await new Store(sql).load(alice)).runs[0].status).toBe('preview');
   } finally { await h.close(); }
 });
@@ -489,6 +494,63 @@ it('updates only the clicked menu, checks ownership and keeps module selection o
     await h.click(first, "Messages Slack sans réponse", alice, second.ts);
     expect(h.messages.filter(message => message.method === 'chat.update')).toHaveLength(updates);
     expect((await h.dm('channels')).body.text).toContain("préfixe");
+  } finally { await h.close(); }
+});
+
+it('keeps module replies, nested screens and Menu on the clicked card while typed requests open fresh cards', async () => {
+  const sample: AssistantModule = {
+    id: 'sample', description: 'Test module',
+    async handle(actor, payload, eventId, context) {
+      if (payload.action === 'open') return new Navigation(context.sql, context.messenger).show(actor, eventId,
+        { kind: 'Detail', text: 'Saved details', buttons: [menuButton] });
+      await context.messenger.send(actor, { kind: 'Result', text: 'Saved result', buttons: [{ label: 'Open', action: 'open', value: 'record' }, menuButton] });
+    },
+  };
+  const h = await harness(env, [sample]);
+  try {
+    const first = await h.dm('sample result'), second = await h.dm('sample result');
+    expect(first.ts).not.toBe(second.ts);
+    const detail = await h.click(first, 'Open');
+    expect(detail.method).toBe('chat.update');
+    expect(detail.ts).toBe(first.ts);
+    expect(detail.body.text).toContain('Saved details');
+    const main = await h.click(detail, 'Menu');
+    expect(main.method).toBe('chat.update');
+    expect(main.ts).toBe(first.ts);
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(2);
+    // Neither a different User nor an unrecorded legacy message is an update target.
+    const other = await h.click(second, 'Menu', bob);
+    expect(other.method).toBe('chat.postMessage');
+    expect(other.body.channel).toBe(bob.channel);
+    const legacy = await h.click(second, 'Menu', alice, '1700000000.999999');
+    expect(legacy.method).toBe('chat.postMessage');
+    expect(legacy.ts).not.toBe('1700000000.999999');
+  } finally { await h.close(); }
+});
+
+it('retries rejected workflow updates without reposting and does not replay uncertain updates', async () => {
+  const sample: AssistantModule = { id: 'sample', description: 'Test module',
+    async handle(actor, payload, _eventId, context) {
+      await context.messenger.send(actor, { text: payload.type === 'action' ? 'Updated result' : 'Initial result',
+        buttons: [{ label: 'Refresh', action: 'refresh', value: 'record' }, menuButton] });
+    },
+  };
+  const h = await harness(env, [sample]);
+  try {
+    const first = await h.dm('sample result');
+    h.failNext('reject');
+    await expect(h.click(first, 'Refresh')).rejects.toThrow('rejected');
+    expect((await sql.query('SELECT content FROM core_navigation_menus WHERE timestamp=$1', [first.ts])).rows[0].content.text).toBe('Initial result');
+    const updated = await h.drain();
+    expect(updated.method).toBe('chat.update');
+    expect(updated.ts).toBe(first.ts);
+    expect(updated.body.text).toContain('Updated result');
+    h.failNext('uncertain');
+    await expect(h.click(updated, 'Refresh')).rejects.toThrow('Connection lost');
+    const count = h.messages.length;
+    await h.drain();
+    expect(h.messages).toHaveLength(count);
+    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
   } finally { await h.close(); }
 });
 
@@ -617,7 +679,8 @@ it('connects through the existing invitation and confirms disconnect without era
     const connection = await h.click(mail, "Connexion Gmail");
     expect(connection.body.text).toContain("n’est pas connecté");
     const invitation = await h.click(connection, "Connecter Gmail");
-    expect(invitation.method).toBe('chat.postMessage');
+    expect(invitation.method).toBe('chat.update');
+    expect(invitation.ts).toBe(connection.ts);
     expect(invitation.body.text).toContain('à usage unique');
     const connectUrl = richParts(invitation).find((part: any) => part.type === 'link').url;
     const path = new URL(connectUrl).pathname + new URL(connectUrl).search;
@@ -627,8 +690,8 @@ it('connects through the existing invitation and confirms disconnect without era
     expect((await h.get(path)).statusCode).toBe(400);
     expect((await h.click(mail, "Connexion Gmail")).body.text).toContain("n’est pas connecté");
     const returned = await h.click(invitation, 'Menu');
-    expect(returned.method).toBe('chat.postMessage');
-    expect(returned.ts).not.toBe(invitation.ts);
+    expect(returned.method).toBe('chat.update');
+    expect(returned.ts).toBe(invitation.ts);
 
     const store = new Store(sql), state = await store.load(alice);
     state.connection = { id: 'connection-1', subject: 'google-alice', email: 'alice@example.com', encryptedTokens: 'unused' };
@@ -755,7 +818,7 @@ it('requires the originating User to approve the mailbox after the complete menu
   } finally { await h.close(); }
 });
 
-it('browses mail rules in place and posts Add/Edit instructions without changing saved state or routing', async () => {
+it('browses mail rules and Add/Edit instructions in place without changing saved state or routing', async () => {
   const h = await harness(mailEnv);
   try {
     const store = new Store(sql), state = await store.load(alice);
@@ -770,7 +833,8 @@ it('browses mail rules in place and posts Add/Edit instructions without changing
     expect(next.ts).toBe(rules.ts);
     expect(next.body.text).toContain('Priority 3');
     const edit = await h.click(next, "Modifier 1");
-    expect(edit.method).toBe('chat.postMessage');
+    expect(edit.method).toBe('chat.update');
+    expect(edit.ts).toBe(next.ts);
     expect(edit.body.text).toContain('courrier');
     expect(edit.body.text).toContain('rule-3');
     expect((await h.click(rules, "Ajouter une règle")).body.text).toContain('courrier');
@@ -801,7 +865,8 @@ it('offers starter rules and removal as separately approved Proposals, then reop
     expect((await h.click(mail, "Gérer les règles")).body.text).toContain("Aucune règle approuvée");
     const pending = await h.click(await h.click(mail, "Retour au menu").then(main => h.click(main, "Tri des e-mails")), "Approbations en attente");
     const reopened = await h.click(pending, "Ouvrir 1");
-    expect(reopened.method).toBe('chat.postMessage');
+    expect(reopened.method).toBe('chat.update');
+    expect(reopened.ts).toBe(pending.ts);
     expect(button(reopened, "Approuver les règles").value).toBe(approval.value);
     expect(reopened.body.text).toContain('Exemples :');
     expect((await h.click(reopened, "Approuver les règles", bob)).body.text).toContain('indisponible');
@@ -842,7 +907,8 @@ it('reopens saved Previews and Reports without renewing them and excludes stale 
     expect(next.body.text).toContain('preview-1');
     expect(next.body.text).not.toMatch(/expired|wrong-version|disconnected/);
     const reopened = await h.click(next, "Ouvrir 2");
-    expect(reopened.method).toBe('chat.postMessage');
+    expect(reopened.method).toBe('chat.update');
+    expect(reopened.ts).toBe(next.ts);
     expect(button(reopened, "Confirmer les modifications").value).toBe('preview-1');
     expect((await h.click(next, "Ouvrir 2", bob)).body.text).toContain('indisponible');
     const report = await h.click(mail, "Dernier rapport");

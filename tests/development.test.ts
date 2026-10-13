@@ -457,7 +457,9 @@ it('creates a project through channel controls and returns modal validation to t
   expect((await h.submit(view, { ...project, channel: 'COTHER' })).statusCode).toBe(200);
   await h.run(`development:configuration:${view.private_metadata}`);
   expect(await h.store.project('pilot')).toBeUndefined();
+  expect(h.posts.at(-1).ts).toBe(prepared.ts);
   await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  expect(h.posts.at(-1).ts).toBe(prepared.ts);
   expect(await h.store.project('pilot')).toEqual(project);
   expect(h.posts.every(post => post.channel === 'CPROJECT' && post.thread_ts === '1700000000.123456')).toBe(true);
   expect(JSON.stringify(h.posts)).not.toContain('core:navigate');
@@ -779,6 +781,7 @@ it('creates a project entirely through the signed form, validates asynchronously
   await h.run(`development:configuration:${view.private_metadata}`);
   const confirmation = h.posts.at(-1);
   expect(confirmation.text).toContain('Maya / Projets / Maintenance (123)');
+  expect(confirmation.ts).toBe(prepared.ts);
   expect(await h.store.project('pilot')).toBeUndefined();
   await h.click(confirmation, 'Enregistrer la configuration');
   expect(await h.store.project('pilot')).toEqual({ ...project, enabled: false });
@@ -994,10 +997,15 @@ it('does not replay an uncertain modal open and allows a fresh click without pro
   await h.click(prepared, 'Remplir le formulaire', alice, prepared.ts, id);
   await h.click(prepared, 'Remplir le formulaire', alice, prepared.ts, id);
   expect(h.views).toHaveLength(1);
-  await h.click(prepared, 'Remplir le formulaire');
+  expect(h.requests.slice(requestsBeforeOpening).filter(request => request.startsWith('/api/conversations.') || request.startsWith('/api/v2'))).toEqual([]);
+  const notice = (await h.sql.query("SELECT id FROM jobs WHERE payload->>'type'='configuration_notice'")).rows[0]!;
+  await h.run(notice.id);
+  expect(h.posts.at(-1).ts).toBe(prepared.ts);
+  const requestsBeforeRetry = h.requests.length;
+  await h.click(h.posts.at(-1), 'Remplir le formulaire');
   expect(h.views).toHaveLength(2);
   expect(h.views[0].external_id).not.toBe(h.views[1].external_id);
-  expect(h.requests.slice(requestsBeforeOpening).filter(request => request.startsWith('/api/conversations.') || request.startsWith('/api/v2'))).toEqual([]);
+  expect(h.requests.slice(requestsBeforeRetry).filter(request => request.startsWith('/api/conversations.') || request.startsWith('/api/v2'))).toEqual([]);
 });
 
 it('browses projects, configuration, history and run details through signed buttons without starting work', async () => {
@@ -1030,7 +1038,7 @@ it('confirms pause/resume separately, preserves configuration and cannot replay 
   const h = await harness(); await h.configure();
   const page = await h.command('development status pilot');
   const pause = await h.click(page, 'Suspendre le projet');
-  expect(pause.ts).not.toBe(page.ts);
+  expect(pause.ts).toBe(page.ts);
   expect((await h.store.project('pilot'))!.enabled).toBe(true);
   const paused = await h.click(pause, 'Confirmer la suspension');
   expect(await h.store.project('pilot')).toEqual({ ...project, enabled: false });
