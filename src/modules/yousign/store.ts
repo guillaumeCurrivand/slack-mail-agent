@@ -150,9 +150,9 @@ export class YousignStore {
           AND (d.status='sending' OR d.cause IS NOT NULL))`, this.scope);
     await this.database.query("UPDATE yousign_events e SET finished_at=COALESCE(finished_at,now()) WHERE team=$1 AND integration=$2 AND id=$3 AND NOT EXISTS(SELECT 1 FROM yousign_deliveries d WHERE d.event=e.id AND d.status IN ('queued','sending'))", [...this.scope, event]);
   }
-  async history(channels: string[], offset: number) {
+  async history(channels: string[], offset: number, attentionOnly = false) {
     return (await this.database.query(`SELECT d.*,e.summary,e.created_at FROM yousign_deliveries d JOIN yousign_events e ON e.id=d.event
-      WHERE d.team=$1 AND d.integration=$2 AND d.channel_id=ANY($3::text[]) ORDER BY e.created_at DESC,d.id LIMIT 9 OFFSET $4`, [...this.scope, channels, offset])).rows as Delivery[];
+      WHERE d.team=$1 AND d.integration=$2 AND d.channel_id=ANY($3::text[]) AND (NOT $5::boolean OR d.status IN ('uncertain','failed')) ORDER BY e.created_at DESC,d.id LIMIT 9 OFFSET $4`, [...this.scope, channels, offset, attentionOnly])).rows as Delivery[];
   }
   async lastReceipt(): Promise<Date | undefined> {
     return (await this.database.query('SELECT created_at FROM yousign_events WHERE team=$1 AND integration=$2 ORDER BY created_at DESC LIMIT 1', this.scope)).rows[0]?.created_at;

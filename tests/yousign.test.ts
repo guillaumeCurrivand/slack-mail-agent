@@ -305,14 +305,24 @@ it('does not repeat uncertain effects and requires exact actor/DM-bound confirma
   const body = event(); await h.webhook(body); await h.deliver(); await h.webhook(body); await h.deliver();
   expect(h.posts.filter(post => post.channel === 'CPUBLIC')).toHaveLength(1);
   expect((await h.sql.query('SELECT status FROM yousign_deliveries')).rows[0].status).toBe('uncertain');
-  const status = await h.text('yousign statut'); const proposal = await h.click(status, 'Examiner #sales');
+  await h.webhook(event('signature_request.done')); await h.deliver();
+  const status = await h.text('yousign statut');
+  const attention = await h.click(status, 'À examiner');
+  expect(attention.ts).toBe(status.ts);
+  expect(JSON.stringify(attention.blocks)).toContain('signer.done');
+  expect(JSON.stringify(attention.blocks)).not.toContain('signature_request.done');
+  expect(attention.blocks.find(block => block.type === 'data_table').rows).toHaveLength(2);
+  const proposal = await h.click(attention, 'Examiner #sales');
+  expect(proposal.ts).toBe(status.ts);
   expect(proposal.text).toContain('Contrat'); expect(proposal.text).toContain('doublon');
   await h.click(proposal, 'Confirmer cette relance', bob);
   expect((await h.pending()).rows).toHaveLength(0);
-  await h.click(proposal, 'Confirmer cette relance'); await h.click(proposal, 'Confirmer cette relance'); await h.deliver();
-  expect(h.posts.filter(post => post.channel === 'CPUBLIC')).toHaveLength(2);
+  const confirmed = await h.click(proposal, 'Confirmer cette relance');
+  expect(confirmed.ts).toBe(status.ts);
   await h.click(proposal, 'Confirmer cette relance'); await h.deliver();
-  expect(h.posts.filter(post => post.channel === 'CPUBLIC')).toHaveLength(2);
+  expect(h.posts.filter(post => post.channel === 'CPUBLIC')).toHaveLength(3);
+  await h.click(proposal, 'Confirmer cette relance'); await h.deliver();
+  expect(h.posts.filter(post => post.channel === 'CPUBLIC')).toHaveLength(3);
 });
 
 it('withholds private status details and invalidates an uncertain resend after channel removal or expiry', async () => {

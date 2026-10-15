@@ -385,6 +385,15 @@ it('lists an unanswered direct mention from a selected channel in a private repl
     expect(result.message.text).toContain('Bob');
     expect(result.message.text).toContain('the report is ready');
     expect(result.message.text).toContain('https://example.slack.com/archives/CPUBLIC/p123');
+    expect(result.message.text).toContain('Recherche demandée le');
+    const again = result.message.buttons!.find(button => button.label === 'Chercher à nouveau')!;
+    const refreshed = await h.click(again);
+    expect(refreshed.ts).toBe(result.ts);
+    expect((await sql.query('SELECT count(*)::int AS n FROM slack_unanswered_results')).rows[0].n).toBe(2);
+    const selection = await h.click(refreshed.message.buttons!.find(button => button.label === 'Choisir les canaux')!);
+    expect(selection.ts).toBe(result.ts);
+    expect(selection.message.text).toContain('general');
+    expect((await sql.query('SELECT count(*)::int AS n FROM ai_calls')).rows[0].n).toBe(0);
   } finally { await h.close(); }
 });
 

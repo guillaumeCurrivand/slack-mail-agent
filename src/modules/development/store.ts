@@ -198,6 +198,9 @@ export class DevelopmentStore {
   async historyPage(project: string, page: number, size = 8): Promise<Run[]> {
     return (await this.db.query('SELECT * FROM development_runs WHERE team=$1 AND project=$2 ORDER BY created_at DESC,id DESC LIMIT $3 OFFSET $4', [this.team, project, size + 1, page * size])).rows as Run[];
   }
+  async ticketHistoryPage(ticket: string, channel: string, page: number, size = 8): Promise<Run[]> {
+    return (await this.db.query("SELECT * FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 AND config->>'channel'=$3 ORDER BY created_at DESC,id DESC LIMIT $4 OFFSET $5", [this.team, ticket, channel, size + 1, page * size])).rows as Run[];
+  }
   async history(project: string) { return (await this.db.query('SELECT id,kind,state,attempts,ticket,result FROM development_runs WHERE team=$1 AND project=$2 ORDER BY created_at DESC LIMIT 10', [this.team, project])).rows; }
   async frozen(project: string, ticket: string) {
     return (await this.db.query("SELECT 1 FROM development_runs WHERE team=$1 AND project=$2 AND ticket->>'id'=$3 AND kind='build' AND state IN ('queued','running','reporting') LIMIT 1", [this.team, project, ticket])).rows.length > 0;

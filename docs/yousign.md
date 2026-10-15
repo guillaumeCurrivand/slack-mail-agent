@@ -14,6 +14,8 @@ Notifications contain the event, request name or safe resource identifier when s
 
 ## Commands and status
 
+The menu separates **À examiner** (uncertain and terminally failed deliveries) from **Statut** (all history). Both use paginated tables with row-local **Examiner** or **Réessayer** controls when eligible, current channel-access checks, and in-place navigation. A failed delivery awaiting its automatic retry remains in ordinary history. The uncertain-resend confirmation below remains mandatory.
+
 | Purpose | French | English |
 | --- | --- | --- |
 | Shared destinations | `yousign canaux` | `yousign channels` |

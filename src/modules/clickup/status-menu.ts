@@ -98,7 +98,7 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
     await context.store.edit(actor, editor, eventId, data);
   } else if (command === 'status_cancel') {
     await context.store.edit(actor, editor, eventId, data, 'cancelled');
-    return show({ kind: 'Statuts ClickUp', text: 'Sélecteur fermé. Vos modifications enregistrées sont conservées.' });
+    return show({ kind: 'Statuts ClickUp', bindButtons: true, text: 'Sélecteur fermé. Vos modifications enregistrées sont conservées. Voir mes tâches récupère un nouvel instantané avec votre filtre actuel.', buttons: [{ label: 'Voir mes tâches', action: 'tasks', value: 'tasks', style: 'primary' }] });
   } else if (command === 'status_save') {
     if (!data.catalogue.complete) notice = 'La liste des statuts est incomplète. Réessayez avant d’enregistrer.';
     else if (data.filter.mode === 'custom' && !data.filter.names.length) notice = 'Sélectionnez au moins un statut ou réinitialisez le filtre.';

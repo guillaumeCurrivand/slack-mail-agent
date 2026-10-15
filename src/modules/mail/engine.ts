@@ -242,7 +242,7 @@ export class Engine {
     }).join('\n\n');
     if (page > 0) buttons.push({ label: "Précédent", action: 'details', value: `${id}:${page - 1}` });
     if ((page + 1) * 5 < run.items.length) buttons.push({ label: "Suivant", action: 'details', value: `${id}:${page + 1}` });
-    if (run.status === 'preview') buttons.push({ label: "Confirmer la proposition examinée", action: 'confirm_run', value: id, style: 'primary' });
+    if (run.status === 'preview') buttons.push({ label: "Confirmer la proposition examinée", action: 'confirm_run', value: id, style: 'primary' }, { label: 'Retour à l’aperçu', action: 'reopen_preview', value: id });
     return this.sendCard(actor, "Détails", `Traitement ${escapeCardValue(id)} — page ${page + 1}/${Math.max(1, Math.ceil(run.items.length / 5))}\n\n${run.language === 'fr' ? '' : `${retainedTextNotice}\n\n`}${text || "Aucun message."}`, buttons);
   }
   private async apply(actor: Actor, state: UserState, run: Run) {

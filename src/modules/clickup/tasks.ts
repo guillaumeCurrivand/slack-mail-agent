@@ -73,6 +73,7 @@ export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connecti
   if (page > 0) buttons.push({ label: 'Précédent', action: 'page', value: `${sourceId}|${page - 1}` });
   if (page + 1 < count) buttons.push({ label: 'Suivant', action: 'page', value: `${sourceId}|${page + 1}` });
   buttons.push({ label: 'Actualiser', action: 'tasks', value: 'tasks' });
+  buttons.push({ label: 'Choisir les statuts', action: 'statuses', value: 'statuses' });
   if (!scan.complete) buttons.push({ label: 'Réessayer', action: 'tasks', value: 'tasks' });
   const text = [
     scan.complete ? `${formatNumber(scan.tasks.length)} tâches · Page ${formatNumber(page + 1)}/${formatNumber(count)}.` : `Résultats incomplets : ${formatNumber(scan.tasks.length)} tâches récupérées · Page ${formatNumber(page + 1)}/${formatNumber(count)}.`,

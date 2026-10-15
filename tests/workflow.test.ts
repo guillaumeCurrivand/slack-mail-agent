@@ -467,6 +467,7 @@ describe('Run Cards', () => {
       { label: 'Laisser 5 sans modification', action: 'skip_item', value: `${run.id}:m5:0` },
       { label: "Suivant", action: 'details', value: `${run.id}:1` },
       { label: "Confirmer la proposition examinée", action: 'confirm_run', value: run.id, style: 'primary' },
+      { label: 'Retour à l’aperçu', action: 'reopen_preview', value: run.id },
     ]);
 
     await action(h, 'details', `${run.id}:1`);
@@ -479,6 +480,7 @@ describe('Run Cards', () => {
       { label: 'Laisser 1 sans modification', action: 'skip_item', value: `${run.id}:m6:1` },
       { label: "Précédent", action: 'details', value: `${run.id}:0` },
       { label: "Confirmer la proposition examinée", action: 'confirm_run', value: run.id, style: 'primary' },
+      { label: 'Retour à l’aperçu', action: 'reopen_preview', value: run.id },
     ]);
   });
 

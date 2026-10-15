@@ -176,6 +176,15 @@ it('changes repository selection with confirmation, preserves retained analyses 
   await h.click(await chooseRepositories(h, ['Projet pilote']), 'Confirmer les dépôts');
   const original = (await h.store.history('pilot'))[0];
   const page = await assignment(h);
+  const ticketRuns = await h.click(page, 'Traitements du ticket');
+  expect(ticketRuns.ts).toBe(page.ts);
+  const treatment = await h.click(ticketRuns, 'En attente du worker');
+  expect(treatment.ts).toBe(page.ts);
+  expect(JSON.stringify(treatment.blocks)).toContain('Annuler ce traitement');
+  const ticket = await h.click(await h.click(treatment, 'Traitements du ticket'), 'Retour au ticket');
+  expect(ticket.ts).toBe(page.ts);
+  expect(ticket.text).toContain('Dépôts confirmés');
+  expect(await h.store.history('pilot')).toHaveLength(1);
   let picker = await h.click(page, 'Modifier les dépôts');
   picker = await h.click(picker, 'Ajouter Backend');
   const confirmation = await h.click(picker, 'Vérifier les dépôts');
@@ -445,6 +454,23 @@ it.each(['pause', 'remove-folder'])('holds grouped queued runs after %s', async 
     await h.click(await h.click(detail, 'Suspendre le projet'), 'Confirmer la suspension');
   } else await h.store.save({ ...groupedProject(), folders: ['123'] }, 'removed');
   expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [{ id: 'pilot', repository: backendRepository, skill: 'maintenance' }] })).json().work).toBeNull();
+});
+
+it('returns to the Development channel menu on the clicked message without replacing another screen', async () => {
+  const h = await harness();
+  const first = await h.command('development menu');
+  const second = await h.command('development menu');
+  const list = await h.click(first, 'Projets et traitements');
+  expect(list.ts).toBe(first.ts);
+  const home = await h.click(list, 'Retour au menu');
+  expect(home.ts).toBe(first.ts);
+  expect(home.thread_ts).toBe(first.thread_ts);
+  expect(home.text).toContain('Suivez vos projets');
+  expect(new Set(h.posts.map(post => post.ts))).toEqual(new Set([first.ts, second.ts]));
+  // Another member may open personal controls, but cannot overwrite this screen.
+  const personal = await h.click(home, 'Retour au menu', { ...alice, user: 'UBOB' });
+  expect(personal.ts).not.toBe(first.ts);
+  expect(personal.ts).not.toBe(second.ts);
 });
 
 it('creates a project through channel controls and returns modal validation to the initiating thread', async () => {

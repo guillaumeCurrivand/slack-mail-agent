@@ -684,7 +684,18 @@ it('routes signed French status commands and editor controls through Slack ingre
     const click = (await sql.query("SELECT * FROM jobs WHERE id LIKE 'action:%'")).rows[0];
     expect(click.payload.action).toBe('status_add');
     await h.run(click, click.actor, click.id); expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
+    expect(h.messages.at(-1)!.timestamp).toBe(picker.timestamp);
+    await h.click('status_cancel');
+    const closed = h.messages.at(-1)!, tasks = (await h.controls(closed)).find(button => button.label === 'Voir mes tâches')!;
+    const start = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: closed.timestamp }, actions: [{ action_id: tasks.action, value: tasks.value }] }) }).toString();
+    expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: start, headers: { ...signed(start), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
+    const started = (await sql.query("SELECT * FROM jobs WHERE module='clickup' AND payload->>'action'='tasks'")).rows[0];
+    await h.run(started, started.actor, started.id);
+    expect(h.messages.at(-1)!.timestamp).toBe(picker.timestamp);
+    expect(h.messages.at(-1)!.text).toContain('Closed');
+    expect((await h.controls(h.messages.at(-1)!)).some(button => button.label === 'Choisir les statuts')).toBe(true);
     await h.text('clickup statuses');
+    expect(h.messages.at(-1)!.timestamp).not.toBe(picker.timestamp);
     expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
   } finally { await app.close(); }
 });

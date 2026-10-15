@@ -25,9 +25,9 @@ export function mailMenu(state: UserState, page: string): MenuPage {
     const pages = Math.max(1, Math.ceil(state.rules.length / PAGE_SIZE));
     const current = Math.min(Number(rulesPage[1]), pages - 1);
     const visible = state.rules.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
-    const buttons: Button[] = [{ label: "Ajouter une règle", action: 'menu_add_rule', value: '', style: 'primary' }, { label: "Modèles de règles", action: 'menu_starters', value: '' }];
+    const buttons: Button[] = [{ label: "Ajouter une règle", action: 'form_prepare', value: 'new', bound: true, style: 'primary' }, { label: "Modèles de règles", action: 'menu_starters', value: '' }];
     const descriptions = visible.map((rule, index) => {
-      buttons.push({ label: `Modifier ${index + 1}`, action: 'menu_edit_rule', value: rule.id }, { label: `Retirer ${index + 1}`, action: 'menu_remove_rule', value: rule.id });
+      buttons.push({ label: `Modifier ${index + 1}`, action: 'form_prepare', value: rule.id, bound: true }, { label: `Retirer ${index + 1}`, action: 'menu_remove_rule', value: rule.id });
       return `${index + 1}. ${summary(rule.name, 100)} [${summary(rule.id, 100)}]\n${summary(rule.condition, 500)}\nAction : ${stateLabel(rule.action)} ; libellés : ${rule.labels.slice(0, 3).map(label => summary(label, 100)).join(', ') || 'aucun'}${rule.labels.length > 3 ? ` (+${rule.labels.length - 3} de plus)` : ''}\nExpéditeurs : ${rule.senders.slice(0, 3).map(sender => summary(sender, 120)).join(', ') || "analyse du contenu"}${rule.senders.length > 3 ? ` (+${rule.senders.length - 3} de plus)` : ''}`;
     });
     return { kind: "Gérer les règles", text: `Vos règles — page ${current + 1}/${pages}\nLes conditions, libellés et listes d’expéditeurs longs sont résumés.\n\n${descriptions.join('\n\n') || "Aucune règle approuvée. Ajoutez une règle ou examinez les modèles."}`, buttons,
@@ -44,8 +44,8 @@ export function mailMenu(state: UserState, page: string): MenuPage {
       links: [...(current > 0 ? [{ label: "Précédent", page: `pending-${current - 1}` }] : []), ...(current + 1 < pages ? [{ label: "Suivant", page: `pending-${current + 1}` }] : []), ...back],
     };
   }
-  return { kind: "Tri des e-mails", text: `${status}\nCommandes : courrier trier, courrier règles, courrier modèles, courrier rapport. Décrivez vos règles avec le préfixe courrier. Le tri prépare un aperçu ; les modifications de la boîte nécessitent une approbation séparée.`,
-    buttons: [{ label: "Trier la boîte de réception", action: 'sort_inbox', value: 'sort', bound: true, style: 'primary' }, { label: "Dernier rapport", action: 'menu_latest_report', value: '' }],
+  return { kind: "Tri des e-mails", text: `${status}\nProchaine étape : ${!state.connection ? 'connectez Gmail.' : !state.rules.length ? 'ajoutez une règle ou examinez les modèles, puis approuvez la proposition.' : 'triez la boîte de réception pour préparer un aperçu.'}\nCommandes : courrier trier, courrier règles, courrier modèles, courrier rapport. Le tri prépare un aperçu ; les modifications de la boîte nécessitent une approbation séparée.`,
+    buttons: [...(!state.connection ? [{ label: 'Connecter Gmail', action: 'menu_connect', value: '', style: 'primary' as const }] : !state.rules.length ? [{ label: 'Ajouter une règle', action: 'form_prepare', value: 'new', bound: true, style: 'primary' as const }, { label: 'Modèles de règles', action: 'menu_starters', value: '' }] : []), { label: "Trier la boîte de réception", action: 'sort_inbox', value: 'sort', bound: true, ...(state.connection && state.rules.length ? { style: 'primary' as const } : {}) }, { label: "Dernier rapport", action: 'menu_latest_report', value: '' }],
     links: [{ label: "Gérer les règles", page: 'rules-0' }, ...(pending.length ? [{ label: "Approbations en attente", page: 'pending-0' }] : []), { label: "Connexion Gmail", page: 'connection' }],
   };
 }

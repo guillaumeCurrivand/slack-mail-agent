@@ -65,7 +65,7 @@ export class DevelopmentMenu {
       const selected = !route || (route.selected as Project[] | null)?.some(p => sameDestination(p, run.config));
       return { kind: `${run.kind === 'build' ? 'Correction' : 'Analyse'} — ${run.ticket.name}`, text: `Projet : ${project.name}\nDépôt : ${run.config.repository}\nTraitement : ${run.id}\nÉtat : ${labels[run.state] ?? run.state}\nEssais : ${run.attempts}/2\nMis à jour : ${formatDate(run.updated_at)}\n\n${result?.summary ?? (run.state === 'cancelled' ? 'Traitement annulé avant sa prise en charge. Relancer… permet une nouvelle demande explicite si le dépôt est toujours affecté au ticket.' : 'Le worker local prendra en charge la demande. Aucun résultat enregistré.')}${result?.tests.length ? `\n\nVérifications :\n${result.tests.join('\n')}` : ''}${result?.commit ? `\n\nCommit : ${result.commit}\nBranche : ${result.branch ?? 'maintenance'}` : ''}\n\n${run.state === 'reporting_error' ? 'Vérifiez les publications ClickUp/Slack avant toute relance. Un commit déjà poussé reste sur sa branche ; une relance lance du nouveau travail.' : result?.outcome === 'actionable' ? 'Ouvrez le ticket et sélectionnez Ready for AI pour autoriser la correction.' : result?.outcome === 'pushed' ? 'Créez le PR/MR, faites relire, fusionnez et déployez selon votre procédure.' : run.state === 'blocked' ? 'Corrigez le blocage avant de relancer. La relance conserve les exigences figées ; pour les changer, faites observer un autre statut puis Ready for AI.' : 'Actualiser relit uniquement le suivi enregistré.'}`,
         resourceLinks: [{ label: 'Ouvrir le ticket ClickUp', url: run.ticket.url }, ...(result?.commit ? [{ label: 'Ouvrir le commit', url: commitLink(run.config.repository, result.commit) }] : [])],
-        links: [{ label: 'Actualiser', page }, ...(route ? [{ label: 'Dépôts du ticket', page: `route_${run.ticket.id}` }] : []), { label: 'Retour aux traitements', page: `history_${project.id}_0` }, { label: 'Retour au projet', page: projectPage(project.id) }],
+        links: [{ label: 'Actualiser', page }, ...(route ? [{ label: 'Dépôts du ticket', page: `route_${run.ticket.id}` }, { label: 'Traitements du ticket', page: `route_runs_${run.ticket.id}_0` }] : []), { label: 'Retour aux traitements', page: `history_${project.id}_0` }, { label: 'Retour au projet', page: projectPage(project.id) }],
         buttons: [...(run.state === 'queued' ? [{ label: 'Annuler ce traitement…', action: 'propose_cancel_run', value: runPage(run.id).slice(4), bound: true }] : []), ...(project.enabled && selected && canRetry(run) ? [{ label: 'Relancer…', action: 'propose_retry', value: runPage(run.id).slice(4), bound: true }] : [])] };
     }
     return unavailable;
@@ -95,11 +95,30 @@ export class DevelopmentMenu {
         { label: 'Actualiser', page: `history_${project.id}_${index}` }, { label: 'Retour au projet', page: projectPage(project.id) }, ...back] };
   }
 
+  async ticketHistory(actor: Actor, ticket: string, channel: string, index = 0): Promise<MenuPage> {
+    const found = await this.store.ticketHistoryPage(ticket, channel, index), rows = [];
+    const access = new Map<string, boolean>();
+    for (const run of found.slice(0, pageSize)) {
+      const project = await this.store.project(run.project);
+      if (!project) continue;
+      for (const configuration of [project, run.config]) {
+        if (!access.has(configuration.channel)) access.set(configuration.channel, await this.accessible(actor, configuration));
+      }
+      if (access.get(project.channel) && access.get(run.config.channel)) rows.push(run);
+    }
+    return { kind: 'Traitements du ticket', text: `Page ${index + 1}. ${rows.length ? 'Ouvrez un traitement pour voir le résultat et la prochaine action disponible. Les confirmations restent séparées.' : 'Aucun traitement accessible sur cette page.'}`,
+      ...(rows.length ? { table: { columns: ['Dépôt', 'Type', 'Mis à jour'], rows: rows.map(run => [repositoryName(run.config.repository), run.kind === 'build' ? 'Correction' : 'Analyse', formatDate(run.updated_at)]),
+        rowButtonColumn: 'État / actions', rowButtonFallback: 'Ouvrez le traitement avec les boutons sous le tableau.',
+        rowButtons: rows.map(run => ({ label: labels[run.state] ?? run.state, action: 'open_run', value: runPage(run.id).slice(4), bound: true })) },
+        buttons: rows.map(run => ({ label: `Ouvrir : ${repositoryName(run.config.repository)} — ${labels[run.state] ?? run.state}`.slice(0, 70), action: 'open_run', value: runPage(run.id).slice(4), bound: true })) } : {}),
+      links: [...(index ? [{ label: 'Précédent', page: `route_runs_${ticket}_${index - 1}` }] : []), ...(found.length > pageSize ? [{ label: 'Suivant', page: `route_runs_${ticket}_${index + 1}` }] : []), { label: 'Actualiser', page: `route_runs_${ticket}_${index}` }, { label: 'Retour au ticket', page: `route_${ticket}` }] };
+  }
+
   async show(actor: Actor, eventId: string, context: ModuleContext, page: MenuPage, target?: Parameters<Navigation['show']>[3]) {
     const channel = /^[CG]/.test(actor.channel);
     return new Navigation(context.sql, context.messenger, channel ? 'development' : 'core').show(actor, eventId, { ...page,
       links: [...(page.links ?? []).map(link => ({ ...link, page: channel ? link.page : `development:${link.page}` })), { label: 'Aide du module', page: channel ? 'help' : 'help:module_development' }],
-      recordChoices: page.recordChoices?.map(link => ({ ...link, page: channel ? link.page : `development:${link.page}` })), buttons: [...page.buttons ?? [], channel ? { label: 'Retour au menu', action: 'channel_home', value: 'main' } : menuButton] }, target);
+      recordChoices: page.recordChoices?.map(link => ({ ...link, page: channel ? link.page : `development:${link.page}` })), buttons: [...page.buttons ?? [], channel ? { label: 'Retour au menu', action: 'channel_home', value: 'main', bound: true } : menuButton] }, target);
   }
 
   async handle(actor: Actor, payload: JobPayload, eventId: string, context: ModuleContext) {

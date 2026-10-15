@@ -156,6 +156,8 @@ it('opens complete built-in help through signed DM dispatch without connections,
       }
       const menu = await h.click(clicked, 'Ouvrir le module');
       const help = await h.click(menu, name === 'Documentation' ? 'Aide' : 'Aide du module');
+      expect(help.method).toBe('chat.update');
+      expect(help.ts).toBe(menu.ts);
       expect(renderedText(help)).toBe(renderedText(clicked));
     }
     const documentation = await h.dm('documentation aide');
@@ -357,7 +359,7 @@ it('starts menu work through the existing module handlers and explains missing p
     const main = await h.dm('menu');
     const mail = await h.click(main, "Tri des e-mails");
     expect(buttons(mail).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
-    expect(button(mail, "Trier la boîte de réception").style).toBe('primary');
+    expect(button(mail, "Connecter Gmail").style).toBe('primary');
     const sorting = await h.click(mail, "Trier la boîte de réception");
     expect(sorting.method).toBe('chat.update');
     expect(sorting.ts).toBe(mail.ts);
@@ -411,6 +413,11 @@ it('runs one paid mail Preview in place from signed menu starts and still requir
     expect(preview.ts).toBe(mail.ts);
     button(preview, "Confirmer les modifications");
     button(preview, 'Menu');
+    const details = await h.click(preview, 'Examiner les messages');
+    const returned = await h.click(details, 'Retour à l’aperçu');
+    expect(returned.ts).toBe(preview.ts);
+    button(returned, 'Confirmer les modifications');
+    expect(paidCalls).toBe(1);
     expect(h.messages.some(message => title(message) === "Traitement en cours")).toBe(true);
     expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
     expect((await new Store(sql).load(alice)).runs[0].status).toBe('preview');
@@ -818,7 +825,7 @@ it('requires the originating User to approve the mailbox after the complete menu
   } finally { await h.close(); }
 });
 
-it('browses mail rules and Add/Edit instructions in place without changing saved state or routing', async () => {
+it('browses mail rules and prepares Add/Edit forms in place without changing rules or routing', async () => {
   const h = await harness(mailEnv);
   try {
     const store = new Store(sql), state = await store.load(alice);
@@ -835,9 +842,9 @@ it('browses mail rules and Add/Edit instructions in place without changing saved
     const edit = await h.click(next, "Modifier 1");
     expect(edit.method).toBe('chat.update');
     expect(edit.ts).toBe(next.ts);
-    expect(edit.body.text).toContain('courrier');
-    expect(edit.body.text).toContain('rule-3');
-    expect((await h.click(rules, "Ajouter une règle")).body.text).toContain('courrier');
+    button(edit, 'Remplir le formulaire');
+    expect((await sql.query('SELECT definition FROM mail_guided_forms')).rows[0].definition.context.base.id).toBe('rule-3');
+    button(await h.click(rules, "Ajouter une règle"), 'Remplir le formulaire');
     expect((await h.dm('change Priority 0')).body.text).toContain("préfixe");
     expect((await h.click(await h.dm('menu', bob), "Tri des e-mails", bob)).body.text).not.toContain('Priority');
     expect((await h.click(mail, "Dernier rapport")).body.text).toContain('Aucun traitement conservé');

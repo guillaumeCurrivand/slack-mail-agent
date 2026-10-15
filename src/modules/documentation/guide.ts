@@ -20,6 +20,8 @@ L’interprétation en langage naturel utilise le budget IA partagé. La répons
 • documentation rechercher <JSON> et documentation compter <JSON> : filtrer gratuitement les fiches par relations et valeurs exactes, ou compter les correspondances distinctes. La rubrique Rechercher et compter explique les champs, le périmètre d’un même composant et les exemples. La pagination relit les données ; un changement d’inventaire redémarre la consultation.
 
 *3. Créer et modifier une fiche*
+• Ajouter / Modifier → Préparer le formulaire → Remplir le formulaire : saisir les champs et choisir les relations par leur nom, sans JSON ni IA. Modifier préremplit la fiche ; seuls les champs changés sont proposés. Vérifier ferme le formulaire et affiche la proposition dans le message de départ. Le formulaire expire après 24 heures ; Annuler le ferme sans enregistrer.
+Un champ facultatif vidé devient inconnu ; une liste existante vidée devient une liste vide. Les commandes structurées restent disponibles pour distinguer explicitement null d’une chaîne ou liste vide. Les parents d’un composant ou hébergement ne sont pas modifiables.
 • Commande structurée : documentation créer projet {"name":"Alpha","description":"Application équipe"}.
 • Modification ciblée : documentation modifier projet Alpha {"description":"Nouvelle description","notes":null}.
 • Langage naturel : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe.

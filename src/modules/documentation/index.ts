@@ -17,6 +17,7 @@ import { DocumentationQuestions, questionSchema } from './questions.js';
 import { inventoryQueryHelp } from './inventory-query.js';
 import { InventoryPresentation, tableSize, valuePages } from './presentation.js';
 import { documentationHelp } from './guide.js';
+import { InventoryForms, inventoryFormDestination } from './forms.js';
 
 const literal = (value: string) => escapeCardValue(value);
 const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
@@ -26,8 +27,9 @@ const pageLinks = (prefix: string, page: number, pages: number) => [
   ...(page + 1 < pages ? [{ label: "Suivant", page: `${prefix}_${page + 1}` }] : []),
 ];
 
-export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig = readDocumentationAIConfig({})): AssistantModule {
+export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig = readDocumentationAIConfig({}), slackToken = ''): AssistantModule {
   const store = new DocumentationStore(sql);
+  const forms = new InventoryForms(sql, store, slackToken);
   const catalog = new Catalog(store);
   const changes = new InventoryChanges(store);
   const lifecycle = new Lifecycle(store);
@@ -46,6 +48,9 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     const part = /^content_(\d{1,6})_(.+)$/.exec(destination);
     const target = part?.[2] ?? destination;
     const content = await recordContent(actor, target);
+    const formDestination = inventoryFormDestination(target);
+    if (formDestination && !/indisponible|restauration/i.test(content.kind ?? '')) return { ...content, text: 'Complétez les champs et choisissez les relations dans un formulaire Slack. Vous examinerez ensuite une proposition avant de confirmer. Aucun appel d’IA.',
+      buttons: [{ label: 'Préparer le formulaire', action: 'form_prepare', value: formDestination, bound: true }] };
     // Independent edits can grow a Project beyond creation's single-Card limit.
     // Split only between lines so escaping and exact field values remain intact.
     const chunks = valuePages(content);
@@ -121,13 +126,30 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       links: [{ label: "Projets", page: 'projects_0' }, { label: "Ajouter un projet", page: 'add' }, { label: "Technologies", page: 'technologies_0' }, { label: "Hébergeurs/services", page: 'hosts_0' }, { label: "Outils", page: 'tools_0' }, { label: "Archivé", page: 'archived_0' }, { label: "Historique", page: 'sharedhistory_0' }, { label: "Aide", page: 'help' }] };
   }
   return {
-    menuActions: ['request_archive', 'request_restore'],
+    menuActions: ['request_archive', 'request_restore', 'form_prepare', 'form_open'],
+    forms: forms.forms,
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
     help: documentationHelp,
-    initialize: async database => { await database.query(documentationSchema + questionSchema + documentationImportSchema); },
-    cleanup: async () => { await store.cleanup(); await questions.cleanup(); },
+    initialize: async database => { await database.query(documentationSchema + questionSchema + documentationImportSchema); await forms.initialize(); },
+    cleanup: async () => { await store.cleanup(); await questions.cleanup(); await forms.cleanup(); },
     menu: (actor, destination) => page(actor, destination),
     async handle(actor, payload, eventId, context) {
+      if (payload.type === 'guided_form') {
+        const form = await forms.get(actor, String(payload.form));
+        if (form?.channel === actor.channel && form.state === 'submitted' && form.result) return this.handle(actor, { type: 'text', text: form.result.command }, eventId, context);
+        return deliver(actor, eventId, { text: 'Ce formulaire est indisponible ou expiré. Rouvrez-le depuis Documentation.' }, context);
+      }
+      if (payload.type === 'guided_form_notice' || (payload.type === 'menu_action' && payload.action === 'form_prepare')) {
+        let form;
+        if (payload.type === 'menu_action') {
+          const bound = await new Navigation(context.sql, context.messenger).boundTarget(actor, payload.value, payload.timestamp);
+          const definition = bound && await forms.definition(actor, bound.value);
+          if (bound && definition) form = await forms.prepare(actor, eventId, bound.target.timestamp, definition);
+        } else form = await forms.get(actor, String(payload.form));
+        return new Navigation(context.sql, context.messenger).show(actor, eventId, { kind: 'Formulaire Documentation',
+          text: form?.channel === actor.channel && form.state === 'editing' ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire est visible, utilisez-le ; sinon, réessayez. ' : ''}Le formulaire est prêt. Vérifier prépare une proposition ; rien ne change avant votre confirmation.` : 'Fiche archivée, formulaire expiré ou inaccessible. Rouvrez une fiche active depuis Documentation.',
+          buttons: [...(form?.channel === actor.channel && form.state === 'editing' ? [{ label: 'Remplir le formulaire', action: 'form_open', value: form.id, bound: true }] : []), menuButton] });
+      }
       const source = await questions.source(actor, eventId);
       const navigation = new Navigation(context.sql, context.messenger);
       const show = async (destination: string) => {

@@ -9,14 +9,15 @@ export const mailHelp = {
 *2. Consulter, créer, modifier et retirer des règles*
 • courrier règles ou Gérer les règles : lire les conditions, expéditeurs, libellés et actions approuvés.
 • courrier modèles : proposer les modèles Urgent et Lettres d’information, et expliquer comment créer une association de projet. Urgent et les règles de projets gardent les messages en boîte de réception ; les lettres d’information peuvent aller à la corbeille, avec des exclusions pour factures, reçus, alertes de sécurité, notifications transactionnelles, messages urgents et projets. Les associations de projets demandent des adresses d’expéditeurs explicites.
-• Ajouter une règle / Modifier : obtenir les instructions, puis décrire la condition, l’action et les exceptions après courrier. Exemple : courrier Applique le libellé Projets/Alpha aux messages de alex@example.com et conserve-les dans ma boîte de réception.
+• Ajouter une règle / Modifier → Remplir le formulaire : saisir le nom, la condition et les exceptions, les adresses, libellés, action et exemples, sans IA. Vérifier affiche une proposition dans le message de départ ; votre approbation séparée reste nécessaire. Le formulaire expire après 24 heures. Modifier préremplit la règle ; si elle a changé entre-temps, rouvrez le formulaire.
+• Vous pouvez aussi décrire la règle après courrier. Exemple : courrier Applique le libellé Projets/Alpha aux messages de alex@example.com et conserve-les dans ma boîte de réception.
 • Pour modifier : courrier Modifie ma règle de lettres d’information pour exclure les annonces de produits. Pour retirer, utilisez Retirer dans Gérer les règles, ou décrivez précisément la règle à supprimer.
 L’assistant présente une proposition avec des exemples. Ajouter, modifier ou supprimer une règle nécessite votre approbation séparée sous 24 heures.
 
 *3. Préparer et approuver un tri*
 • courrier trier ou Trier la boîte de réception : analyser les 100 derniers messages individuels de la boîte de réception, avec votre connexion et vos règles approuvées. Le lancement peut utiliser l’IA ; aucune modification Gmail n’a lieu avant confirmation de l’aperçu.
 • L’aperçu explique les libellés proposés, l’archivage et les déplacements à la corbeille. Plusieurs libellés sont possibles ; une règle explicite de conservation prévaut sur l’archivage. Les contradictions non résolues laissent le message inchangé.
-• Examiner les messages / Détails : lire les messages et leurs raisons, page par page. Inclure la proposition ou Laisser sans modification pour les éléments qui demandent votre décision, puis Confirmer les modifications ; Annuler abandonne l’aperçu.
+• Examiner les messages / Détails : lire les messages et leurs raisons, page par page. Inclure la proposition ou Laisser sans modification pour les éléments qui demandent votre décision, puis Retour à l’aperçu et Confirmer les modifications ; Annuler abandonne l’aperçu.
 Un aperçu expire après 24 heures et devient invalide si les règles ou la connexion changent. Approbations en attente rouvre les propositions et aperçus encore valides, sans prolonger leur délai ni recommencer l’analyse. Un lancement pendant un tri en cours indique la demande existante.
 
 *4. Consulter les rapports, corriger et annuler des changements*

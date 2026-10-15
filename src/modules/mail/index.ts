@@ -1,9 +1,10 @@
 import { Vault } from '../../core/crypto.js';
+import { isDeepStrictEqual } from 'node:util';
 import { ownerKey } from '../../core/identity.js';
 import type { AssistantModule } from '../../core/modules.js';
 import { menuButton } from '../../core/slack.js';
 import { JobStore, withOwner, type Sql } from '../../core/store.js';
-import { boundMenuTarget } from '../../core/navigation.js';
+import { boundMenuTarget, Navigation } from '../../core/navigation.js';
 import { OpenAI } from './ai.js';
 import type { MailConfig } from './config.js';
 import { Engine, SORT_OPERATION, type Event } from './engine.js';
@@ -13,24 +14,28 @@ import { registerMailRoutes } from './routes.js';
 import { mailSchema, prune, Store } from './store.js';
 import { mailMenu } from './menu.js';
 import { mailHelp } from './help.js';
+import { RuleForms } from './forms.js';
 
-export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sql: Sql): AssistantModule {
+export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sql: Sql, slackToken = ''): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
+  const forms = new RuleForms(sql, slackToken);
   const oauth = new GoogleOAuth(config, new Store(sql), vault);
   return {
     id: 'mail', name: "Tri des e-mails", description: "Trier votre Gmail selon vos règles personnelles approuvées",
     help: mailHelp,
     workOperations: [{ key: SORT_OPERATION, label: "Trier la boîte de réception", commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
-    menuActions: ['sort_inbox'],
+    menuActions: ['sort_inbox', 'form_prepare', 'form_open'],
+    forms: forms.forms,
     async menu(actor, page, context) {
       const state = await new Store(context.sql).load(actor);
       return mailMenu(state, page);
     },
     // Only exact action IDs emitted by pre-module versions are accepted.
     legacyActions: ['approve_draft', 'cancel_draft', 'disconnect', 'details', 'report', 'cancel_run', 'accept_item', 'skip_item', 'confirm_run', 'undo_run'],
-    async initialize(database) { await database.query(mailSchema); },
+    async initialize(database) { await database.query(mailSchema); await forms.initialize(); },
     registerRoutes(app) { registerMailRoutes(app, config.PUBLIC_URL, new JobStore(sql), oauth); },
     async cleanup(pool) {
+      await forms.cleanup();
       await new Store(pool).cleanup();
       const users = await pool.query('SELECT team,slack_user FROM users');
       for (const row of users.rows) {
@@ -42,6 +47,25 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
       }
     },
     async handle(actor, payload, eventId, context) {
+      if (payload.type === 'guided_form_notice' || (payload.type === 'menu_action' && payload.action === 'form_prepare')) {
+        let form;
+        if (payload.type === 'menu_action') {
+          const bound = await boundMenuTarget(context.sql, actor, payload.value, payload.timestamp);
+          const state = await new Store(context.sql).load(actor);
+          const base = bound && state.rules.find(rule => rule.id === bound.value);
+          if (bound && (bound.value === 'new' || base)) form = await forms.prepare(actor, eventId, bound.target.timestamp, forms.definition(base || undefined));
+        } else form = await forms.get(actor, String(payload.form));
+        return new Navigation(context.sql, context.messenger).show(actor, eventId, { kind: 'Formulaire de règle',
+          text: form?.channel === actor.channel && form.state === 'editing' ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire apparaît, utilisez-le ; sinon, réessayez. ' : ''}Complétez la règle puis vérifiez la proposition dans ce message. Aucun appel d’IA pour le formulaire et aucune règle enregistrée avant votre approbation.` : 'Cette règle ou ce formulaire est indisponible. Rouvrez Gérer les règles.',
+          buttons: [...(form?.channel === actor.channel && form.state === 'editing' ? [{ label: 'Remplir le formulaire', action: 'form_open', value: form.id, bound: true }] : []), menuButton] });
+      }
+      if (payload.type === 'guided_form') {
+        const form = await forms.get(actor, String(payload.form));
+        const state = await new Store(context.sql).load(actor);
+        if (!form || form.channel !== actor.channel || form.state !== 'submitted' || !form.result || (form.result.base && !isDeepStrictEqual(state.rules.find(rule => rule.id === form.result!.base!.id), form.result.base)))
+          return context.messenger.send(actor, { text: 'Formulaire expiré ou règle modifiée. Rouvrez Gérer les règles pour préparer une nouvelle proposition.', buttons: [menuButton] });
+        payload = { type: 'text', text: 'Proposition de règle depuis le formulaire', presentationLanguage: 'fr', resolved: { intent: 'propose_rule', reply: '', rule: form.result.rule, ruleId: form.result.base?.id ?? null, runId: null, messageId: null, correction: null } };
+      }
       // HTTP ingress constructs text/actions; only the mail OAuth callback can
       // enqueue a connection. Persisted pre-module jobs use the same shape.
       if (!['text', 'action', 'menu_action', 'connection'].includes(String(payload.type))) throw new Error('Unsupported mail event.');

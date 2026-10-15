@@ -16,12 +16,18 @@ Inventory and append-only history are shared with people who have access to the 
 
 1. DM `menu` and open **Documentation**, or send `documentation projets`.
 2. Select a Project from the visible row button to read its fields and navigate to Components, hosting, Tools and history. Exact lookup also works: `documentation projet Alpha`.
-3. To add a Project, send `documentation créer projet {"name":"Alpha"}`. To replace just its description, send `documentation modifier projet Alpha {"description":"Application équipe"}`. Review the separate confirmation Card and confirm within 24 hours; navigation alone saves nothing.
+3. Choose **Ajouter** or **Modifier → Préparer le formulaire → Remplir le formulaire** for guided fields and named relationship choices. **Vérifier** returns a proposal to the originating Card; confirm it separately within 24 hours. Structured commands remain shortcuts: `documentation créer projet {"name":"Alpha"}` or `documentation modifier projet Alpha {"description":"Application équipe"}`.
 4. Optional: ask `documentation où Alpha est-il hébergé ?` or `documentation combien de projets utilisent React ?`. Natural language uses AI interpretation; the answer uses current inventory records. Missing or ambiguous information requires clarification.
 
 Each typed request, including a follow-up about `ce projet`, keeps the `documentation` prefix. All application-owned screens use French under the [shared presentation contract](product-spec.md#interactive-message-presentation). English commands below remain compatible; JSON keys and enums stay in English, and selectors, saved values and URLs stay literal. Dates display Paris local time.
 
 Button-driven screens follow the shared [in-place interaction contract](product-spec.md#in-place-button-interactions). **Examiner les valeurs** replaces the clicked confirmation Card; **Retour à la confirmation** reopens the same saved proposal and controls without renewing its expiry or interpreting the request again. Once applied, that return shows the saved outcome. An expired proposal remains expired.
+
+## Guided create/edit forms
+
+All six record kinds have guided forms. Creating a Component or Hosting entry preselects its entry parent; editing keeps that parent fixed. Relationship choices are saved from this workspace during preparation, including existing archived references when needed to preserve them. A missing related record requires separate creation. Submission accepts only those choices; the existing proposal and commit workflows revalidate current records and archival rules.
+
+Forms expire after 24 hours and belong to their author, DM and originating message. Submission durably captures input once and queues the existing proposal workflow, without AI or a domain mutation. An uncertain modal open offers an explicit fresh-click retry. Editing proposes only changed fields, preserving unrelated concurrent edits. Clearing an optional scalar means unknown; clearing an existing list means empty. Structured commands retain explicit empty-string/null control. Invalid or unchanged input stays in the form with field errors. **Annuler** closes the form without saving; it does not cancel another saved proposal.
 
 ## Find the right command or rule
 

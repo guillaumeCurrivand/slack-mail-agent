@@ -20,7 +20,7 @@ export function createYousignModule(config: YousignConfig, database: Database, d
   const directory = new YousignChannels(config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const store = (sql: Database = database) => new YousignStore(sql, identity);
   const back = (standalone: boolean) => [{ label: 'Retour à Yousign', page: standalone ? 'yousign:main' : 'main' }];
-  const main: MenuPage = { kind: 'Yousign', text: 'Notifications de tous les événements du webhook Yousign de l’entreprise. Les canaux sélectionnés sont partagés entre tous les utilisateurs. Aucun appel d’IA.', links: [{ label: 'Choisir les canaux', page: 'channels_0' }, { label: 'Statut', page: 'status_0' }] };
+  const main: MenuPage = { kind: 'Yousign', text: 'Notifications de tous les événements du webhook Yousign de l’entreprise. Les canaux sélectionnés sont partagés entre tous les utilisateurs. À examiner regroupe les échecs et livraisons incertaines ; Statut conserve tout l’historique. Aucun appel d’IA.', links: [{ label: 'Choisir les canaux', page: 'channels_0' }, { label: 'À examiner', page: 'attention_0' }, { label: 'Statut', page: 'status_0' }] };
 
   async function channelsPage(actor: Actor, sql: Database, requested = 0, notice = '', standalone = false): Promise<MenuPage> {
     let available;
@@ -47,35 +47,38 @@ export function createYousignModule(config: YousignConfig, database: Database, d
     ].filter(Boolean).join('\n') };
   }
 
-  async function statusPage(actor: Actor, sql: Database, requested = 0, notice = '', standalone = false): Promise<MenuPage> {
+  async function statusPage(actor: Actor, sql: Database, requested = 0, notice = '', standalone = false, attention = false): Promise<MenuPage> {
     let available;
     try { available = await directory.list(actor.user); }
     catch { return { kind: 'Statut Yousign', text: 'L’accès aux canaux ne peut pas être vérifié. Aucun détail de notification n’est affiché.', links: back(standalone) }; }
     const names = new Map(available.map(channel => [channel.id, channel.name]));
-    const rows = await store(sql).history([...names.keys()], requested * 8), visible = rows.slice(0, 8);
+    const rows = await store(sql).history([...names.keys()], requested * 8, attention), visible = rows.slice(0, 8);
     const received = await store(sql).lastReceipt();
     const labels: Record<string, string> = { queued: 'En attente', sending: 'Envoi commencé', sent: 'Envoyée', uncertain: 'Livraison incertaine', failed: 'Échec', cancelled: 'Annulée' };
     const causes: Record<string, string> = { access_unavailable: 'Publication indisponible dans ce canal.', rejected: 'Slack a refusé cet envoi.', invalid_message: 'Slack a refusé cette notification.', interrupted: 'Envoi interrompu ; Slack peut avoir publié le message.', uncertain: 'Slack peut avoir publié le message.' };
-    const buttons: Button[] = visible.filter(row => ['uncertain', 'failed'].includes(row.status)).map(row => ({
-      label: `${row.status === 'uncertain' ? 'Examiner' : 'Réessayer'} #${names.get(row.channel_id)!.slice(0, 45)}`,
-      action: row.status === 'uncertain' ? 'review' : 'retry', value: row.status === 'uncertain' ? row.id : `${row.id}|${row.attempts}` }));
-    if (requested) buttons.push({ label: 'Précédent', action: 'status_page', value: String(requested - 1) });
-    if (rows.length > 8) buttons.push({ label: 'Suivant', action: 'status_page', value: String(requested + 1) });
-    buttons.push({ label: 'Actualiser', action: 'status_page', value: String(requested) });
-    return { kind: 'Statut Yousign', bindButtons: true, links: back(standalone), buttons, text: [notice,
+    const action = attention ? 'attention_page' : 'status_page';
+    const buttons: Button[] = [];
+    if (requested) buttons.push({ label: 'Précédent', action, value: String(requested - 1) });
+    if (rows.length > 8) buttons.push({ label: 'Suivant', action, value: String(requested + 1) });
+    buttons.push({ label: 'Actualiser', action, value: String(requested) });
+    return { kind: attention ? 'Yousign — à examiner' : 'Statut Yousign', bindButtons: true,
+      links: [{ label: attention ? 'Tout l’historique' : 'À examiner', page: `${standalone ? 'yousign:' : ''}${attention ? 'status' : 'attention'}_0` }, ...back(standalone)], buttons,
+      ...(visible.length ? { table: { columns: ['Canal', 'Notification', 'État', 'Détails'], rows: visible.map(row => [
+        `#${names.get(row.channel_id)}`, `${row.summary.request ?? row.summary.resource ?? row.summary.name}\n${row.summary.name}\nÉvénement : ${formatDate(row.summary.time)}`, labels[row.status] ?? 'Indisponible',
+        [`Reçu : ${formatDate(row.created_at)}`, row.cause ? causes[row.cause] : '', row.status === 'queued' && row.cause ? `Prochain essai : ${formatDate(row.next_at)}` : ''].filter(Boolean).join('\n'),
+      ]), rowButtonColumn: 'Action', rowButtonFallback: 'Ouvrez yousign statut dans un client Slack récent.',
+      rowButtons: visible.map(row => ['uncertain', 'failed'].includes(row.status) ? { label: row.status === 'uncertain' ? 'Examiner' : 'Réessayer', action: row.status === 'uncertain' ? 'review' : 'retry', value: row.status === 'uncertain' ? row.id : `${row.id}|${row.attempts}` } : null) } } : {}), text: [notice,
       received ? `Dernière réception authentifiée : ${formatDate(received)}` : 'Aucun événement reçu. Vérifiez la destination du webhook existant si nécessaire.',
       'Historique de 30 jours, limité aux canaux accessibles. Les envois connus comme non livrés sont repris automatiquement ; les livraisons incertaines nécessitent un examen. Les alertes opérationnelles sont privées.',
-      `Page ${requested + 1}`, ...visible.map(row => [`${labels[row.status] ?? 'Indisponible'} — #${escapeCardValue(names.get(row.channel_id)!)}`, escapeCardValue(row.summary.request ?? row.summary.resource ?? row.summary.name),
-        `Événement : ${escapeCardValue(row.summary.name)} — ${formatDate(row.summary.time)}`, `Reçu : ${formatDate(row.created_at)}`, row.cause ? causes[row.cause] : '',
-        row.status === 'queued' && row.cause ? `Prochain essai : ${formatDate(row.next_at)}` : ''].filter(Boolean).join('\n')),
-      !visible.length ? 'Aucune notification visible. Sans canal sélectionné, les événements sont ignorés.' : '',
+      `Page ${requested + 1}`, attention ? 'Uniquement les échecs et livraisons incertaines. Les reprises automatiques en attente restent dans l’historique.' : '',
+      !visible.length ? attention ? 'Aucune notification à examiner dans les canaux accessibles.' : 'Aucune notification visible. Sans canal sélectionné, les événements sont ignorés.' : '',
     ].filter(Boolean).join('\n\n') };
   }
 
   return {
     id: 'yousign', name: 'Yousign', description: 'Recevoir les notifications Yousign dans des canaux partagés',
     help: yousignHelp,
-    menuActions: ['channel_add', 'channel_remove', 'channel_page', 'status_page', 'review', 'retry', 'confirm', 'cancel'],
+    menuActions: ['channel_add', 'channel_remove', 'channel_page', 'status_page', 'attention_page', 'review', 'retry', 'confirm', 'cancel'],
     async initialize(sql) { await store(sql).initialize(); },
     registerRoutes(app) {
       app.post('/webhooks/yousign', async (request, reply) => {
@@ -94,6 +97,7 @@ export function createYousignModule(config: YousignConfig, database: Database, d
       if (actor.team !== identity.team) throw new Error('Unexpected workspace.');
       if (/^channels_\d{1,6}$/.test(page)) return channelsPage(actor, context.sql, pageNumber(page.slice(9)));
       if (/^status_\d{1,6}$/.test(page)) return statusPage(actor, context.sql, pageNumber(page.slice(7)));
+      if (/^attention_\d{1,6}$/.test(page)) return statusPage(actor, context.sql, pageNumber(page.slice(10)), '', false, true);
       return main;
     },
     async handleIntegration(actor, payload, _id, context) {
@@ -117,6 +121,7 @@ export function createYousignModule(config: YousignConfig, database: Database, d
       const action = String(payload.action), value = bound.value;
       if (action === 'channel_page') return show(await channelsPage(actor, context.sql, pageNumber(value), '', true), bound.target);
       if (action === 'status_page') return show(await statusPage(actor, context.sql, pageNumber(value), '', true), bound.target);
+      if (action === 'attention_page') return show(await statusPage(actor, context.sql, pageNumber(value), '', true, true), bound.target);
       if (['channel_add', 'channel_remove'].includes(action)) {
         const parts = value.split('|'), channel = parts[0]!, activation = action === 'channel_remove' ? parts[1] : undefined;
         const page = pageNumber(parts[action === 'channel_remove' ? 2 : 1] ?? '0');

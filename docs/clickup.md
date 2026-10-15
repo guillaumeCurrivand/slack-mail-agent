@@ -32,6 +32,8 @@ Each typed request needs the `clickup` prefix. The menu shows connection status,
 
 ## Reading results and recovering
 
+Closing the autosaved status picker offers **Voir mes tâches**, which explicitly retrieves a fresh snapshot with the current filter in the same Card. Results display their saved filter and offer **Choisir les statuts**. Closing or editing alone does not retrieve tasks or alter an earlier snapshot.
+
 Results have up to 40 tasks per page, with linked name, original status, Paris calendar due date, priority, Workspace and List. Overdue means a displayed date before today. Directly assigned subtasks and tasks shared with other assignees are included. The default excludes Done/Closed and individually archived tasks; [personal status filters](#personal-status-filters) permit explicitly selected completed statuses. See [Approved behavior](#approved-behavior) for exact assignment and archive rules.
 
 Paging retains the original snapshot and retrieval time while rechecking access. Snapshots expire after 24 hours; disconnect or account replacement invalidates them. Expired results need a fresh `clickup tâches` request. Lost/revoked access withholds cached task text and asks you to reconnect. Physical cleanup pauses while disabled, but logical expiry still applies.

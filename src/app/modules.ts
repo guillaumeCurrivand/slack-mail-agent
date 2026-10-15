@@ -17,9 +17,9 @@ import { createDevelopmentModule } from '../modules/development/index.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
-    mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
+    mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql, config.SLACK_BOT_TOKEN),
     slack: () => createSlackModule(config.SLACK_BOT_TOKEN, sql, readSlackConfig(env)),
-    documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env)),
+    documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env), config.SLACK_BOT_TOKEN),
     clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
     yousign: () => createYousignModule({ ...readYousignConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),
     development: () => createDevelopmentModule({ ...readDevelopmentConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),

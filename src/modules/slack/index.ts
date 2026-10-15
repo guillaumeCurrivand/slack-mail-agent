@@ -54,10 +54,10 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     } catch {
       return context.messenger.send(actor, { text: "L’accès aux canaux de ces résultats n’a pas pu être vérifié. Relancez slack sans-réponse.", buttons: [menuButton] });
     }
-    const buttons: Button[] = [];
+    const buttons: Button[] = [{ label: 'Chercher à nouveau', action: 'find_unanswered', value: 'unanswered', bound: true }, { label: 'Choisir les canaux', action: 'channel_page', value: '0', bound: true }];
     if (page > 0) buttons.push({ label: "Précédent", action: 'unanswered_page', value: `${sourceId}|${page - 1}` });
     if (page + 1 < pages.length) buttons.push({ label: "Suivant", action: 'unanswered_page', value: `${sourceId}|${page + 1}` });
-    return context.messenger.send(actor, { kind: "Messages sans réponse", text: `${saved.language === 'fr' ? '' : `${retainedTextNotice}\n\n`}${saved.text}`, buttons: [...buttons, menuButton] });
+    return context.messenger.send(actor, { kind: "Messages sans réponse", text: `${saved.language === 'fr' ? '' : `${retainedTextNotice}\n\n`}${saved.text}\nChercher à nouveau lance une nouvelle recherche et peut utiliser le budget d’IA. Les pages conservent la recherche enregistrée.`, buttons: [...buttons, menuButton] });
   }
 
   async function showUnanswered(actor: Actor, eventId: string, context: ModuleContext, anchor: Date, requestedPage = 0, replayOnly = false) {
@@ -103,7 +103,7 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     try {
       for (let page = 0; page < pageCount; page++) {
         const visible = entries.slice(page * RESULT_PAGE_SIZE, (page + 1) * RESULT_PAGE_SIZE);
-        const lines = [`Messages des 48 heures précédant votre commande (page ${page + 1}/${pageCount}):`];
+        const lines = [`Recherche demandée le ${formatDate(anchor)}.`, `Messages des 48 heures précédant votre commande (page ${page + 1}/${pageCount}):`];
         if (!entries.length) lines.push("Aucun message confirmé sans réponse dans les canaux sélectionnés.");
         if (!entries.length && !selectedCount) lines.push("Choisissez les sources avec slack canaux.");
         let previousChannel = '';

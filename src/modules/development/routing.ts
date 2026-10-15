@@ -38,18 +38,22 @@ export class DevelopmentRouting {
         buttons: rows.map(r => ({ label: r.snapshot.name.slice(0, 60), action: 'routing_open', value: r.ticket, bound: true })),
         links: [...(index ? [{ label: 'Précédent', page: `routes_${index - 1}` }] : []), ...((index + 1) * 8 < routes.length ? [{ label: 'Suivant', page: `routes_${index + 1}` }] : []), { label: 'Actualiser', page }, { label: 'Retour aux projets', page: 'projects_0' }] };
     }
-    const route = await this.saved.get(page.slice(6));
+    const history = /^route_runs_([\w-]+)_(\d{1,6})$/.exec(page);
+    const route = await this.saved.get(history?.[1] ?? page.slice(6));
     if (!route) return unavailable;
     const candidates = await this.candidates(actor, route);
     if (!candidates.length) return unavailable;
+    if (history) return this.menus.ticketHistory(actor, route.ticket, route.channel, Number(history[2]));
+    const treatments = await this.menus.ticketHistory(actor, route.ticket, route.channel);
     const selected = route.selected;
     const blocked = !!selected && await this.saved.changeBlocked(route.ticket);
     return { kind: `Dépôts — ${route.snapshot.name}`, text: selected
       ? `Dépôts confirmés :\n${selected.map(p => `${p.name} — ${p.repository}`).join('\n')}\n\n${blocked ? 'Modification indisponible : un traitement est en cours, une publication reste à vérifier ou une correction existe. Annulez les corrections encore en attente avant de modifier ; les corrections commencées nécessitent une réconciliation par l’opérateur.' : 'Modifier les dépôts annule les analyses encore en attente des dépôts retirés. Les analyses des dépôts conservés restent inchangées ; les nouveaux dépôts peuvent démarrer après confirmation.'}\nReady for AI autorise une correction dans chaque dépôt choisi ; to build attend la réussite de toutes les corrections.`
       : 'Choisissez un ou plusieurs dépôts. Le dossier et la liste ClickUp restent inchangés. Aucun travail ne démarre avant confirmation du choix ; Ready for AI reste nécessaire pour corriger le code.',
       resourceLinks: [{ label: 'Ouvrir le ticket ClickUp', url: route.snapshot.url }],
-      buttons: blocked ? [] : [{ label: selected ? 'Modifier les dépôts' : 'Choisir les dépôts', action: 'routing_begin', value: route.ticket, bound: true }],
-      links: [...(selected ?? []).filter(p => candidates.some(c => sameDestination(c, p))).map(p => ({ label: `Suivre ${p.name}`, page: `history_${p.id}_0` })), { label: 'Actualiser', page }, ...back] };
+      ...(treatments.table ? { table: treatments.table } : {}),
+      buttons: [...(blocked ? [] : [{ label: selected ? 'Modifier les dépôts' : 'Choisir les dépôts', action: 'routing_begin', value: route.ticket, bound: true }]), ...(treatments.buttons ?? [])],
+      links: [{ label: 'Traitements du ticket', page: `route_runs_${route.ticket}_0` }, ...(selected ?? []).filter(p => candidates.some(c => sameDestination(c, p))).map(p => ({ label: `Suivre ${p.name}`, page: `history_${p.id}_0` })), { label: 'Actualiser', page }, ...back] };
   }
   private picker(proposal: RouteProposal): MenuPage {
     return { kind: 'Choisir les dépôts', text: `Sélectionnez un ou plusieurs dépôts du projet avec Ajouter/Retirer, puis vérifiez votre choix.\nSélection : ${proposal.candidates.filter(p => selectedDestination(proposal.selected, p)).map(p => p.name).join(', ') || 'aucun dépôt'}\n\n${proposal.candidates.map(p => `${p.name} — ${p.repository}${p.enabled ? '' : ' (suspendu)'}`).join('\n')}`,

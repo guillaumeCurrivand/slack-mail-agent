@@ -15,6 +15,7 @@ La notification contient les informations disponibles autorisées : événement,
 Exemple : activez un canal de suivi, puis les futurs événements Yousign de l’entreprise y seront publiés automatiquement. Aucun lancement manuel n’est nécessaire.
 
 *3. Consulter le statut et reprendre une livraison*
+• À examiner dans le menu : afficher seulement les livraisons incertaines et les échecs définitifs. Les boutons Examiner et Réessayer sont sur la ligne concernée. Tout l’historique revient au suivi complet dans ce message.
 • yousign statut ou Statut : lire la dernière réception authentifiée et les livraisons visibles pour vos canaux, avec résultat, motif d’échec et prochain essai prévu. Actualiser relit l’état actuel ; Précédent/Suivant parcourent l’historique disponible.
 Les échecs temporaires dont l’absence d’effet est certaine peuvent être réessayés automatiquement. Réessayer, lorsqu’il est proposé pour un échec définitif, demande un nouvel essai de la livraison concernée.
 Une livraison incertaine n’est jamais renvoyée automatiquement. Examiner ouvre une confirmation séparée : vérifiez d’abord le canal, car Slack a peut-être déjà publié le message. Confirmer cette relance peut créer un doublon et exige votre confirmation dans ce DM sous 24 heures ; Annuler abandonne la proposition. Les accès et l’activation du canal sont revérifiés.

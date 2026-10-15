@@ -16,7 +16,7 @@ Précédent/Suivant parcourent la consultation enregistrée. Les résultats expi
 • clickup statuts : ouvrir votre filtre personnel de noms de statuts, commun à tout l’espace Mayasquad.
 • Ajouter / Retirer : enregistrer immédiatement les choix. Utilisez l’option dédiée pour inclure les statuts terminés ; Réinitialiser revient au filtre par défaut. Fermer conserve les choix déjà enregistrés.
 Les statuts fermés/terminés sont exclus par défaut. Le filtre compare les noms de statuts et conserve vos préférences entre les consultations et reconnexions. La liste signale les choix devenus indisponibles et les découvertes incomplètes. Actualiser les statuts renouvelle le catalogue ; Réessayer poursuit sa découverte si elle est incomplète.
-Exemple : choisissez les statuts de travail qui vous intéressent avec clickup statuts, puis renvoyez clickup tâches. Un changement de filtre n’altère pas les résultats déjà enregistrés : chaque consultation garde son filtre d’origine.
+Exemple : choisissez les statuts de travail qui vous intéressent avec clickup statuts, puis Fermer → Voir mes tâches pour récupérer une nouvelle liste dans ce message. Les résultats affichent leur filtre et proposent Choisir les statuts. Un changement de filtre n’altère pas les résultats déjà enregistrés : chaque consultation garde son filtre d’origine.
 
 *4. Déconnecter ClickUp*
 • clickup déconnecter : proposer une déconnexion à confirmer séparément dans votre DM. Elle supprime les identifiants actifs, tentatives de connexion et résultats enregistrés. Vos préférences de statuts sont conservées.

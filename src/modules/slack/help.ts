@@ -14,7 +14,7 @@ Un lancement pendant une recherche en cours indique la demande existante au lieu
 
 *3. Comprendre et parcourir les résultats*
 Les résultats sont regroupés par canal, avec auteur, date, extrait et lien Ouvrir le message. Les demandes certaines figurent sous Messages sans réponse ; les demandes incertaines mais reliées à vous sous Vous concerne peut-être, avec une explication.
-Précédent/Suivant relisent les résultats enregistrés sans nouvelle classification payante. L’accès aux canaux et la sélection sont revérifiés avant l’affichage des extraits. Relancez slack sans-réponse pour actualiser les résultats ou si un ancien résultat est indisponible.
+La date de la demande est affichée. Précédent/Suivant relisent les résultats enregistrés sans nouvelle classification payante. L’accès aux canaux et la sélection sont revérifiés avant l’affichage des extraits. Chercher à nouveau lance explicitement une nouvelle recherche qui peut utiliser l’IA et remplace ce message. Choisir les canaux ouvre la sélection depuis les résultats. Vous pouvez aussi relancer slack sans-réponse.
 Les canaux inaccessibles sont signalés et ignorés pour cette recherche. Les limites d’accès ou une analyse incomplète peuvent empêcher de trouver toutes les demandes.
 
 *Coûts, accès et limites*
