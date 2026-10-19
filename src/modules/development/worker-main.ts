@@ -45,7 +45,7 @@ export async function runWorker(filename: string, once = false) {
     let lastIdleLog = 0;
     do {
       try {
-        const { work } = await request('claim', { worker, projects: [...new Set(config.projects.map(project => project.id))],
+        const { work } = await request('claim', { worker, projects: [...new Set(config.projects.map(project => project.id))], repositoryDetection: true,
           targets: config.projects.map(({ id, repository, skill }) => ({ id, repository, skill })) }) as { work: Work | null };
         if (work) {
           const project = config.projects.find(project => project.id === work.project.id && project.repository === work.project.repository && project.skill === work.project.skill);

@@ -46,10 +46,12 @@ export class DevelopmentRouting {
     if (history) return this.menus.ticketHistory(actor, route.ticket, route.channel, Number(history[2]));
     const treatments = await this.menus.ticketHistory(actor, route.ticket, route.channel);
     const selected = route.selected;
+    const detection = await this.saved.detection(route.ticket);
+    const detectionText = detection?.state === 'pending' ? 'Détection automatique en cours. Le worker inspecte chaque dépôt en lecture seule ; aucune correction avant Ready for AI. Vous pouvez aussi choisir manuellement.\n\n' : detection && ['manual', 'selected'].includes(detection.state) ? `${detection.summary}\n\n` : '';
     const blocked = !!selected && await this.saved.changeBlocked(route.ticket);
-    return { kind: `Dépôts — ${route.snapshot.name}`, text: selected
+    return { kind: `Dépôts — ${route.snapshot.name}`, text: detectionText + (selected
       ? `Dépôts confirmés :\n${selected.map(p => `${p.name} — ${p.repository}`).join('\n')}\n\n${blocked ? 'Modification indisponible : un traitement est en cours, une publication reste à vérifier ou une correction existe. Annulez les corrections encore en attente avant de modifier ; les corrections commencées nécessitent une réconciliation par l’opérateur.' : 'Modifier les dépôts annule les analyses encore en attente des dépôts retirés. Les analyses des dépôts conservés restent inchangées ; les nouveaux dépôts peuvent démarrer après confirmation.'}\nReady for AI autorise une correction dans chaque dépôt choisi ; to build attend la réussite de toutes les corrections.`
-      : 'Choisissez un ou plusieurs dépôts. Le dossier et la liste ClickUp restent inchangés. Aucun travail ne démarre avant confirmation du choix ; Ready for AI reste nécessaire pour corriger le code.',
+      : 'Choisissez un ou plusieurs dépôts. Le dossier et la liste ClickUp restent inchangés. Ready for AI reste nécessaire pour corriger le code.'),
       resourceLinks: [{ label: 'Ouvrir le ticket ClickUp', url: route.snapshot.url }],
       ...(treatments.table ? { table: treatments.table } : {}),
       buttons: [...(blocked ? [] : [{ label: selected ? 'Modifier les dépôts' : 'Choisir les dépôts', action: 'routing_begin', value: route.ticket, bound: true }]), ...(treatments.buttons ?? [])],

@@ -18,7 +18,7 @@ afterEach(async () => {
   }
 });
 
-async function fixture(options: { baseBranch?: string; failChecks?: boolean; browser?: boolean; lostPush?: boolean; commitTitle?: string | null; browserScenario?: unknown; cursorResult?: string } = {}) {
+async function fixture(options: { baseBranch?: string; failChecks?: boolean; browser?: boolean; lostPush?: boolean; commitTitle?: string | null; browserScenario?: unknown; cursorResult?: string; mutateReadOnly?: boolean } = {}) {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mayassistant-development-test-')); directories.push(directory);
   const remote = path.join(directory, 'remote.git'), seed = path.join(directory, 'seed'), state = path.join(directory, 'state');
   await mkdir(seed);
@@ -48,7 +48,7 @@ async function fixture(options: { baseBranch?: string; failChecks?: boolean; bro
       expect(rule).toContain('alwaysApply: true');
       expect(rule).toContain('# Ponytail');
       expect(rule).toContain('controller\'s required JSON report');
-      if (argv.includes('--force')) await writeFile(path.join(cwd, 'fix.txt'), `Fix ${agents}`);
+      if (argv.includes('--force') || options.mutateReadOnly) await writeFile(path.join(cwd, 'fix.txt'), `Fix ${agents}`);
       return { code: 0, stdout: JSON.stringify({ type: 'result', is_error: false, result: options.cursorResult ?? JSON.stringify({ actionable: true, summary: 'Menu corrigé.', browserRequired: options.browser ?? false, ...(options.commitTitle === null ? {} : { commitTitle: options.commitTitle ?? 'Repair menu' }), ...(options.browserScenario ? { browserScenario: options.browserScenario } : {}) }) }), stderr: '' };
     }
     if (argv[0] === 'check') { checks++; return { code: options.failChecks ? 1 : 0, stdout: options.failChecks ? 'Assertion failed' : 'Passed', stderr: '' }; }
@@ -128,6 +128,37 @@ it('adds the local rule for read-only reviews without changing existing project 
   expect(await h.git(checkout, 'status', '--porcelain')).toBe('');
   expect(await readFile(path.join(checkout, '.cursor/rules/project.mdc'), 'utf8')).toBe('Existing project guidance');
   expect(h.count()).toEqual({ agents: 1, checks: 0, pushes: 0, attempts: 1 });
+});
+
+it.each(['included', 'excluded', 'uncertain'] as const)('inspects repository relevance (%s) without setup, checks, publication or another Cursor call on recovery', async relevance => {
+  const h = await fixture({ cursorResult: JSON.stringify({ actionable: relevance !== 'uncertain', summary: 'README.md décrit ce composant.', browserRequired: false, relevance }) });
+  h.local.setup = [['must-not-run']];
+  const work = { ...h.work, kind: 'scope' as const, candidates: [h.work.project, { ...h.work.project, repository: 'https://github.com/example/backend' }] };
+  const result = await h.runner.run(work, h.local, h.attempt);
+  expect(result.relevance).toBe(relevance);
+  expect(result.outcome).toBe(relevance === 'uncertain' ? 'needs_information' : 'actionable');
+  expect(await h.runner.run(work, h.local, h.attempt)).toEqual(result);
+  expect(h.count()).toEqual({ agents: 1, checks: 0, pushes: 0, attempts: 1 });
+  expect(h.calls.some(argv => argv.includes('--force') || argv[0] === 'must-not-run')).toBe(false);
+  const prompt = await readFile(path.join(path.dirname(h.journalPath), 'prompt.txt'), 'utf8');
+  expect(prompt).toContain('READ-ONLY'); expect(prompt).toContain('Multiple repositories may be required');
+  expect(prompt).toContain('https://github.com/example/backend');
+  expect(await h.git(path.join(path.dirname(h.journalPath), 'checkout'), 'status', '--porcelain')).toBe('');
+});
+
+it('holds automatic selection when Cursor omits the relevance decision', async () => {
+  const h = await fixture();
+  expect((await h.runner.run({ ...h.work, kind: 'scope' }, h.local, h.attempt)).outcome).toBe('blocked');
+  expect(h.count()).toEqual({ agents: 2, checks: 0, pushes: 0, attempts: 2 });
+});
+
+it('rejects a supposedly read-only detection that modifies its checkout', async () => {
+  const h = await fixture({ mutateReadOnly: true, cursorResult: JSON.stringify({ actionable: true, summary: 'Concerné', browserRequired: false, relevance: 'included' }) });
+  const result = await h.runner.run({ ...h.work, kind: 'scope' }, h.local, h.attempt);
+  expect(result.outcome).toBe('blocked');
+  expect(result.summary).toContain('modifié le dépôt');
+  expect(result.relevance).toBeUndefined();
+  expect(h.count()).toEqual({ agents: 2, checks: 0, pushes: 0, attempts: 2 });
 });
 
 it.each([

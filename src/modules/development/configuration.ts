@@ -25,6 +25,7 @@ export function configurationView(form: ConfigurationForm) {
   const input = (key: string, label: string, max: number, hint?: string) => ({ type: 'input', block_id: key, label: plain(label), ...(hint ? { hint: plain(hint) } : {}),
     element: { type: 'plain_text_input', action_id: 'value', max_length: max, ...(value?.[key as keyof Project] ? { initial_value: String(value[key as keyof Project]) } : {}) } });
   const enabled = { text: plain('Activer le projet'), value: 'enabled' };
+  const modes = [{ text: plain('Manuel — choisir les dépôts'), value: 'manual' }, { text: plain('Automatique — inspecter et sélectionner'), value: 'automatic' }];
   const selected = form.folders?.filter(folder => value && projectFolders(value).includes(folder.id)) ?? [];
   const privateConversation = /^D/.test(form.channel);
   return { type: 'modal', callback_id: 'development:configuration', private_metadata: form.id, title: plain(form.base ? 'Modifier le projet' : 'Configurer un projet'), submit: plain('Vérifier'), close: plain('Annuler'), blocks: [
@@ -40,6 +41,8 @@ export function configurationView(form: ConfigurationForm) {
     { type: 'input', block_id: 'repository', label: plain('Dépôts — une URL HTTPS par ligne'), hint: plain('1 à 20 dépôts, sans identifiants, paramètres ni fragment. Chaque ticket peut cibler un ou plusieurs dépôts.'),
       element: { type: 'plain_text_input', action_id: 'value', multiline: true, max_length: 3000, ...(value ? { initial_value: projectRepositories(value).join('\n') } : {}) } },
     input('skill', 'Skill du worker', 200, 'Nom correspondant à la configuration locale du worker.'),
+    { type: 'input', block_id: 'repositoryMode', label: plain('Choix des dépôts'), hint: plain('Automatique : inspection Cursor facturée pour chaque dépôt avant sélection. En cas de doute, choix manuel. Ready for AI reste obligatoire pour corriger.'),
+      element: { type: 'static_select', action_id: 'value', options: modes, initial_option: modes.find(mode => mode.value === (value?.repositoryMode ?? 'manual')) } },
     { type: 'input', block_id: 'enabled', optional: true, label: plain('Activation'), hint: plain('Activer rend la file et les tickets déjà Ready for AI éligibles. Les appels Cursor sont facturés séparément.'), element: { type: 'checkboxes', action_id: 'value', options: [enabled], ...(value?.enabled ? { initial_options: [enabled] } : {}) } },
   ] };
 }
@@ -86,8 +89,9 @@ export class DevelopmentConfiguration {
       if (enabled.some(option => option.value !== 'enabled')) return { response_action: 'errors', errors: { enabled: 'Choix d’activation invalide.' } };
       const folders = data.folder?.value?.selected_options?.map(option => option.value) ?? (data.folder?.value?.selected_option ? [data.folder.value.selected_option.value] : []);
       const repositories = data.repository?.value?.value?.split(/\r?\n/).map(url => url.trim()).filter(Boolean) ?? [];
+      const repositoryMode = data.repositoryMode?.value?.selected_option?.value ?? form.base?.repositoryMode;
       const candidate = projectSchema.safeParse({ id: form.base?.id ?? data.id?.value?.value?.trim().toLowerCase(), name: data.name?.value?.value, channel: /^D/.test(form.channel) ? data.channel?.value?.selected_conversation : form.channel,
-        folder: folders[0], repository: repositories[0], ...(folders.length > 1 ? { folders } : {}), ...(repositories.length > 1 ? { repositories } : {}), skill: data.skill?.value?.value, enabled: enabled.length > 0 });
+        folder: folders[0], repository: repositories[0], ...(folders.length > 1 ? { folders } : {}), ...(repositories.length > 1 ? { repositories } : {}), skill: data.skill?.value?.value, ...(repositoryMode !== undefined ? { repositoryMode } : {}), enabled: enabled.length > 0 });
       if (!candidate.success) {
         const messages: Record<string, string> = { id: 'Utilisez 1 à 64 lettres minuscules, chiffres ou tirets, en commençant par une lettre.', name: 'Saisissez un nom de 1 à 100 caractères.', channel: 'Sélectionnez un canal public ou privé.', folder: 'Choisissez un dossier ClickUp dans la liste.', repository: 'Saisissez une URL HTTPS sans identifiants, paramètres ni fragment.', skill: 'Saisissez un skill de 1 à 200 caractères.' };
         return { response_action: 'errors', errors: Object.fromEntries(candidate.error.issues.map(issue => { const key = String(issue.path[0]), field = key === 'folders' ? 'folder' : key === 'repositories' ? 'repository' : key; return [field, key === 'repositories' || key === 'folders' ? 'Sélection invalide : respectez les limites et retirez les doublons.' : messages[field] ?? 'Valeur invalide.']; })) };
@@ -128,7 +132,7 @@ export class DevelopmentConfiguration {
       if (problem) return show(`${problem}\nAucune configuration enregistrée.`, [{ label: 'Corriger le formulaire', action: 'configuration_prepare', value: `form:${form.id}`, bound: true }]);
       await this.saved.validated(actor, form.id);
       const value = form.candidate!;
-      return show(`Vérifiez la configuration avant de l’enregistrer :\nIdentifiant : ${value.id}\nNom : ${value.name}\nCanal : ${value.channel}\nDossiers ClickUp :\n${projectFolders(value).map(id => folderLabel(form, id)).join('\n')}\nDépôts :\n${projectRepositories(value).join('\n')}\nSkill : ${value.skill}\nÉtat : ${value.enabled ? 'Activé' : 'Suspendu'}\n\n${value.enabled ? 'Les tickets déjà Ready for AI et la file pourront démarrer ; appels Cursor facturés séparément.' : 'Le projet reste suspendu ; les travaux déjà démarrés peuvent terminer.'}\nLe worker local doit avoir la configuration correspondante. Cette confirmation personnelle expire 24 heures après la préparation du formulaire.`, [
+      return show(`Vérifiez la configuration avant de l’enregistrer :\nIdentifiant : ${value.id}\nNom : ${value.name}\nCanal : ${value.channel}\nDossiers ClickUp :\n${projectFolders(value).map(id => folderLabel(form, id)).join('\n')}\nDépôts :\n${projectRepositories(value).join('\n')}\nSkill : ${value.skill}\nChoix des dépôts : ${value.repositoryMode === 'automatic' ? 'Automatique — inspection Cursor facturée par dépôt ; choix manuel si incertain' : 'Manuel'}\nÉtat : ${value.enabled ? 'Activé' : 'Suspendu'}\n\n${value.enabled ? 'Les tickets déjà Ready for AI et la file pourront démarrer ; appels Cursor facturés séparément.' : 'Le projet reste suspendu ; les travaux déjà démarrés peuvent terminer.'}\nLe worker local doit avoir la configuration correspondante. Cette confirmation personnelle expire 24 heures après la préparation du formulaire.`, [
         { label: 'Enregistrer la configuration', action: 'configuration_save', value: form.id, bound: true, style: 'primary' },
         { label: 'Corriger le formulaire', action: 'configuration_prepare', value: `form:${form.id}`, bound: true },
         { label: 'Annuler', action: 'configuration_cancel', value: form.id, bound: true },

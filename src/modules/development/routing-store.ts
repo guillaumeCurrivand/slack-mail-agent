@@ -20,6 +20,12 @@ CREATE TABLE IF NOT EXISTS development_route_runs (
  team text NOT NULL, ticket text NOT NULL, cycle text NOT NULL, project text NOT NULL,
  run text NOT NULL UNIQUE, PRIMARY KEY(team,cycle,project)
 );
+CREATE TABLE IF NOT EXISTS development_repository_detection (
+ team text NOT NULL, ticket text NOT NULL, cycle text NOT NULL UNIQUE,
+ candidates jsonb NOT NULL, snapshot jsonb NOT NULL, revision integer NOT NULL,
+ state text NOT NULL DEFAULT 'pending', summary text NOT NULL DEFAULT '',
+ PRIMARY KEY(team,ticket)
+);
 ALTER TABLE development_ticket_routes ADD COLUMN IF NOT EXISTS revision integer NOT NULL DEFAULT 0;
 ALTER TABLE development_route_proposals ADD COLUMN IF NOT EXISTS base_selection jsonb;
 ALTER TABLE development_route_proposals ADD COLUMN IF NOT EXISTS base_revision integer NOT NULL DEFAULT 0;`;
@@ -35,6 +41,48 @@ export const sameDestination = (a: Project, b: Project) => isDeepStrictEqual(ide
 /** One shared ticket owns its repository choice and each authorized batch of runs. */
 export class RoutingStore {
   constructor(private db: Database, private team: string) {}
+  async detection(ticket: string) {
+    return (await this.db.query('SELECT state,summary FROM development_repository_detection WHERE team=$1 AND ticket=$2', [this.team, ticket])).rows[0] as { state: string; summary: string } | undefined;
+  }
+  /** Opt-in, one bounded read-only investigation per unassigned ticket. Polling never spends again. */
+  async detect(ticket: Ticket) {
+    return transaction(this.db, async sql => {
+      const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.flatMap(row => projectTargets(row.config as Project));
+      const route = (await sql.query('SELECT * FROM development_ticket_routes WHERE team=$1 AND ticket=$2 FOR UPDATE', [this.team, ticket.id])).rows[0] as TicketRoute | undefined;
+      if (!route || route.selected) return;
+      const candidates = current.filter(p => p.folder === route.folder);
+      const detection = (await sql.query('SELECT * FROM development_repository_detection WHERE team=$1 AND ticket=$2', [this.team, ticket.id])).rows[0];
+      if (!detection) {
+        if (candidates.length < 2 || candidates.some(p => !p.enabled || p.channel !== route.channel || p.repositoryMode !== 'automatic')) return;
+        if ((await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 LIMIT 1", [this.team, ticket.id])).rows.length) return;
+        const cycle = `scope:${randomUUID()}`;
+        await sql.query('INSERT INTO development_repository_detection(team,ticket,cycle,candidates,snapshot,revision) VALUES($1,$2,$3,$4,$5,$6)', [this.team, ticket.id, cycle, JSON.stringify(candidates), JSON.stringify(ticket), route.revision]);
+        await this.queue(sql, { ...route, selected: candidates }, ticket, 'scope', cycle);
+        return;
+      }
+      if (detection.state !== 'pending') return;
+      const stop = async (summary: string) => {
+        await sql.query("UPDATE development_repository_detection SET state='manual',summary=$3 WHERE team=$1 AND ticket=$2", [this.team, ticket.id, summary]);
+        await sql.query("UPDATE development_runs SET state='cancelled',updated_at=now() WHERE team=$1 AND kind='scope' AND ticket->>'id'=$2 AND state='queued' AND worker IS NULL", [this.team, ticket.id]);
+      };
+      const requirements = ({ status: _status, url: _url, ...requirements }: Ticket) => requirements;
+      if (route.revision !== detection.revision || !isDeepStrictEqual(candidates, detection.candidates) || !isDeepStrictEqual(requirements(ticket), requirements(detection.snapshot))) {
+        return stop('Le ticket ou la configuration a changé pendant la détection. Choisissez les dépôts manuellement pour poursuivre.');
+      }
+      const runs = (await sql.query('SELECT r.* FROM development_route_runs m JOIN development_runs r ON r.id=m.run WHERE m.team=$1 AND m.cycle=$2 ORDER BY m.project', [this.team, detection.cycle])).rows;
+      const labels: Record<string, string> = { included: 'concerné', excluded: 'non concerné', uncertain: 'incertain' };
+      const summary = runs.map(r => `${r.config.name} : ${labels[r.result?.relevance] ?? 'incertain'} — ${r.result?.summary ?? 'Aucun résultat'}`).join('\n\n');
+      if (runs.some(r => ['blocked', 'cancelled', 'reporting_error'].includes(r.state))) return stop(`Une détection a échoué, reste incertaine ou a été annulée. Choisissez les dépôts manuellement.\n\n${summary}`);
+      if (runs.length !== candidates.length || runs.some(r => r.state !== 'completed')) return;
+      if (runs.some(r => r.result?.outcome !== 'actionable' || !['included', 'excluded'].includes(r.result?.relevance) || r.result?.commit)) return stop(`Choix incertain. Choisissez les dépôts manuellement.\n\n${summary}`);
+      const selected = candidates.filter(p => runs.some(r => sameDestination(r.config, p) && r.result.relevance === 'included'));
+      if (!selected.length) return stop(`Aucun dépôt concerné identifié avec certitude. Choisissez les dépôts manuellement.\n\n${summary}`);
+      if ((await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 AND kind<>'scope' LIMIT 1", [this.team, ticket.id])).rows.length) return stop('Des traitements existent déjà. Vérification humaine nécessaire avant de choisir les dépôts.');
+      await sql.query('UPDATE development_ticket_routes SET selected=$3,snapshot=$4,revision=revision+1 WHERE team=$1 AND ticket=$2', [this.team, ticket.id, JSON.stringify(selected), JSON.stringify(ticket)]);
+      await sql.query("UPDATE development_repository_detection SET state='selected',summary=$3 WHERE team=$1 AND ticket=$2", [this.team, ticket.id, `Dépôts sélectionnés automatiquement : ${selected.map(p => p.name).join(', ')}.\n\n${summary}`]);
+      if (!ready(ticket.status)) await this.queue(sql, { ...route, selected }, ticket, 'review', `detected:${detection.cycle}`);
+    });
+  }
   async get(ticket: string): Promise<TicketRoute | undefined> {
     return (await this.db.query('SELECT * FROM development_ticket_routes WHERE team=$1 AND ticket=$2', [this.team, ticket])).rows[0] as TicketRoute | undefined;
   }
@@ -86,7 +134,7 @@ export class RoutingStore {
       if (!route || route.revision !== proposal.base_revision || !isDeepStrictEqual(route.selected, proposal.base_selection) || !selected.length || !ticket || ticket.id !== route.ticket ||
         selected.some(p => !p.enabled || p.folder !== route.folder || p.channel !== route.channel || !isDeepStrictEqual(current.find(c => sameDestination(c, p)), p))) return 'changed';
       // Pre-routing work cannot safely be adopted into a new multi-repository authorization.
-      if (!route.selected && (await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 LIMIT 1", [this.team, route.ticket])).rows.length) return 'legacy';
+      if (!route.selected && (await sql.query("SELECT 1 FROM development_runs WHERE team=$1 AND ticket->>'id'=$2 AND kind<>'scope' LIMIT 1", [this.team, route.ticket])).rows.length) return 'legacy';
       if (route.selected && await this.changeBlocked(route.ticket, sql)) return 'busy';
       if (route.selected && selected.length === route.selected.length && selected.every(p => route.selected!.some(s => sameDestination(s, p)))) {
         await sql.query("UPDATE development_route_proposals SET state='unchanged' WHERE id=$1", [id]);
@@ -98,6 +146,8 @@ export class RoutingStore {
       }
       await sql.query('UPDATE development_ticket_routes SET selected=$3,snapshot=$4,revision=revision+1,armed=CASE WHEN $5 THEN true ELSE armed END WHERE team=$1 AND ticket=$2', [this.team, route.ticket, JSON.stringify(selected), JSON.stringify(ticket), ready(ticket.status)]);
       await sql.query("UPDATE development_route_proposals SET state='applied' WHERE id=$1", [id]);
+      await sql.query("UPDATE development_repository_detection SET state='overridden' WHERE team=$1 AND ticket=$2", [this.team, route.ticket]);
+      await sql.query("UPDATE development_runs SET state='cancelled',updated_at=now() WHERE team=$1 AND ticket->>'id'=$2 AND kind='scope' AND state='queued' AND worker IS NULL", [this.team, route.ticket]);
       // A Ready ticket is admitted by polling as one atomic batch. Otherwise selection starts analysis.
       const added = selected.filter(p => !route.selected?.some(s => sameDestination(s, p)));
       if (!ready(ticket.status) && added.length) await this.queue(sql, { ...route, selected: added }, ticket, 'review', `selection:${id}`);
@@ -108,7 +158,7 @@ export class RoutingStore {
     await this.db.query("UPDATE development_route_proposals SET state='ready' WHERE id=$1 AND owner=$2 AND channel=$3 AND state='pending' AND selected<>'[]'::jsonb AND created_at>=now()-interval '24 hours'", [id, ownerKey(actor), actor.channel]);
     return this.proposal(actor, id);
   }
-  private async queue(sql: Sql, route: TicketRoute, ticket: Ticket, kind: 'review' | 'build', cycle: string, thread = route.thread) {
+  private async queue(sql: Sql, route: TicketRoute, ticket: Ticket, kind: 'review' | 'build' | 'scope', cycle: string, thread = route.thread) {
     for (const project of route.selected!) {
       // Preserve legacy event IDs on replay; only sibling repositories under the
       // same project need an additional discriminator in this frozen batch.

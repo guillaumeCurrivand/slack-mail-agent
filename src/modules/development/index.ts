@@ -43,6 +43,11 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     const row = await store.run(id);
     if (!row || row.state !== 'reporting') return;
     const result = row.result as Result, project = row.config as Project;
+    if (row.kind === 'scope') {
+      // Detection has no external effects per repository. Polling reconciles the complete set.
+      await database.query('UPDATE development_runs SET state=$2,updated_at=now() WHERE id=$1', [id, result.outcome === 'actionable' ? 'completed' : 'blocked']);
+      return;
+    }
     const batch = await routing.saved.completion(id);
     const complete = !batch || batch.complete;
     const commitUrl = result.commit && result.outcome === 'pushed' ? commitLink(project.repository, result.commit) : undefined;
@@ -60,16 +65,25 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
     }
   }
 
-  async function requestRouting(route: TicketRoute, project: Project, context: IntegrationContext) {
-    if (route.selected) return;
-    try { await store.effect(`routing:${config.SLACK_TEAM_ID}:${route.ticket}:channel-notice`, async () => {
+  async function requestRouting(route: TicketRoute, project: Project, ticket: Ticket, context: IntegrationContext) {
+    if (!await channels.accessible(project.channel)) return route;
+    await routing.saved.detect(ticket);
+    route = (await routing.saved.get(ticket.id))!;
+    const detection = await routing.saved.detection(ticket.id);
+    if (route.selected && detection?.state !== 'selected') return route;
+    const text = detection?.state === 'pending'
+      ? 'Détection automatique en cours : le worker inspecte chaque dépôt en lecture seule. Les appels Cursor sont facturés par dépôt. Vous pouvez choisir manuellement les dépôts ici. Ready for AI reste nécessaire avant toute correction.'
+      : detection && ['manual', 'selected'].includes(detection.state) ? `${detection.summary}\n\nReady for AI autorise les corrections dans les dépôts sélectionnés. Consultez les traitements ou choisissez les dépôts depuis ce ticket.`
+        : 'Choisissez les dépôts concernés ici : un ou plusieurs dépôts pour ce ticket. Tickets et dépôts reste accessible avec development menu dans ce canal. Aucun traitement ne démarre avant confirmation, même si le ticket est Ready for AI. Chaque membre peut ouvrir ses propres contrôles.';
+    try { await store.effect(`routing:${config.SLACK_TEAM_ID}:${route.ticket}:channel-notice${detection ? ':' + detection.state : ''}`, async () => {
       if (!await channels.accessible(project.channel) || !context.messenger.postInteractiveThread) throw new Error('Canal indisponible.');
       return context.messenger.postInteractiveThread({ team: config.SLACK_TEAM_ID, channel: project.channel, ...(route.thread ? { thread: route.thread } : {}) }, {
-        kind: 'Dépôts du ticket', text: `${route.snapshot.name}\nChoisissez les dépôts concernés ici : un ou plusieurs dépôts pour ce ticket. Tickets et dépôts reste accessible avec development menu dans ce canal. Aucun traitement ne démarre avant confirmation, même si le ticket est Ready for AI. Chaque membre peut ouvrir ses propres contrôles.`,
+        kind: 'Dépôts du ticket', text: `${route.snapshot.name}\n${text}`,
         resourceLinks: [{ label: 'Ticket ClickUp', url: route.snapshot.url }], buttons: [{ label: 'Choisir les dépôts', action: 'development:channel_ticket', value: route.ticket }, { label: 'Menu Développement', action: 'development:channel_home', value: 'main' }],
       });
     }); }
     catch { /* Never replay uncertain delivery; the channel menu remains available. */ }
+    return route;
   }
 
   return {
@@ -171,11 +185,12 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
               if (siblings.length > 1 || existing) {
                 if (!ready(task.status) && !existing) continue;
                 const ticket = await clickup.ticket(project, task.id);
-                const route = existing ?? await routing.saved.ensure(project, ticket);
+                let route = existing ?? await routing.saved.ensure(project, ticket);
                 if (!route || route.folder !== project.folder) continue;
-                const destination = siblings.find(p => p.channel === route.channel);
+                const routeChannel = route.channel;
+                const destination = siblings.find(p => p.channel === routeChannel);
                 if (!destination) continue;
-                await requestRouting(route, destination, context);
+                route = await requestRouting(route, destination, ticket, context);
                 if (route.selected && (await Promise.all([...new Set(route.selected.map(p => p.channel))].map(channel => channels.accessible(channel)))).every(Boolean)) await routing.saved.observe(ticket);
                 continue;
               }
@@ -210,10 +225,18 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
             matched = true;
             const existing = await routing.saved.get(id);
             if (projects.filter(p => p.folder === project.folder).length > 1 || existing) {
-              const route = await routing.saved.ensure(project, ticket, thread);
+              let route = await routing.saved.ensure(project, ticket, thread);
               if (!route) continue;
-              await requestRouting(route, project, context);
+              const previouslySelected = !!route.selected;
+              if (!links.length && !previouslySelected && !ready(ticket.status) && await routing.saved.detection(id)) {
+                const clarification = `Précision Slack (${user.user}) :\n${String(payload.text)}`;
+                await store.effect(`${eventId}:${id}:clarification`, () => clickup.comment(id, clarification));
+                ticket.comments.push(clarification);
+              }
+              route = await requestRouting(route, project, ticket, context);
               if (!route.selected || route.selected.some(p => !accessible.some(c => sameDestination(c, p)))) continue;
+              // Detection already queued the initial analyses atomically with its selection.
+              if (!previouslySelected && !ready(ticket.status)) continue;
               if (!links.length) {
                 if (ready(ticket.status) || (await Promise.all(route.selected.map(p => store.frozen(p.id, id)))).some(Boolean)) continue;
                 const clarification = `Précision Slack (${user.user}) :\n${String(payload.text)}`;
@@ -248,8 +271,8 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
       const body = (request: { body: unknown }) => JSON.parse(String(request.body ?? '{}'));
       app.post('/development/worker/claim', async (request, reply) => {
         if (!authorized(request.headers.authorization)) return reply.code(401).send();
-        const input = z.object({ worker: z.uuid(), projects: z.array(projectIdSchema).min(1).max(100), targets: z.array(z.object({ id: projectIdSchema, repository: z.string().min(1).max(2000), skill: z.string().min(1).max(200) }).strict()).min(1).max(100).optional() }).strict().parse(body(request));
-        return { work: await store.claim(input.worker, input.projects, input.targets) };
+        const input = z.object({ worker: z.uuid(), projects: z.array(projectIdSchema).min(1).max(100), repositoryDetection: z.boolean().optional(), targets: z.array(z.object({ id: projectIdSchema, repository: z.string().min(1).max(2000), skill: z.string().min(1).max(200) }).strict()).min(1).max(100).optional() }).strict().parse(body(request));
+        return { work: await store.claim(input.worker, input.projects, input.targets, input.repositoryDetection) };
       });
       app.post('/development/worker/attempt', async (request, reply) => {
         if (!authorized(request.headers.authorization)) return reply.code(401).send();

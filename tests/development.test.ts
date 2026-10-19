@@ -21,7 +21,7 @@ const project = projectSchema.parse({ id: 'pilot', name: 'Projet pilote', channe
 let db: PGlite;
 const apps: Array<{ close(): Promise<void> }> = [];
 beforeAll(async () => { db = new PGlite(); await db.exec(coreSchema); });
-beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations,development_configuration_forms,development_ticket_routes,development_route_proposals,development_route_runs CASCADE'); });
+beforeEach(async () => { await db.exec('TRUNCATE jobs,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS development_projects,development_threads,development_ticket_state,development_runs,development_effects,development_receipts,development_health,development_confirmations,development_configuration_forms,development_ticket_routes,development_route_proposals,development_route_runs,development_repository_detection CASCADE'); });
 afterAll(async () => { for (const app of apps) await app.close(); await db.close(); });
 
 async function harness(failure?: 'conversations.info' | 'conversations.members' | 'clickup') {
@@ -119,7 +119,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     return posts.at(-1);
   };
   const submit = async (view: any, values: Record<string, unknown>, actor = alice, signed = true) => {
-    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'folder' ? { type: 'multi_external_select', selected_options: (Array.isArray(value) ? value : value ? [value] : []).map(value => ({ value })) } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
+    const state = Object.fromEntries(Object.entries(values).map(([key, value]) => [key, { value: key === 'channel' ? { type: 'conversations_select', selected_conversation: value } : key === 'folder' ? { type: 'multi_external_select', selected_options: (Array.isArray(value) ? value : value ? [value] : []).map(value => ({ value })) } : key === 'repositoryMode' ? { type: 'static_select', selected_option: { value } } : key === 'enabled' ? { type: 'checkboxes', selected_options: value ? [{ value: 'enabled' }] : [] } : { type: 'plain_text_input', value } }]));
     const stamp = String(Math.floor(Date.now() / 1000));
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'view_submission', team: { id: actor.team }, user: { id: actor.user }, view: { id: 'V1', callback_id: view.callback_id, private_metadata: view.private_metadata, state: { values: state } } }) }).toString();
     return app.inject({ method: 'POST', url: '/slack/actions', payload: raw, headers: { 'content-type': 'application/x-www-form-urlencoded', 'x-slack-request-timestamp': stamp, 'x-slack-signature': signed ? `v0=${createHmac('sha256', 'secret').update(`v0:${stamp}:${raw}`).digest('hex')}` : 'invalid' } });
@@ -164,6 +164,148 @@ async function finishRepository(h: Awaited<ReturnType<typeof harness>>, projectI
 
 const backendRepository = 'https://github.com/example/backend';
 const groupedProject = () => projectSchema.parse({ ...project, folders: ['123', '456'], repositories: [project.repository, backendRepository] });
+
+async function automaticProject(h: Awaited<ReturnType<typeof harness>>, status = 'Ready for AI') {
+  await h.command(`development configure ${JSON.stringify({ ...groupedProject(), repositoryMode: 'automatic' })}`);
+  h.tasks.get('abc123')!.status = status;
+  if (status === 'Ready for AI') await h.poll();
+  else { const event = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(event.id); }
+}
+async function finishDetection(h: Awaited<ReturnType<typeof harness>>, relevance: 'included' | 'excluded' | 'uncertain', repository?: string) {
+  const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'], repositoryDetection: true,
+    targets: (repository ? [repository] : [project.repository, backendRepository]).map(repository => ({ id: 'pilot', repository, skill: project.skill })) })).json().work;
+  expect(work?.kind).toBe('scope');
+  expect(work.candidates).toHaveLength(2);
+  await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 });
+  const result = { outcome: relevance === 'uncertain' ? 'needs_information' : 'actionable', relevance, summary: `${work.project.repository} — ${relevance} : src/menu.ts`, tests: [] };
+  expect((await h.api('result', { id: work.id, lease: work.lease, result })).statusCode).toBe(200);
+  expect((await h.api('result', { id: work.id, lease: work.lease, result })).statusCode).toBe(200);
+  await h.run(`development:finish:${work.id}`);
+  return work;
+}
+
+it.each([['included', 2], ['excluded', 1]] as const)('automatically selects all relevant repositories (%s sibling), admits one batch and waits for every pushed result', async (sibling, count) => {
+  const h = await harness(); await automaticProject(h);
+  expect((await h.store.history('pilot')).map(r => r.kind)).toEqual(['scope', 'scope']);
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [{ id: 'pilot', repository: project.repository, skill: project.skill }] })).json().work).toBeNull();
+  await finishDetection(h, 'included', project.repository);
+  await h.poll();
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  await finishDetection(h, sibling, backendRepository);
+  await h.poll(); await h.poll();
+  const route = (await h.sql.query('SELECT * FROM development_ticket_routes')).rows[0];
+  expect(route.selected).toHaveLength(count);
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'build')).toHaveLength(count);
+  expect(h.posts.some(p => p.text?.includes('Dépôts sélectionnés automatiquement'))).toBe(true);
+  expect(h.comments).toEqual([]); expect(h.statuses).toEqual([]);
+  for (let i = 0; i < count; i++) {
+    const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'], targets: [project.repository, backendRepository].map(repository => ({ id: 'pilot', repository, skill: project.skill })) })).json().work;
+    expect(work.kind).toBe('build');
+    await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 });
+    await h.api('result', { id: work.id, lease: work.lease, result: { outcome: 'pushed', summary: 'Corrigé', tests: ['Passed'], commit: String(i + 1).repeat(40) } });
+    await h.run(`development:finish:${work.id}`);
+    expect(h.statuses).toHaveLength(i + 1 === count ? 1 : 0);
+  }
+  expect(h.statuses).toEqual(['to build']);
+});
+
+it('detects linked open tickets without authorizing builds and retains the selection for Ready for AI', async () => {
+  const h = await harness(); await automaticProject(h, 'open');
+  await finishDetection(h, 'included'); await finishDetection(h, 'excluded');
+  await h.poll(); await h.poll();
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'review')).toHaveLength(1);
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'build')).toHaveLength(0);
+  h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'build')).toHaveLength(1);
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'scope')).toHaveLength(2);
+});
+
+it.each(['uncertain', 'excluded'] as const)('holds ambiguous or empty automatic choices (%s) and allows an in-place manual override', async relevance => {
+  const h = await harness(); await automaticProject(h);
+  await finishDetection(h, relevance); await finishDetection(h, 'excluded');
+  await h.poll(); await h.poll();
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  expect((await h.sql.query('SELECT state FROM development_repository_detection')).rows[0].state).toBe('manual');
+  expect((await h.store.history('pilot'))).toHaveLength(2);
+  const confirmation = await chooseRepositories(h, ['1. project — Projet pilote']);
+  const result = await h.click(confirmation, 'Confirmer les dépôts');
+  expect(result.ts).toBe(confirmation.ts);
+  expect(result.text).toContain('Choix enregistré');
+  await h.poll();
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'build')).toHaveLength(1);
+});
+
+it.each(['ticket', 'configuration', 'pause', 'mode'] as const)('rejects stale automatic results after a %s change', async change => {
+  const h = await harness(); await automaticProject(h);
+  await finishDetection(h, 'included'); await finishDetection(h, 'included');
+  if (change === 'ticket') h.tasks.get('abc123')!.description = 'Different requirements';
+  else await h.store.save({ ...(await h.store.project('pilot'))!, ...(change === 'configuration' ? { skill: 'different' } : change === 'pause' ? { enabled: false } : { repositoryMode: 'manual' as const }) }, 'changed');
+  await h.poll();
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected).toBeNull();
+  expect((await h.store.history('pilot'))).toHaveLength(2);
+});
+
+it('lets a manual selection supersede an in-flight detection without stale completion or another paid inspection', async () => {
+  const h = await harness(); await automaticProject(h);
+  const work = (await h.api('claim', { worker: randomUUID(), projects: ['pilot'], repositoryDetection: true, targets: [{ id: 'pilot', repository: project.repository, skill: project.skill }] })).json().work;
+  expect(work.kind).toBe('scope');
+  const confirmation = await chooseRepositories(h, ['2. backend — Projet pilote']);
+  await h.click(confirmation, 'Confirmer les dépôts');
+  await h.api('attempt', { id: work.id, lease: work.lease, expected: 0 });
+  expect((await h.api('result', { id: work.id, lease: work.lease, result: { outcome: 'pushed', summary: 'Invalid', tests: ['x'], commit: 'a'.repeat(40) } })).statusCode).toBe(409);
+  expect((await h.api('result', { id: work.id, lease: work.lease, result: { outcome: 'actionable', summary: 'Missing relevance', tests: [] } })).statusCode).toBe(409);
+  await h.api('result', { id: work.id, lease: work.lease, result: { outcome: 'actionable', relevance: 'included', summary: 'Stale', tests: [] } });
+  await h.run(`development:finish:${work.id}`); await h.poll();
+  expect((await h.sql.query('SELECT selected FROM development_ticket_routes')).rows[0].selected.map((p: any) => p.repository)).toEqual([backendRepository]);
+  expect((await h.store.history('pilot')).filter(r => r.kind === 'scope' && r.state === 'cancelled')).toHaveLength(1);
+  expect(await h.store.retry(work.id, 'retry-scope', 'pilot')).toBe(false);
+});
+
+it('configures automatic selection through the signed native form with a separate confirmation in the same message', async () => {
+  const h = await harness(); const { prepared, view } = await newForm(h);
+  expect(view.blocks.find((b: any) => b.block_id === 'repositoryMode').element.initial_option.value).toBe('manual');
+  expect((await h.submit(view, { ...project, repository: `${project.repository}\n${backendRepository}`, repositoryMode: 'automatic' })).json()).toEqual({});
+  await h.run(`development:configuration:${view.private_metadata}`);
+  expect(h.posts.at(-1).ts).toBe(prepared.ts);
+  expect(h.posts.at(-1).text).toContain('Automatique — inspection Cursor facturée par dépôt');
+  expect(await h.store.project('pilot')).toBeUndefined();
+  await h.click(h.posts.at(-1), 'Enregistrer la configuration');
+  expect((await h.store.project('pilot'))?.repositoryMode).toBe('automatic');
+  await h.click(await h.click(await h.command('development status pilot'), 'Modifier la configuration'), 'Remplir le formulaire');
+  expect(h.views.at(-1).blocks.find((b: any) => b.block_id === 'repositoryMode').element.initial_option.value).toBe('automatic');
+});
+
+it.each(['disabled', 'manual', 'missing'] as const)('does not admit pending inspections after a candidate becomes %s', async change => {
+  const h = await harness(); await automaticProject(h);
+  const saved = (await h.store.project('pilot'))!;
+  await h.store.save({ ...saved, ...(change === 'disabled' ? { enabled: false } : change === 'manual' ? { repositoryMode: 'manual' as const } : { repositories: [project.repository] }) }, 'changed');
+  expect((await h.api('claim', { worker: randomUUID(), projects: ['pilot'], repositoryDetection: true, targets: [{ id: 'pilot', repository: project.repository, skill: project.skill }] })).json().work).toBeNull();
+  expect((await h.store.history('pilot')).every(r => r.attempts === 0)).toBe(true);
+});
+
+it('keeps mixed-mode shared projects manual and never adopts legacy work when enabling automatic mode', async () => {
+  const h = await harness(); await sharedProjects(h);
+  await h.store.save({ ...project, repositoryMode: 'automatic' }, 'automatic-pilot');
+  h.tasks.get('abc123')!.status = 'Ready for AI'; await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_repository_detection')).rows).toEqual([]);
+  await h.store.review(project, h.tasks.get('abc123')!, '1.000001', 'legacy');
+  await h.store.save({ ...(await h.store.project('backend'))!, repositoryMode: 'automatic' }, 'automatic-backend');
+  await h.poll();
+  expect((await h.sql.query('SELECT * FROM development_repository_detection')).rows).toEqual([]);
+  expect((await h.store.history('pilot'))).toHaveLength(1);
+});
+
+it('saves a human clarification during detection and holds the stale decision without spending again', async () => {
+  const h = await harness(); await automaticProject(h, 'open');
+  const request = await h.ingress('Il faut aussi modifier le contrat API.', { thread: '1700000000.000001' });
+  await h.run(request.id);
+  expect(h.comments).toHaveLength(1);
+  expect(h.comments[0]).toContain('modifier le contrat API');
+  expect((await h.sql.query('SELECT state FROM development_repository_detection')).rows[0].state).toBe('manual');
+  expect((await h.store.history('pilot')).every(r => r.state === 'cancelled')).toBe(true);
+  await h.poll();
+  expect((await h.store.history('pilot'))).toHaveLength(2);
+});
 
 async function assignment(h: Awaited<ReturnType<typeof harness>>, actor = alice) {
   const menu = actor.channel.startsWith('D') ? await h.dm('development menu') : await h.command('menu');

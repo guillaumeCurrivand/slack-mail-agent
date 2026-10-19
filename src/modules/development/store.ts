@@ -86,11 +86,14 @@ export class DevelopmentStore {
     const row = (await this.db.query('SELECT armed FROM development_ticket_state WHERE team=$1 AND project=$2 AND ticket=$3', [this.team, project, ticket])).rows[0];
     return !row || row.armed;
   }
-  async claim(worker: string, projects: string[], targets?: Array<{ id: string; repository: string; skill: string }>): Promise<Work | null> {
+  async claim(worker: string, projects: string[], targets?: Array<{ id: string; repository: string; skill: string }>, repositoryDetection = false): Promise<Work | null> {
     return transaction(this.db, async sql => {
       // Project row locks serialize all users/workers; a running job never expires.
       const current = (await sql.query('SELECT config FROM development_projects WHERE team=$1 ORDER BY id FOR UPDATE', [this.team])).rows.map(row => row.config as Project);
       const destinations = current.flatMap(p => projectTargets(p));
+      const detections = repositoryDetection ? (await sql.query(`SELECT d.* FROM development_repository_detection d
+        JOIN development_ticket_routes route ON route.team=d.team AND route.ticket=d.ticket
+        WHERE d.team=$1 AND d.state='pending' AND route.selected IS NULL AND route.revision=d.revision`, [this.team])).rows : [];
       let row = (await sql.query("SELECT * FROM development_runs WHERE team=$1 AND worker=$2 AND state='running' ORDER BY created_at LIMIT 1", [this.team, worker])).rows[0];
       if (!row) {
         const queued = (await sql.query(`SELECT r.*,
@@ -100,6 +103,8 @@ export class DevelopmentStore {
           AND NOT EXISTS (SELECT 1 FROM development_runs busy WHERE busy.team=r.team AND busy.state IN ('running','reporting') AND busy.repository_key=r.repository_key)
           ORDER BY r.created_at,r.id`, [this.team, projects])).rows;
         row = queued.find(run => {
+          if (run.kind === 'scope' && !repositoryDetection) return false;
+          if (run.kind === 'scope' && !detections.some(d => d.ticket === run.ticket.id && isDeepStrictEqual(d.candidates, destinations.filter(p => p.folder === run.config.folder)))) return false;
           const frozen = run.config as Project;
           const parent = current.find(p => p.id === run.project);
           if (!parent?.enabled || !destinations.some(p => p.id === frozen.id && p.folder === frozen.folder && p.repository === frozen.repository && p.channel === frozen.channel && p.skill === frozen.skill)) return false;
@@ -108,12 +113,13 @@ export class DevelopmentStore {
           return targets ? targets.some(p => p.id === frozen.id && p.repository === frozen.repository && p.skill === frozen.skill) : projectRepositories(parent).length === 1;
         });
       }
-      if (!row) return null;
+      if (!row || row.kind === 'scope' && !repositoryDetection) return null;
       if (!row.lease) {
         row.lease = randomUUID();
         await sql.query("UPDATE development_runs SET state='running',worker=$2,lease=$3,updated_at=now() WHERE id=$1", [row.id, worker, row.lease]);
       }
-      return { id: row.id, project: row.config, kind: row.kind, ticket: row.ticket, attempts: row.attempts, thread: row.thread, lease: row.lease };
+      const detection = row.kind === 'scope' ? (await sql.query('SELECT candidates FROM development_repository_detection WHERE team=$1 AND ticket=$2', [this.team, row.ticket.id])).rows[0] : undefined;
+      return { id: row.id, project: row.config, kind: row.kind, ticket: row.ticket, attempts: row.attempts, thread: row.thread, lease: row.lease, ...(detection ? { candidates: detection.candidates } : {}) };
     });
   }
   async attempt(id: string, lease: string, expected: number) {
@@ -125,6 +131,8 @@ export class DevelopmentStore {
       const row = (await sql.query('SELECT * FROM development_runs WHERE team=$1 AND id=$2 AND lease=$3 FOR UPDATE', [this.team, id, lease])).rows[0];
       if (!row) return false;
       if (row.result) return isDeepStrictEqual(row.result, result);
+      if (row.kind === 'scope' && (result.commit || result.branch || result.outcome === 'pushed' || result.outcome === 'actionable' && (!row.attempts || !result.relevance))) return false;
+      if (row.kind !== 'scope' && result.relevance) return false;
       if (row.state !== 'running' || (result.outcome === 'pushed' && (row.kind !== 'build' || !result.commit || !row.attempts || !result.tests.length)) || (row.kind === 'build' && result.outcome === 'actionable')) return false;
       await sql.query("UPDATE development_runs SET result=$2,state='reporting',updated_at=now() WHERE id=$1", [id, JSON.stringify(result)]);
       await new JobStore(sql).enqueueIntegration(`development:finish:${id}`, { kind: 'integration', team: this.team, integration: 'development' }, { type: 'finish', run: id }, 'development');
@@ -150,7 +158,7 @@ export class DevelopmentStore {
     if (routed && !(await sql.query('SELECT 1 FROM development_route_runs WHERE team=$1 AND run=$2', [this.team, id])).rows.length) return false;
     // A blocked run without a commit keeps its frozen ticket. A pushed reporting_error may be explicitly retried; the previous commit stays where it was published.
     const inserted = await sql.query(`INSERT INTO development_runs(id,team,project,config,kind,ticket,thread,repository_key)
-      SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND project=$4 AND (
+      SELECT $1,team,project,config,kind,ticket,thread,repository_key FROM development_runs r WHERE id=$2 AND team=$3 AND project=$4 AND kind<>'scope' AND (
         (state IN ('blocked','cancelled') AND result->>'commit' IS NULL) OR
         (kind='build' AND state='reporting_error' AND result->>'outcome'='pushed' AND result->>'commit' IS NOT NULL)
       )

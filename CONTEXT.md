@@ -45,7 +45,7 @@ A maintenance workspace connecting one Slack channel, one or more ClickUp Folder
 A ClickUp task or subtask in one of a Development project's configured Folders, describing requested maintenance work.
 
 **Ticket repository selection**:
-The repositories a team member explicitly chooses for a shared Maintenance ticket.
+The repositories chosen for a shared Maintenance ticket, either by a team member or through the project's authorized automatic mode.
 
 **Maintenance batch**:
 The corrections for all repositories selected for one Authorized maintenance request; each repository has its own result.

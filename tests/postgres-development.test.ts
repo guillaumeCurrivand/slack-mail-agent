@@ -4,8 +4,8 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { coreSchema } from '../src/core/store.js';
 import { developmentSchema, DevelopmentStore } from '../src/modules/development/store.js';
 import { configurationSchema, ConfigurationStore } from '../src/modules/development/configuration-store.js';
-import { RoutingStore } from '../src/modules/development/routing-store.js';
-import type { Project, Ticket } from '../src/modules/development/domain.js';
+import { RoutingStore, destinationKey } from '../src/modules/development/routing-store.js';
+import { projectTargets, type Project, type Ticket } from '../src/modules/development/domain.js';
 
 const url = process.env.TEST_DATABASE_URL;
 describe.skipIf(!url)('Development real PostgreSQL claims', () => {
@@ -25,6 +25,28 @@ describe.skipIf(!url)('Development real PostgreSQL claims', () => {
     const other = { ...project, id: 'other', folder: '456', repository: `${project.repository}.git` }; await store.save(other, 'setup-other'); await store.observe(other, ticket.id, ticket.status, ticket);
     const claims = await Promise.all(Array.from({ length: 4 }, () => store.claim(randomUUID(), ['pilot', 'other'])));
     expect(claims.filter(Boolean)).toHaveLength(1);
+  });
+  it('admits one automatic detection under concurrent polls and does not overwrite a concurrent manual selection', async () => {
+    const configured: Project = { ...project, id: 'automatic-race', folder: '987', repositories: ['https://github.com/example/auto-front', 'https://github.com/example/auto-back'], repository: 'https://github.com/example/auto-front', repositoryMode: 'automatic' };
+    const target = { ...ticket, id: 'automatic-race' };
+    await store.save(configured, 'automatic-race');
+    const routes = new RoutingStore(pool, 'TTEAM');
+    await routes.ensure(configured, target);
+    await Promise.all(Array.from({ length: 4 }, () => routes.detect(target)));
+    const inspections = (await store.history(configured.id));
+    expect(inspections).toHaveLength(2);
+    for (const run of inspections) await pool.query("UPDATE development_runs SET state='completed',result=$2 WHERE id=$1", [run.id, JSON.stringify({ outcome: 'actionable', relevance: 'included', summary: 'Evidence', tests: [] })]);
+    const actor = { team: 'TTEAM', user: 'UALICE', channel: 'CPROJECT' };
+    const candidates = projectTargets(configured);
+    await routes.propose(actor, 'automatic-race-manual', target.id, candidates);
+    await routes.choose(actor, 'automatic-race-manual', destinationKey(candidates[0]!), true, 'automatic-race-choice');
+    await routes.seal(actor, 'automatic-race-manual');
+    const [, manual] = await Promise.all([routes.detect(target), routes.confirm(actor, 'automatic-race-manual', false, target)]);
+    const route = (await routes.get(target.id))!;
+    expect(route.revision).toBe(1);
+    expect(route.selected).toHaveLength(manual === 'applied' ? 1 : 2);
+    await routes.detect(target);
+    expect((await routes.get(target.id))!.selected).toEqual(route.selected);
   });
   it('applies concurrent confirmations only once and preserves a later opposite project transition', async () => {
     const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };

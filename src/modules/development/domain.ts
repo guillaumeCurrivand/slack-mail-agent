@@ -16,6 +16,7 @@ const configurationSchema = z.object({
   folders: z.array(z.string().regex(/^\d+$/)).min(1).max(100).optional(),
   repositories: z.array(repositorySchema).min(1).max(20).optional(),
   skill: z.string().trim().min(1).max(200),
+  repositoryMode: z.enum(['manual', 'automatic']).optional(),
   enabled: z.boolean().default(true),
 }).strict().refine(p => !p.folders || new Set(p.folders).size === p.folders.length, { path: ['folders'], message: 'Duplicate folder.' })
   .refine(p => !p.repositories || new Set(p.repositories.map(url => URL.canParse(url) ? repositoryKey(url) : url)).size === p.repositories.length, { path: ['repositories'], message: 'Duplicate repository.' })
@@ -51,14 +52,15 @@ export const resultSchema = z.object({
   tests: z.array(z.string().max(2000)).max(30).default([]),
   branch: branchNameSchema.optional(),
   commit: z.string().regex(/^[a-f0-9]{40,64}$/).optional(),
+  relevance: z.enum(['included', 'excluded', 'uncertain']).optional(),
 }).strict();
 export type Result = z.infer<typeof resultSchema>;
-export type Run = { id: string; project: string; config: Project; kind: 'review' | 'build'; state: string; attempts: number; ticket: Ticket; result: Result | null; thread: string | null; created_at: Date; updated_at: Date };
+export type Run = { id: string; project: string; config: Project; kind: 'review' | 'build' | 'scope'; state: string; attempts: number; ticket: Ticket; result: Result | null; thread: string | null; created_at: Date; updated_at: Date };
 export const canRetry = (run: Pick<Run, 'kind' | 'state' | 'result'>) =>
-  (['blocked', 'cancelled'].includes(run.state) && !run.result?.commit) ||
+  (run.kind !== 'scope' && ['blocked', 'cancelled'].includes(run.state) && !run.result?.commit) ||
   (run.kind === 'build' && run.state === 'reporting_error' && run.result?.outcome === 'pushed' && !!run.result.commit);
 export const commitLink = (repository: string, commit: string) => `${repository.replace(/\.git\/?$/, '').replace(/\/$/, '')}/${new URL(repository).hostname === 'github.com' ? 'commit' : '-/commit'}/${commit}`;
-export type Work = { id: string; project: Project; kind: 'review' | 'build'; ticket: Ticket; attempts: number; thread: string | null; lease: string };
+export type Work = { id: string; project: Project; kind: Run['kind']; ticket: Ticket; attempts: number; thread: string | null; lease: string; candidates?: Project[] };
 export const ready = (status: string) => status.trim().toLowerCase() === 'ready for ai';
 export function ticketIds(text: string) {
   return [...new Set([...text.matchAll(/https:\/\/app\.clickup\.com\/t\/([a-zA-Z0-9]+)(?=[\s>|?#]|$)/g)].map(match => match[1]!))];
