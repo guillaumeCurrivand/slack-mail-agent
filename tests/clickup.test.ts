@@ -170,7 +170,7 @@ it('shows every status toggle in a table without paging the action buttons', asy
   expect(first.table?.columns).toEqual(['Statut', 'Inclus', 'Disponibilité']);
   expect(first.table?.rows).toHaveLength(4);
   expect(first.table?.rowButtons).toHaveLength(4);
-  expect(first.buttons?.map(button => button.label)).toEqual(['Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
+  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
   const choice = first.table!.rowButtons![0]!;
   expect(choice.label).toBe('☐ Ajouter');
   expect(choice.action).toBe('clickup:status_add');
@@ -549,7 +549,7 @@ it('keeps recovery controls available when discovery has no status rows', async 
   const picker = h.messages.at(-1)!;
   expect(picker.table).toBeUndefined();
   expect(picker.text).toContain('Aucun statut découvert');
-  expect(picker.buttons?.map(button => button.label)).toEqual(['Réessayer', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
+  expect(picker.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Réessayer', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
 });
 
 it('discovers archived, nested, folderless and shared-only definitions with one choice per name', async () => {
@@ -685,9 +685,10 @@ it('routes signed French status commands and editor controls through Slack ingre
     expect(click.payload.action).toBe('status_add');
     await h.run(click, click.actor, click.id); expect((await h.controls(h.messages.at(-1)!)).map(button => button.label)).toContain('Retirer Closed');
     expect(h.messages.at(-1)!.timestamp).toBe(picker.timestamp);
-    await h.click('status_cancel');
-    const closed = h.messages.at(-1)!, tasks = (await h.controls(closed)).find(button => button.label === 'Voir mes tâches')!;
-    const start = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: closed.timestamp }, actions: [{ action_id: tasks.action, value: tasks.value }] }) }).toString();
+    const updatedPicker = h.messages.at(-1)!, tasks = (await h.controls(updatedPicker)).find(button => button.label === 'Voir mes tâches')!;
+    expect((await sql.query('SELECT state FROM clickup_status_editors')).rows[0].state).toBe('editing');
+    expect((await sql.query('SELECT count(*)::int AS n FROM clickup_scans')).rows[0].n).toBe(0);
+    const start = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: updatedPicker.timestamp }, actions: [{ action_id: tasks.action, value: tasks.value }] }) }).toString();
     expect((await app.inject({ method: 'POST', url: '/slack/actions', payload: start, headers: { ...signed(start), 'content-type': 'application/x-www-form-urlencoded' } })).statusCode).toBe(200);
     const started = (await sql.query("SELECT * FROM jobs WHERE module='clickup' AND payload->>'action'='tasks'")).rows[0];
     await h.run(started, started.actor, started.id);

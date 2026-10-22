@@ -31,7 +31,7 @@ Send commands in your private DM with the bot. `courrier` is the French alias fo
 | Propose disconnecting Gmail | `courrier déconnecter` | `mail disconnect` |
 | Show Mail Sorter help | `courrier aide` | `mail help` |
 
-Details page numbers start at zero; omitting the page opens the first page. Details show five messages per page. The menu also offers **Gérer les règles**, **Dernier rapport**, **Connexion Gmail** and **Approbations en attente** when eligible saved work exists. Add/Edit controls give instructions; rule removal and starter rules produce separately approved Proposals. Undo is attached to a retained Report.
+Details page numbers start at zero; omitting the page opens the first page. Details show five messages per page. The menu also offers **Gérer les règles**, **Dernier rapport**, **Connexion Gmail** and **Approbations en attente** when eligible saved work exists. Add/Edit opens a preparation screen with **Règle par expéditeur** and **Règle par contenu**. Only the sender form asks for exact addresses; the content form explains that classification uses AI when sorting. Editing offers the current type first and permits switching types through a separately approved Proposal. Both forms retain required examples and validation, use no AI to prepare the Proposal, and reject stale edits. Rule removal and starter rules also produce separately approved Proposals. Undo is attached to a retained Report.
 
 Describe a rule after the prefix, for example:
 

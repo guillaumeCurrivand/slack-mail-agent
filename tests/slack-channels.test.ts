@@ -138,6 +138,48 @@ it('offers Menu after an unrecognized Slack command', async () => {
   } finally { await h.close(); }
 });
 
+it('guides empty selections to channels and starts one owner-bound search directly from the picker', async () => {
+  const calls: string[] = [];
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    const method = new URL(url).pathname.split('/').at(-1)!;
+    calls.push(method);
+    if (method === 'users.conversations') return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
+    if (method === 'users.info') return Response.json({ ok: true, user: { profile: { display_name: 'Alice' } } });
+    if (method === 'conversations.history') return Response.json({ ok: true, messages: [], response_metadata: { next_cursor: '' } });
+    throw new Error(`Unexpected provider: ${url}`);
+  }));
+  const h = await harness();
+  try {
+    const main = await h.dm('menu');
+    const moduleMenu = await h.click((await h.seek(main, button => button.label === 'Messages Slack sans réponse')));
+    expect(moduleMenu.message.buttons?.some(button => button.action === 'slack:find_unanswered')).toBe(false);
+    const choose = await h.seek(moduleMenu, button => button.label === 'Choisir les canaux');
+    expect(choose.style).toBe('primary');
+    const channels = await h.click(choose);
+    expect(channels.message.buttons?.some(button => button.action === 'slack:find_unanswered')).toBe(false);
+    const selected = await h.click(await h.seek(channels, button => button.action === 'slack:channel_select'));
+    const start = await h.seek(selected, button => button.label === 'Chercher maintenant');
+    expect(selected.ts).toBe(channels.ts);
+    expect(calls.every(method => method === 'users.conversations')).toBe(true);
+    await h.postAction(start, bob, selected.ts);
+    await h.postAction(start, alice, '999.999');
+    expect((await sql.query("SELECT count(*)::int AS n FROM core_operation_slots WHERE module='slack'")).rows[0].n).toBe(0);
+    await h.drain();
+    expect(calls.every(method => method === 'users.conversations')).toBe(true);
+    await h.postAction(start, alice, selected.ts);
+    await h.postAction(start, alice, selected.ts);
+    await h.postDm('slack unanswered');
+    expect((await sql.query("SELECT count(*)::int AS n FROM core_operation_slots WHERE module='slack'")).rows[0].n).toBe(1);
+    expect((await sql.query("SELECT count(*)::int AS n FROM jobs WHERE module='slack' AND payload->>'action'='find_unanswered' AND status='queued'")).rows[0].n).toBe(1);
+    await h.drain();
+    const result = h.messages.find(item => item.message.kind === 'Messages sans réponse');
+    expect(result?.ts).toBe(selected.ts);
+    expect(result?.method).toBe('update');
+    expect(calls.filter(method => method === 'conversations.history')).toHaveLength(1);
+    expect((await sql.query('SELECT count(*)::int AS n FROM ai_calls')).rows[0].n).toBe(0);
+  } finally { await h.close(); }
+});
+
 it('accepts historical unbound channel controls using current owner state and access', async () => {
   fakeChannels();
   const h = await harness();

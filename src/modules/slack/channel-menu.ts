@@ -33,6 +33,7 @@ export function createChannelMenu(directory: SlackChannelDirectory, selections: 
     const text = [
       notice,
       `Canaux sélectionnés : ${saved.size}. Vous seul pouvez modifier votre sélection.`,
+      saved.size ? 'Chercher maintenant lance une recherche dans les canaux sélectionnés et peut utiliser le budget d’IA.' : 'Ajoutez un canal pour pouvoir lancer une recherche depuis cette liste.',
       accessUnavailable ? "L’accès aux canaux est momentanément indisponible. Les canaux disponibles ne peuvent pas être affichés. Les sélections enregistrées peuvent toujours être retirées."
         : items.length ? `Canaux (page ${current + 1}/${pages}):` : "Aucun canal public ou privé partagé n’est disponible. Invitez le bot dans un canal pour le rendre accessible.",
       accessUnavailable && items.length ? `Sélections enregistrées (page ${current + 1}/${pages}):` : '',
@@ -43,6 +44,7 @@ export function createChannelMenu(directory: SlackChannelDirectory, selections: 
       label: `${item.selected ? "Retirer" : "Ajouter"} ${item.buttonName.slice(0, 60)}`,
       action: item.selected ? 'channel_remove' : 'channel_select', value: selectionValue(item.id, current),
     }));
+    if (saved.size) buttons.unshift({ label: 'Chercher maintenant', action: 'find_unanswered', value: 'unanswered', bound: true, style: 'primary' });
     if (current > 0) buttons.push({ label: "Précédent", action: 'channel_page', value: String(current - 1) });
     if (current + 1 < pages) buttons.push({ label: "Suivant", action: 'channel_page', value: String(current + 1) });
     return { kind: "Canaux Slack", text, buttons, bindButtons: true, links };

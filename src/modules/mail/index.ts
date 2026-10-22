@@ -15,6 +15,7 @@ import { mailSchema, prune, Store } from './store.js';
 import { mailMenu } from './menu.js';
 import { mailHelp } from './help.js';
 import { RuleForms } from './forms.js';
+import type { SavedForm } from '../../core/forms.js';
 
 export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sql: Sql, slackToken = ''): AssistantModule {
   const vault = new Vault(Buffer.from(config.ENCRYPTION_KEY, 'base64'));
@@ -48,16 +49,25 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
     },
     async handle(actor, payload, eventId, context) {
       if (payload.type === 'guided_form_notice' || (payload.type === 'menu_action' && payload.action === 'form_prepare')) {
-        let form;
+        let prepared: SavedForm[] = [];
         if (payload.type === 'menu_action') {
           const bound = await boundMenuTarget(context.sql, actor, payload.value, payload.timestamp);
           const state = await new Store(context.sql).load(actor);
           const base = bound && state.rules.find(rule => rule.id === bound.value);
-          if (bound && (bound.value === 'new' || base)) form = await forms.prepare(actor, eventId, bound.target.timestamp, forms.definition(base || undefined));
-        } else form = await forms.get(actor, String(payload.form));
+          if (bound && (bound.value === 'new' || base)) {
+            const kind = base ? base.kind : 'sender';
+            prepared.push(await forms.prepare(actor, eventId, bound.target.timestamp, forms.definition(base || undefined, kind)));
+            const alternative = kind === 'sender' ? 'semantic' : 'sender';
+            prepared.push(await forms.prepare(actor, `${eventId}:${alternative}`, bound.target.timestamp, forms.definition(base || undefined, alternative)));
+          }
+        } else {
+          const form = await forms.get(actor, String(payload.form));
+          if (form) prepared = [form];
+        }
+        const available = prepared.filter(form => form.channel === actor.channel && form.state === 'editing');
         return new Navigation(context.sql, context.messenger).show(actor, eventId, { kind: 'Formulaire de règle',
-          text: form?.channel === actor.channel && form.state === 'editing' ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire apparaît, utilisez-le ; sinon, réessayez. ' : ''}Complétez la règle puis vérifiez la proposition dans ce message. Aucun appel d’IA pour le formulaire et aucune règle enregistrée avant votre approbation.` : 'Cette règle ou ce formulaire est indisponible. Rouvrez Gérer les règles.',
-          buttons: [...(form?.channel === actor.channel && form.state === 'editing' ? [{ label: 'Remplir le formulaire', action: 'form_open', value: form.id, bound: true }] : []), menuButton] });
+          text: available.length ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire apparaît, utilisez-le ; sinon, réessayez. ' : 'Choisissez une règle par adresses d’expéditeurs exactes ou par analyse du contenu (IA lors du tri). '}Complétez le formulaire puis vérifiez la proposition dans ce message. Aucun appel d’IA pour le formulaire et aucune règle enregistrée avant votre approbation.${available.length > 1 && available[0]?.definition.context.base ? ' Le type actuel est proposé en premier ; choisir l’autre type prépare une modification à approuver.' : ''}` : 'Cette règle ou ce formulaire est indisponible. Rouvrez Gérer les règles.',
+          buttons: [...available.map(form => ({ label: form.definition.context.kind === 'sender' ? 'Règle par expéditeur' : form.definition.context.kind === 'semantic' ? 'Règle par contenu' : 'Remplir le formulaire', action: 'form_open', value: form.id, bound: true })), menuButton] });
       }
       if (payload.type === 'guided_form') {
         const form = await forms.get(actor, String(payload.form));

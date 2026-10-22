@@ -173,6 +173,9 @@ export function createSlackModule(token: string, sql: Sql, aiConfig: ReturnType<
     menuActions: ['channel_page', 'channel_select', 'channel_remove', 'find_unanswered'],
     async menu(actor, page) {
       if (page.startsWith('channels_')) return channelMenu.page(actor, /^channels_(\d{1,6})$/.test(page) ? Number(page.slice(9)) : 0);
+      if (!(await selections.list(actor)).length) return { kind: 'Messages Slack sans réponse',
+        text: 'Choisissez les canaux à examiner pour commencer (raccourci : slack canaux). Vous pourrez ensuite lancer une recherche depuis la liste. Choisir les canaux n’utilise pas d’IA. Gmail n’est pas nécessaire.',
+        buttons: [{ label: 'Choisir les canaux', action: 'channel_page', value: '0', bound: true, style: 'primary' }] };
       return { kind: "Messages Slack sans réponse", text: "Choisissez les canaux pour gérer vos sources ou cherchez les messages sans réponse. Raccourcis : slack canaux, slack sans-réponse. Gmail n’est pas nécessaire.",
         buttons: [{ label: "Chercher les messages sans réponse", action: 'find_unanswered', value: 'unanswered', bound: true, style: 'primary' }], links: [{ label: "Choisir les canaux", page: 'channels_0' }] };
     },

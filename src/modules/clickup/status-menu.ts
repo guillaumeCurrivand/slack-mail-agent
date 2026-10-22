@@ -25,7 +25,7 @@ export function statusPage(editor: StatusEditor, requestedPage = 0, notice = '')
     label: selected.has(choice.name) ? '☑ Retirer' : '☐ Ajouter',
     action: selected.has(choice.name) ? 'status_remove' : 'status_add', value: `${editor.id}|${page}|${choiceKey(choice.name)}`,
   } : null);
-  const buttons: Button[] = [];
+  const buttons: Button[] = [{ label: 'Voir mes tâches', action: 'tasks', value: 'tasks', style: 'primary' }];
   if (page > 0) buttons.push({ label: 'Précédent', action: 'status_page', value: `${editor.id}|${page - 1}` });
   if (page + 1 < pages) buttons.push({ label: 'Suivant', action: 'status_page', value: `${editor.id}|${page + 1}` });
   if (!catalogue.complete) buttons.push({ label: 'Réessayer', action: 'status_retry', value: `${editor.id}|${page}` });
@@ -38,6 +38,7 @@ export function statusPage(editor: StatusEditor, requestedPage = 0, notice = '')
     } } : {}), text: [
     notice, filter.mode === 'default' ? `Filtre par défaut : ${filterSummary(filter)}.` : `Sélection personnelle : ${formatNumber(names.length)} statuts.`,
     '☑ Retirer exclut un statut ; ☐ Ajouter l’inclut. Chaque modification est enregistrée automatiquement. Ce sélecteur expire après 30 minutes.',
+    'Voir mes tâches récupère un nouvel instantané avec votre filtre enregistré, sans devoir fermer le sélecteur.',
     catalogue.complete ? `Statuts disponibles · Page ${formatNumber(page + 1)}/${formatNumber(pages)}.` : `Liste des statuts incomplète · Page ${formatNumber(page + 1)}/${formatNumber(pages)}. Les modifications sont enregistrées ; Réessayer poursuit la découverte.`,
     catalogue.checkedAt ? `Catalogue vérifié : ${formatDate(catalogue.checkedAt)}. Réutilisé pendant 5 minutes ; Actualiser les statuts relance la découverte.` : '',
     !visible.length ? 'Aucun statut découvert pour le moment.' : '',

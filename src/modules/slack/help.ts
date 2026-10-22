@@ -4,12 +4,12 @@ export const slackHelp = {
 *1. Choisir les canaux à examiner*
 • slack canaux ou Menu → Messages Slack sans réponse → Choisir les canaux : parcourir les canaux publics et privés accessibles à vous et au bot.
 • Ajouter / Retirer : enregistrer immédiatement votre sélection personnelle. Précédent/Suivant parcourent la liste dans le même message.
-Le module commence sans sélection. Un canal devenu inaccessible reste sélectionné avec une explication ; vous pouvez le retirer. La sélection n’affecte pas les destinations Yousign.
+Le module commence sans sélection et propose d’abord Choisir les canaux. Après un ajout, Chercher maintenant permet de lancer la recherche directement depuis cette liste ; ce bouton disparaît si vous retirez le dernier canal. Un canal devenu inaccessible reste sélectionné avec une explication ; vous pouvez le retirer. La sélection n’affecte pas les destinations Yousign et ne lance aucune recherche.
 
 *2. Lancer une recherche*
 • slack sans-réponse ou Chercher les messages sans réponse : lancer une recherche à la demande sur les 48 heures précédant votre commande.
 La recherche repère les mentions directes, les correspondances avec vos noms de profil et les demandes que le contexte vous adresse. Une réponse ultérieure de votre part dans le fil retire l’ancienne demande ; une nouvelle demande dirigée vers vous dans ce fil peut être retenue.
-Exemple : choisissez les canaux de vos projets, puis envoyez slack sans-réponse pour retrouver les demandes récentes restées en attente.
+Exemple : choisissez les canaux de vos projets, puis cliquez sur Chercher maintenant pour retrouver les demandes récentes restées en attente. Ce clic peut utiliser le budget d’IA.
 Un lancement pendant une recherche en cours indique la demande existante au lieu de recommencer l’analyse.
 
 *3. Comprendre et parcourir les résultats*

@@ -367,12 +367,8 @@ it('starts menu work through the existing module handlers and explains missing p
     button(sorting, 'Menu');
     const slack = await h.click(await h.click(mail, "Retour au menu"), "Messages Slack sans réponse");
     expect(buttons(slack).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
-    expect(button(slack, "Chercher les messages sans réponse").style).toBe('primary');
-    const search = await h.click(slack, "Chercher les messages sans réponse");
-    expect(search.method).toBe('chat.update');
-    expect(search.ts).toBe(slack.ts);
-    expect(search.body.text).toContain('Choisissez les sources');
-    button(search, 'Menu');
+    expect(button(slack, 'Choisir les canaux').style).toBe('primary');
+    expect(buttons(slack).some((item: any) => item.action_id.startsWith('slack:find_unanswered'))).toBe(false);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
 });
@@ -585,9 +581,11 @@ it('chooses Slack channels across pages in the same DM message without Gmail or 
     expect(added.method).toBe('chat.update');
     expect(added.ts).toBe(first.ts);
     expect(added.body.text).toContain("Canaux sélectionnés : 1");
+    expect(button(added, 'Chercher maintenant').style).toBe('primary');
     button(added, "Retirer #channel-11");
     const removed = await h.click(added, "Retirer #channel-11");
     expect(removed.body.text).toContain("Canaux sélectionnés : 0");
+    expect(buttons(removed).some((item: any) => item.action_id.startsWith('slack:find_unanswered'))).toBe(false);
     button(removed, "Ajouter #channel-11");
     channelCount = 1;
     const adjusted = await h.click(first, "Suivant");
@@ -842,9 +840,9 @@ it('browses mail rules and prepares Add/Edit forms in place without changing rul
     const edit = await h.click(next, "Modifier 1");
     expect(edit.method).toBe('chat.update');
     expect(edit.ts).toBe(next.ts);
-    button(edit, 'Remplir le formulaire');
+    button(edit, 'Règle par contenu');
     expect((await sql.query('SELECT definition FROM mail_guided_forms')).rows[0].definition.context.base.id).toBe('rule-3');
-    button(await h.click(rules, "Ajouter une règle"), 'Remplir le formulaire');
+    button(await h.click(rules, "Ajouter une règle"), 'Règle par expéditeur');
     expect((await h.dm('change Priority 0')).body.text).toContain("préfixe");
     expect((await h.click(await h.dm('menu', bob), "Tri des e-mails", bob)).body.text).not.toContain('Priority');
     expect((await h.click(mail, "Dernier rapport")).body.text).toContain('Aucun traitement conservé');

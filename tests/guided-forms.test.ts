@@ -162,7 +162,7 @@ it('creates and edits Mail rules with no paid interpretation, separate approval 
     const main = await h.click(await h.dm('menu'), 'Tri des e-mails');
     expect(main.text).toContain('Prochaine étape : connectez Gmail');
     const prepared = await h.click(await h.click(main, 'Gérer les règles'), 'Ajouter une règle');
-    await h.click(prepared, 'Remplir le formulaire');
+    await h.click(prepared, 'Règle par expéditeur');
     const view = h.views.at(-1), values = { name: 'Projet Alpha', condition: 'Expéditeur du projet', senders_0: 'alice@example.com', labels: 'Alpha', example0: 'Message du projet : conserver' };
     expect((await h.submit(view, { ...values, senders_0: 'invalid' })).json().response_action).toBe('errors');
     expect((await h.submit(view, values)).json()).toEqual({});
@@ -172,7 +172,7 @@ it('creates and edits Mail rules with no paid interpretation, separate approval 
     const rule = (await store.load(alice)).rules[0]!;
     expect(rule.name).toBe(values.name);
     const rules = await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles');
-    await h.click(await h.click(rules, 'Modifier 1'), 'Remplir le formulaire');
+    await h.click(await h.click(rules, 'Modifier 1'), 'Règle par expéditeur');
     expect((await h.submit(h.views.at(-1), { condition: 'Condition révisée' })).json()).toEqual({});
     const edit = await h.drain();
     expect(edit.ts).toBe(rules.ts);
@@ -187,15 +187,72 @@ it('recovers an uncertain form opening on the original card and never submits tw
   try {
     const prepared = await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Ajouter une règle');
     h.rejectOpen();
-    const notice = await h.click(prepared, 'Remplir le formulaire');
+    const notice = await h.click(prepared, 'Règle par expéditeur');
     expect(notice.ts).toBe(prepared.ts); expect(notice.text).toContain('Ouverture non confirmée');
-    await h.click(notice, 'Remplir le formulaire');
+    await h.click(notice, 'Règle par expéditeur');
     const view = h.views.at(-1), data = { name: 'Test', condition: 'Adresse exacte', senders_0: 'a@example.com', example0: 'Conserver' };
     expect((await h.submit(view, data)).json()).toEqual({});
     expect((await h.submit(view, { ...data, name: 'Changed' })).json().response_action).toBe('errors');
     await h.drain();
     expect((await new Store(sql).load(alice)).drafts).toHaveLength(1);
     expect((await new Store(sql).load(alice)).rules).toHaveLength(0);
+  } finally { await h.app.close(); }
+});
+
+it('offers tailored Mail forms and changes rule type only after a separate approval', async () => {
+  const h = await harness();
+  try {
+    const prepared = await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Ajouter une règle');
+    await h.click(prepared, 'Règle par contenu');
+    const view = h.views.at(-1);
+    expect(view.blocks.some((block: any) => block.block_id?.startsWith('senders_') || block.block_id === 'kind')).toBe(false);
+    const data = { name: 'Factures', condition: 'Factures à conserver', example0: 'Facture du fournisseur' };
+    expect((await h.submit(view, { ...data, example0: '' })).json().response_action).toBe('errors');
+    expect((await h.submit(view, data)).json()).toEqual({});
+    const store = new Store(sql), proposal = await h.drain();
+    expect((await store.load(alice)).rules).toHaveLength(0);
+    await h.click(proposal, 'Approuver les règles');
+    const rule = (await store.load(alice)).rules[0]!;
+    expect(rule).toMatchObject({ kind: 'semantic', senders: [] });
+    const rules = await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles');
+    const edit = await h.click(rules, 'Modifier 1');
+    expect(h.buttons(edit).filter(button => button.action_id.startsWith('mail:form_open')).map(button => button.text.text)).toEqual(['Règle par contenu', 'Règle par expéditeur']);
+    await h.click(edit, 'Règle par expéditeur');
+    const senderView = h.views.at(-1);
+    expect(senderView.blocks.some((block: any) => block.block_id === 'senders_0')).toBe(true);
+    expect(senderView.blocks.some((block: any) => block.block_id === 'kind')).toBe(false);
+    expect((await h.submit(senderView, {})).json().response_action).toBe('errors');
+    expect((await h.submit(senderView, { senders_0: 'billing@example.com' })).json()).toEqual({});
+    const change = await h.drain();
+    expect((await store.load(alice)).rules[0]).toEqual(rule);
+    await h.click(change, 'Approuver les règles');
+    expect((await store.load(alice)).rules[0]).toMatchObject({ id: rule.id, kind: 'sender', senders: ['billing@example.com'] });
+    const senderRules = await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles');
+    await h.click(await h.click(senderRules, 'Modifier 1'), 'Règle par contenu');
+    expect(h.views.at(-1).blocks.some((block: any) => block.block_id?.startsWith('senders_'))).toBe(false);
+    expect((await h.submit(h.views.at(-1), {})).json()).toEqual({});
+    await h.click(await h.drain(), 'Approuver les règles');
+    expect((await store.load(alice)).rules[0]).toMatchObject({ id: rule.id, kind: 'semantic', senders: [] });
+    expect((await sql.query('SELECT count(*)::int AS n FROM ai_calls')).rows[0].n).toBe(0);
+    expect(h.provider.mock.calls.every(([url]) => String(url).endsWith('/views.open'))).toBe(true);
+  } finally { await h.app.close(); }
+});
+
+it('accepts a still-valid Mail form prepared before tailored forms were introduced', async () => {
+  const h = await harness();
+  try {
+    const prepared = await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Ajouter une règle');
+    const row = (await sql.query("SELECT id,definition FROM mail_guided_forms WHERE definition->'context'->>'kind'='sender'")).rows[0];
+    delete row.definition.context.kind;
+    row.definition.fields.push({ key: 'kind', label: 'Comment reconnaître les messages ?', kind: 'choice', required: true,
+      choices: [{ label: 'Adresses exactes', value: 'sender' }, { label: 'Analyse du contenu', value: 'semantic' }], initial: 'sender' });
+    await sql.query('UPDATE mail_guided_forms SET definition=$2 WHERE id=$1', [row.id, JSON.stringify(row.definition)]);
+    await h.click(prepared, 'Règle par expéditeur');
+    expect((await h.submit(h.views.at(-1), { name: 'Ancien formulaire', condition: 'Adresse exacte', senders_0: 'a@example.com', example0: 'Conserver' })).json()).toEqual({});
+    const proposal = await h.drain(), store = new Store(sql);
+    expect((await store.load(alice)).rules).toHaveLength(0);
+    await h.click(proposal, 'Approuver les règles');
+    expect((await store.load(alice)).rules[0]).toMatchObject({ kind: 'sender', senders: ['a@example.com'] });
   } finally { await h.app.close(); }
 });
 
@@ -219,7 +276,7 @@ it('captures form input and its job atomically, then reopens the saved proposal 
   const h = await harness();
   try {
     const prepared = await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Ajouter une règle');
-    await h.click(prepared, 'Remplir le formulaire');
+    await h.click(prepared, 'Règle par expéditeur');
     const view = h.views.at(-1), data = { name: 'Test', condition: 'Adresse exacte', senders_0: 'a@example.com', example0: 'Conserver' };
     await db.exec("ALTER TABLE jobs ADD CONSTRAINT reject_guided_test CHECK (payload->>'type' IS DISTINCT FROM 'guided_form')");
     try {
@@ -246,10 +303,10 @@ it('rejects copied form buttons and stale Mail edits without overwriting a newer
     state.rules = [{ id: 'rule', name: 'Original', kind: 'sender', category: 'custom', condition: 'Adresse', senders: ['a@example.com'], labels: [], action: 'keep', examples: ['Conserver'] }];
     await store.save(alice, state);
     const prepared = await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Modifier 1');
-    await h.click({ ...prepared, ts: '999.999' }, 'Remplir le formulaire');
-    await h.click(prepared, 'Remplir le formulaire', bob);
+    await h.click({ ...prepared, ts: '999.999' }, 'Règle par expéditeur');
+    await h.click(prepared, 'Règle par expéditeur', bob);
     expect(h.provider).not.toHaveBeenCalled();
-    await h.click(prepared, 'Remplir le formulaire');
+    await h.click(prepared, 'Règle par expéditeur');
     state.rules[0]!.name = 'Newer'; await store.save(alice, state);
     expect((await h.submit(h.views.at(-1), { name: 'Stale' })).json()).toEqual({});
     const rejected = await h.drain();

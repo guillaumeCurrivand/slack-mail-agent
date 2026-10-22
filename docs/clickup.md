@@ -32,7 +32,7 @@ Each typed request needs the `clickup` prefix. The menu shows connection status,
 
 ## Reading results and recovering
 
-Closing the autosaved status picker offers **Voir mes tâches**, which explicitly retrieves a fresh snapshot with the current filter in the same Card. Results display their saved filter and offer **Choisir les statuts**. Closing or editing alone does not retrieve tasks or alter an earlier snapshot.
+The autosaved status picker offers **Voir mes tâches** directly, explicitly retrieving a fresh snapshot with the currently saved filter in the same Card. Closing first is unnecessary; **Fermer** remains available and its closing screen also offers this shortcut. Results display their saved filter and offer **Choisir les statuts**. Closing or editing alone does not retrieve tasks or alter an earlier snapshot.
 
 Results have up to 40 tasks per page, with linked name, original status, Paris calendar due date, priority, Workspace and List. Overdue means a displayed date before today. Directly assigned subtasks and tasks shared with other assignees are included. The default excludes Done/Closed and individually archived tasks; [personal status filters](#personal-status-filters) permit explicitly selected completed statuses. See [Approved behavior](#approved-behavior) for exact assignment and archive rules.
 

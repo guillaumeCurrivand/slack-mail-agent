@@ -12,8 +12,10 @@ Include `slack` in the deployment's `ENABLED_MODULES`. Follow [Slack setup](../R
 
 1. DM `menu` and open **Messages Slack sans réponse → Choisir les canaux**, or send `slack canaux`. Your selection starts empty.
 2. Add the public/private channels to include. Add/Remove and page controls update the same private list; selecting channels does not read their history or use AI.
-3. Send `slack sans-réponse` or choose **Chercher les messages sans réponse**. The search uses the rolling 48 hours before your request and can use AI for contextual matching.
+3. Choose **Chercher maintenant** directly in the channel list, send `slack sans-réponse`, or choose **Chercher les messages sans réponse** in the module menu. The search uses the rolling 48 hours before your request and can use AI for contextual matching.
 4. Read the results grouped by channel. Open a source with **Ouvrir le message** and reply in its Slack thread. Any later reply from you clears earlier requests from future searches; a subsequent request can appear separately.
+
+With no selected channels, the module menu emphasizes **Choisir les canaux** and the picker offers no search button. After adding a channel, **Chercher maintenant** appears; removing the last selection hides it again. Selection alone never starts a search. The shortcut uses the same owner-bound work admission, duplicate-start protection and current-access checks as other search starts. Inaccessible selections remain saved and are reported by the existing search workflow.
 
 ## Commands and results
 
