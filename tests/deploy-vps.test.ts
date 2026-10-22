@@ -30,7 +30,9 @@ function deploy(overrides: Record<string, string> = {}) {
     'merge --ff-only ${sha}') [[ "\${TEST_FAILURE:-}" != git ]] ;;
     *) exit 64 ;;
   esac`);
-  mock('sudo', 'while (( $# )); do case "$1" in -n|-H) shift ;; -u) shift 2 ;; *) break ;; esac; done; exec "$@"');
+  mock('sudo', `# Emulate a worker directory visible only to its owning account.
+    if [[ "\${TEST_PRIVATE_WORKER:-}" == 1 && "$*" == "-n -u mayworker test -d $DEPLOY_WORKER_DIR" ]]; then exit 0; fi
+    while (( $# )); do case "$1" in -n|-H) shift ;; -u) shift 2 ;; *) break ;; esac; done; exec "$@"`);
   mock('systemctl', '[[ "${TEST_FAILURE:-}" != stop-worker || "$*" != "stop mayassistant-worker" ]]');
   mock('flock', 'exit 0');
   mock('rsync', 'exit 0');
@@ -43,7 +45,7 @@ function deploy(overrides: Record<string, string> = {}) {
     *) exit 64 ;;
   esac`);
   mock('curl', `[[ "\${TEST_FAILURE:-}" != readiness ]] || exit 7; printf '{"ok":true}'`);
-  const wrapper = 'for key in DEPLOY_APP_DIR DEPLOY_WORKER_DIR DEPLOY_NODE_BIN; do printf -v "$key" "%s" "$(cd "${!key}" && pwd -P)"; export "$key"; done; export PATH="$DEPLOY_NODE_BIN:/usr/bin:/bin"; exec bash "$TEST_SCRIPT" "$TEST_SHA"';
+  const wrapper = 'for key in DEPLOY_APP_DIR DEPLOY_WORKER_DIR DEPLOY_NODE_BIN; do printf -v "$key" "%s" "$(cd "${!key}" && pwd -P)"; export "$key"; done; if [[ "${TEST_PRIVATE_WORKER:-}" == 1 ]]; then export DEPLOY_WORKER_DIR="$DEPLOY_WORKER_DIR/owner-only-app"; fi; export PATH="$DEPLOY_NODE_BIN:/usr/bin:/bin"; exec bash "$TEST_SCRIPT" "$TEST_SHA"';
   const result = spawnSync(bash, ['-c', wrapper], { cwd: root, encoding: 'utf8', timeout: 15_000, env: {
     ...process.env, DEPLOY_APP_DIR: app.replaceAll('\\', '/'), DEPLOY_WORKER_DIR: worker.replaceAll('\\', '/'),
     DEPLOY_NODE_BIN: bin.replaceAll('\\', '/'), TEST_SCRIPT: source.replaceAll('\\', '/'),
@@ -76,6 +78,12 @@ describe.skipIf(!existsSync(bash))('GitHub Actions VPS deployment (fake external
     expect(result.commands).not.toContain('systemctl start mayassistant-worker');
     expect(result.stdout).not.toContain('Deployed app and worker');
     if (failure !== 'readiness') expect(result.commands).not.toContain('docker compose stop');
+  });
+
+  it('checks a private worker directory as mayworker before updating it', () => {
+    const result = deploy({ TEST_PRIVATE_WORKER: '1' });
+    expect(result.status, result.stderr).toBe(0);
+    expect(result.commands).toContain('sudo -n -u mayworker test -d ');
   });
 
   it('refuses a dirty checkout before fetching or stopping services', () => {

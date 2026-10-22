@@ -12,7 +12,10 @@ cd -- "$app_dir"
 exec 9>.git/vps-deploy.lock
 flock 9
 [[ -f .env && -z "$(git status --porcelain)" && "$(git branch --show-current)" == main ]]
-[[ -d "$worker_dir" && ! -L "$worker_dir" && ! -e "$worker_dir/.git" ]]
+# /home/mayworker is private; inspect its code directory as the owning account.
+sudo -n -u mayworker test -d "$worker_dir" || { echo "Worker directory unavailable to mayworker: $worker_dir" >&2; exit 1; }
+sudo -n -u mayworker test ! -L "$worker_dir"
+sudo -n -u mayworker test ! -e "$worker_dir/.git"
 export GIT_TERMINAL_PROMPT=0 GIT_SSH_COMMAND='ssh -o BatchMode=yes -o ConnectTimeout=15'
 git fetch --no-tags origin main
 git merge-base --is-ancestor "$target" FETCH_HEAD
