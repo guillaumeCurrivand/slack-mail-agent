@@ -171,6 +171,8 @@ Set `POSTGRES_PASSWORD` in `.env` to a strong URL-safe random value. `docker com
 
 For an existing production server, pull `main` and run `bash scripts/deploy.sh`. Follow [Updating production](docs/deployment.md) for prerequisites, database backups, readiness checks, and release-specific migration notes. Production uses Docker Compose; preserve the existing checkout's `.env` and Compose project settings.
 
+For automatic app and VPS worker updates after pushing to GitHub `main`, use the one-time [automatic-update installer](docs/automatic-updates.md). It checks every minute, waits for active worker work, validates and deploys one commit to both components, and preserves their state. This explicitly selected procedure creates no backups.
+
 ## Remaining release checks
 
 Follow each enabled Module's guide and the [deployment guide](docs/deployment.md) for its live checks. The list below covers shared operation and Mail Sorter; Slack contextual matching, Documentation answers/import and ClickUp OAuth/API completeness have additional checks in their contracts.
