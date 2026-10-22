@@ -2,7 +2,8 @@ import { createServer } from 'node:http';
 import { mkdtemp, rm } from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { afterEach, expect, it } from 'vitest';
+import { Server } from 'node:net';
+import { afterEach, expect, it, vi } from 'vitest';
 import { localServiceSchema, startLocalService, startLocalServices, type LocalService } from '../src/modules/development/local-services.js';
 
 const directories: string[] = [];
@@ -18,12 +19,18 @@ async function fixture() {
   const directory = await mkdtemp(path.join(os.tmpdir(), 'mayassistant-services-')); directories.push(directory);
   return directory;
 }
-async function freePort() {
-  const server = createServer();
-  await new Promise<void>(resolve => server.listen(0, '127.0.0.1', resolve));
-  const port = (server.address() as { port: number }).port;
-  await new Promise<void>(resolve => server.close(() => resolve()));
-  return port;
+async function freePorts(): Promise<[number, number]> {
+  const servers = [createServer(), createServer()];
+  try {
+    // Keep both reservations alive until both ports are chosen; closing the first
+    // earlier lets the OS return it again for the second service.
+    for (const server of servers) await new Promise<void>((resolve, reject) => {
+      server.once('error', reject); server.listen(0, '127.0.0.1', resolve);
+    });
+    return servers.map(server => (server.address() as { port: number }).port) as [number, number];
+  } finally {
+    await Promise.all(servers.filter(server => server.listening).map(server => new Promise<void>(resolve => server.close(() => resolve()))));
+  }
 }
 function service(id: string, cwd: string, port: number, before = ''): LocalService {
   return { id, cwd, readyUrl: `http://127.0.0.1:${port}/health`, startupTimeoutMs: 10000,
@@ -34,8 +41,9 @@ async function unreachable(url: string) {
 }
 
 it('starts dependent services in order and stops its own processes', async () => {
-  const directory = await fixture(), first = service('backend', directory, await freePort());
-  const second = service('tunnel', directory, await freePort(), `if(!(await fetch(${JSON.stringify(first.readyUrl)})).ok)throw Error();`);
+  const directory = await fixture(), [backendPort, tunnelPort] = await freePorts();
+  const first = service('backend', directory, backendPort);
+  const second = service('tunnel', directory, tunnelPort, `if(!(await fetch(${JSON.stringify(first.readyUrl)})).ok)throw Error();`);
   const stop = await startLocalServices([first, second], directory, process.env); stops.push(stop);
   expect(await (await fetch(second.readyUrl)).text()).toBe('ready');
   await stop();
@@ -44,10 +52,25 @@ it('starts dependent services in order and stops its own processes', async () =>
 });
 
 it('cleans up earlier services when a later service crashes', async () => {
-  const directory = await fixture(), first = service('backend', directory, await freePort());
-  const second = { ...service('tunnel', directory, await freePort()), start: [process.execPath, '-e', 'process.exit(1)'] };
-  await expect(startLocalServices([first, second], directory, process.env)).rejects.toThrow('tunnel : démarrage échoué');
-  await expect.poll(() => unreachable(first.readyUrl)).toBe(true);
+  // An OS may immediately reuse a released ephemeral port. Force that behavior
+  // so this cleanup test cannot accidentally exercise the occupied-port guard.
+  let releasedPort: number | undefined;
+  const nativeListen = Server.prototype.listen;
+  const listen = vi.spyOn(Server.prototype, 'listen').mockImplementation(function (this: Server, ...args: any[]) {
+    if (args[0] === 0 && releasedPort !== undefined) args[0] = releasedPort;
+    this.once('listening', () => {
+      const port = (this.address() as { port: number }).port;
+      this.once('close', () => { releasedPort = port; });
+    });
+    return Reflect.apply(nativeListen, this, args);
+  });
+  try {
+    const directory = await fixture(), [backendPort, tunnelPort] = await freePorts();
+    const first = service('backend', directory, backendPort);
+    const second = { ...service('tunnel', directory, tunnelPort), start: [process.execPath, '-e', 'process.exit(1)'] };
+    await expect(startLocalServices([first, second], directory, process.env)).rejects.toThrow('tunnel : démarrage échoué');
+    await expect.poll(() => unreachable(first.readyUrl)).toBe(true);
+  } finally { listen.mockRestore(); }
 });
 
 it('reuses only a tunnel matching the approved origin and local upstream, and leaves it running', async () => {
