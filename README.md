@@ -171,7 +171,7 @@ Set `POSTGRES_PASSWORD` in `.env` to a strong URL-safe random value. `docker com
 
 For an existing production server, pull `main` and run `bash scripts/deploy.sh`. Follow [Updating production](docs/deployment.md) for prerequisites, database backups, readiness checks, and release-specific migration notes. Production uses Docker Compose; preserve the existing checkout's `.env` and Compose project settings.
 
-For automatic app and VPS worker updates after pushing to GitHub `main`, use the one-time [automatic-update installer](docs/automatic-updates.md). It checks every minute, waits for active worker work, validates and deploys one commit to both components, and preserves their state. This explicitly selected procedure creates no backups.
+Pushes to GitHub `main` run the [VPS deployment workflow](docs/automatic-updates.md): checks, tests and build, then SSH deployment of the app and worker. Configure the two repository secrets once. No backups are created.
 
 ## Remaining release checks
 

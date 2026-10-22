@@ -2,7 +2,7 @@
 
 Production uses Docker Compose. The confirmed server checkout is `/opt/slack-mail-agent`, running this repository's `compose.yaml` with `app` and `db` services. Keep the same Compose project name, environment file, and any override files used for the original deployment.
 
-For the approved automatic app and VPS worker updates from GitHub `main`, use [Automatic updates](automatic-updates.md). That opt-in controller creates no backups, pins one commit for both components, preserves persistent data and lets active worker work finish. Pause its timer and wait for an active update to finish before using the manual procedure below; the manual deployment script retains its existing backup behavior.
+For automatic app and VPS worker deployment on pushes to GitHub `main`, use [the GitHub Actions workflow](automatic-updates.md). It runs checks before deploying the exact commit over SSH and creates no backups. Configure its two repository secrets once; the manual deployment script below retains its existing backup behavior.
 
 The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to container port `3000` and explicitly sets the app's internal `PORT=3000`. The reverse proxy and host readiness check use port `3001`; no `.env` port change is required for this Compose setup.
 

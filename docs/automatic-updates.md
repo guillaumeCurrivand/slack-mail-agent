@@ -1,80 +1,38 @@
-# Automatic app and VPS worker updates
+# Deploy from GitHub Actions
 
-Approved on 22/10/2026: a push to this repository's GitHub `main` authorizes updating Mayassistant and its VPS worker together. This does not change publication, review or deployment of repositories maintained by Development. Only push commits intended for production to `main` after the project's tests, check and build pass.
+A push to `main` runs [the deployment workflow](../.github/workflows/deploy.yml): Node 24 checks, tests and build, then SSH to `ubuntu@158.69.219.238` to run [the VPS deployment script](../scripts/deploy-vps.sh) for that exact commit. Deployments run one at a time and do not cancel an active deployment. The workflow can also be run manually from Actions on `main`.
 
-The VPS uses a [systemd timer](https://www.freedesktop.org/software/systemd/man/latest/systemd.timer.html), with no inbound webhook, GitHub Actions secret or extra port. It checks GitHub approximately every minute after the previous check/update finishes. Active updates do not overlap. The first run also brings an existing standalone worker snapshot onto the app's current `main` commit, even if GitHub has not advanced. New commits arriving during an update wait for the next check; each update pins one SHA for both components.
+## One-time setup
 
-**No backups are created by this procedure**, as requested. It preserves `.env`, encryption and worker tokens, Cursor/SSH credentials, worker configuration, worker identity, journals, checkouts, the existing Compose project and both databases/volumes. Existing manual `scripts/deploy.sh` retains its backup behavior; the automatic controller does not invoke it.
+In the repository's [Actions secrets settings](https://github.com/guillaumeCurrivand/slack-mail-agent/settings/secrets/actions), add:
 
-## Install once on the recorded VPS
+- `VPS_SSH_KEY`: an SSH private key whose public key is authorized for `ubuntu` on the VPS.
+- `VPS_KNOWN_HOSTS`: the VPS host key entry. Obtain it on the VPS with `awk '{print "158.69.219.238 "$1" "$2}' /etc/ssh/ssh_host_ed25519_key.pub`.
 
-Target: the reviewed, pushed `main` commit containing [the updater](../scripts/update-vps.sh), [installer](../scripts/install-vps-updates.sh) and [systemd units](../scripts/systemd/). The paths below are the recorded Ubuntu installation; the installer verifies prerequisites on the actual host. Local preparation does not establish successful VPS installation or deployment.
+GitHub documents [adding repository secrets](https://docs.github.com/en/actions/how-tos/write-workflows/choose-what-workflows-do/use-secrets). No secrets have been configured by this code change. The VPS must already allow `ubuntu` to run Docker Compose, use noninteractive Git access to this repository, and run the deployment's `sudo -n` commands. The recorded worker service already waits indefinitely for active work during shutdown. `rsync` must be installed.
 
-As `ubuntu`, using the existing checkout and its existing private repository access:
-
-```bash
-cd /opt/slack-mail-agent
-git status --short --branch
-# Proceed with a clean main checkout. Resolve existing changes instead of resetting them.
-git fetch origin main
-git pull --ff-only origin main
-git rev-parse HEAD
-bash scripts/install-vps-updates.sh
-```
-
-The three stages review the scope, verify the installation/unattended GitHub access, then install and enable the timer plus a worker startup condition. No secrets or new values are entered or saved. A final activation gate explains that `main` deploys automatically without backups. If authentication fails, fix `ubuntu`'s existing Git/SSH identity on the server; do not copy a personal key into chat, disable host checking or run the updater under the worker's project Git identity.
-
-Expected setup: app `/opt/slack-mail-agent`, Compose services `app`/`db`, readiness `http://127.0.0.1:3001/ready`, worker code `/home/mayworker/app` as a standalone directory, Node 24+ at `/home/mayworker/runtimes/node24/bin`, configuration `/home/mayworker/kit/development-worker.linux.json`, account `mayworker`, and `mayassistant-worker.service`. The worker must already use `TimeoutStopSec=infinity` and `KillMode=mixed`. `rsync`, `flock`, Git, Docker Compose and the existing browser system dependencies are required; missing prerequisites fail preflight. No application environment variable, Slack setting, token change or manual database migration is introduced by this controller. Future commits may have their own migration/environment requirements; prepare them before pushing to `main`.
-
-## What happens after a push
-
-1. Verify a clean `main`, fetch once and require a fast-forward. Divergence/local edits are never overwritten.
-2. Stop the worker gracefully, letting its active ticket finish while the current app stays online. A lingering worker lock prevents updating; the controller never clears locks or claims. Worker shutdown has no execution deadline.
-3. Export the pinned commit into a temporary source directory owned by `mayworker`. With Node 24+, run `npm ci`, `npm run check`, `npm test`, `npm run build`, install the matching Playwright Chromium and test browser launch. Tests use fake providers and an empty `TEST_DATABASE_URL`; real PostgreSQL locking tests remain skipped.
-4. Fast-forward the app checkout to that SHA, build the Docker image, stop the old app, recreate only `app` and require exactly `{"ok":true}` from readiness. Startup runs that release's existing migrations. PostgreSQL and its volume are preserved.
-5. Copy the candidate into the standalone worker directory, removing obsolete files only within `src`, `dist` and `node_modules`. Configuration/private state outside this directory remains in place. The worker restarts only if it was active before the update; an intentionally stopped/disabled worker stays stopped/disabled.
-6. Record the combined deployed SHA under `/var/lib/mayassistant-update/deployed`, refresh the installed controller for the next update, and delete the temporary candidate. The systemd units themselves change only when the installer is rerun.
-
-Source builds take time, and a long active ticket postpones deployment. The app has a short restart window; the worker is unavailable during candidate checks/build. This is not a zero-downtime or rolling deployment. Existing accounts, environments and EOA OAuth/ngrok origins are not reconfigured.
-
-## Verify and operate
+If you installed the previous polling timer, disable it and remove its worker startup condition once before using this workflow:
 
 ```bash
-sudo systemctl list-timers mayassistant-update.timer --no-pager
-sudo journalctl -u mayassistant-update.service -n 100 --no-pager
-sudo cat /var/lib/mayassistant-update/deployed
-git -C /opt/slack-mail-agent rev-parse HEAD
-curl --fail http://127.0.0.1:3001/ready
-sudo systemctl show mayassistant-worker -p ActiveState -p MainPID
-sudo journalctl -u mayassistant-worker -n 80 --no-pager
-```
-
-The recorded SHA and checkout must match. Readiness must succeed. For a previously active worker, inspect its logs for successful polling or actual authorized work, without repeated authentication/provider errors; `active` alone does not prove successful polling. Check Slack `help` and `development menu` plus any release-specific checks in [Updating production](deployment.md). Installing the timer or passing fake-command tests is not observed production success.
-
-Pause automatic checks before a manual deployment or configuration change, then wait for any current update to finish:
-
-```bash
-sudo systemctl stop mayassistant-update.timer
-# Wait; do not force-kill a deployment or its active ticket.
+sudo systemctl disable --now mayassistant-update.timer
 while sudo systemctl is-active --quiet mayassistant-update.service; do sleep 5; done
+sudo rm -f /etc/systemd/system/mayassistant-worker.service.d/50-automatic-updates.conf
+sudo systemctl daemon-reload
 ```
 
-Disable future automatic starts with `sudo systemctl disable --now mayassistant-update.timer`. Stop the timer first when intentionally stopping the worker so an already-running update cannot restore its previously active state. Resume with `sudo systemctl enable --now mayassistant-update.timer`. Run a deliberate immediate check with `sudo systemctl start mayassistant-update.service`.
+## Deployment
 
-## Failure recovery
+The script fast-forwards the clean `/opt/slack-mail-agent` checkout to the workflow SHA, lets active worker work finish, builds the app image, updates/builds the standalone worker in `/home/mayworker/app`, recreates only the app container, checks readiness and starts the worker. It creates no backups. Existing `.env`, worker state/configuration, credentials and both database volumes remain in place. No new app environment variables or manual migrations are required; normal startup migrations still run. Maintenance repositories' own deployment workflow is unchanged.
 
-An error after admitting an update writes `/var/lib/mayassistant-update/failed` and leaves `in-progress`; subsequent checks deploy nothing. A machine/process crash leaves `in-progress`, also preventing another update. The worker's installed systemd condition prevents starting it, including at boot, while `block-worker-start` exists. The controller removes that marker only after the app is ready and worker code is fully installed. Preflight/network errors before admission can retry on the next check. Candidate failures keep the old app running and leave the worker stopped. Failures after app replacement can leave the app or worker stopped/partially updated. There is no automatic rollback or data restore.
-
-Stop the timer, inspect both markers, the update journal, Docker logs and worker processes/state. Preserve the worker identity, locks and journals; use [Development recovery](development.md#recovery-access-and-retention) for uncertain claims/publications. Correct the named failure and inspect any release migration before retrying. The candidate path in the command log may remain for inspection; it is reproducible source, not a live-data backup.
-
-Only after resolving the failure, remove the two admission markers and retry:
+To deploy manually as `ubuntu`, use the reviewed commit SHA in place of the placeholder:
 
 ```bash
-sudo rm -f /var/lib/mayassistant-update/failed /var/lib/mayassistant-update/in-progress
-sudo systemctl reset-failed mayassistant-update.service
-sudo systemctl start mayassistant-update.service
-# Inspect readiness, recorded SHA and worker logs before resuming the timer.
-sudo systemctl start mayassistant-update.timer
+cd /opt/slack-mail-agent &&
+git fetch origin main &&
+git merge --ff-only origin/main &&
+bash scripts/deploy-vps.sh '<reviewed-main-commit-sha>'
 ```
 
-A retry after failure sees a stopped worker and preserves that state. Leave `block-worker-start` in place during recovery: a successful retry clears it after code installation. If the worker should run, explicitly start it after a healthy update with `sudo systemctl start mayassistant-worker`. Never clear an update marker while its service is still running, delete either database volume, reset the app checkout, or reset worker state to make a deployment proceed.
+After deployment, check `curl --fail http://127.0.0.1:3001/ready`, `sudo journalctl -u mayassistant-worker -n 80 --no-pager`, and Slack `development menu`. A green SSH command alone does not establish successful worker polling; inspect its logs for authentication/provider errors. If a build or deployment fails, the job stops and reports the error; the worker or app may remain stopped. Correct the error, reconcile any uncertain worker claim using [Development recovery](development.md#recovery-access-and-retention), then rerun the workflow. A long active ticket can delay deployment beyond GitHub's job limit; rerun after it finishes. Never reset worker state or remove a database volume to retry.
+
+This is a locally verified deployment configuration until the workflow successfully deploys and live readiness/worker checks are observed.
