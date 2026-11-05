@@ -2,7 +2,7 @@ import { retainedTextNotice } from '../../core/presentation.js';
 import { stateLabel } from './presentation.js';
 import { Budget, BudgetExceeded, budgetReport } from '../../core/budget.js';
 import type { Intelligence, Intent } from './ai.js';
-import { availableRuleProposal, currentPreview, labelSchema, ownerKey, planMessage, sameLabels, starterRules, uid, validateRule, type Actor, type Connection, type Draft, type Item, type Run, type UserState } from './domain.js';
+import { availableRuleProposal, currentPreview, labelSchema, ownerKey, planMessage, sameLabels, starterRules, uid, validateRule, type Actor, type Connection, type Draft, type Run, type UserState } from './domain.js';
 import type { Mailbox } from './gmail.js';
 import { escapeCardValue, SlackDeliveryRejected, type Button, type Messenger } from '../../core/slack.js';
 import { prune, Store } from './store.js';

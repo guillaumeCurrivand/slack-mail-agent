@@ -1,5 +1,7 @@
 # Development — local maintenance automation
 
+Project browsing uses a table with a per-row Open action that updates the originating private message or project thread after the same membership checks. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
+
 The User approved this Module on 03/10/2026. The technical Module ID is `development`; the Slack name is **Développement**. The [EOA workstation runbook](development-eoa.md) records the configured pilot, startup order, troubleshooting and observed verification. A complete live ticket-to-commit workflow remains to be verified.
 
 ## Approved behavior

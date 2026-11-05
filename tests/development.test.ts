@@ -109,7 +109,7 @@ async function harness(failure?: 'conversations.info' | 'conversations.members' 
     const controls: any[] = [];
     const walk = (value: any) => { if (!value || typeof value !== 'object') return; if (value.action_id) controls.push(value); for (const child of Object.values(value)) if (typeof child === 'object') walk(child); };
     walk(source.blocks);
-    const control = controls.find(button => button.text?.text.replace(/^🧭 /, '') === label);
+    const control = controls.find(button => button.text?.text.replace(/^(?:🧭|\?) /, '') === label);
     expect(control, `Missing ${label}: ${controls.map(button => button.text?.text).join(', ')}`).toBeTruthy();
     const stamp = String(Math.floor(Date.now() / 1000));
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel }, message: { ts: timestamp, ...(source.thread_ts ? { thread_ts: source.thread_ts } : {}) }, trigger_id: 'synthetic-trigger', actions: [{ action_id: control.action_id, value: control.value, action_ts: clickId }] }) }).toString();
@@ -770,7 +770,7 @@ it('confines project screens to their channel even when the user belongs to both
   expect(h.posts.at(-1).text).not.toContain('Projet pilote');
   h.accessibleChannels.delete('GOTHER');
   const count = h.posts.length;
-  await h.click(h.posts.at(-1), 'Other secret', { ...alice, channel: 'GOTHER' });
+  await h.click(h.posts.at(-1), 'Ouvrir', { ...alice, channel: 'GOTHER' });
   expect(h.posts).toHaveLength(count);
 });
 
@@ -1184,7 +1184,7 @@ it('browses projects, configuration, history and run details through signed butt
   const module = main;
   expect(module.ts).toBe(main.ts);
   const projects = await h.click(module, 'Projets et traitements');
-  const detail = await h.click(projects, 'Projet pilote');
+  const detail = await h.click(projects, 'Ouvrir');
   expect(detail.text).toContain('Skill : maintenance');
   expect(JSON.stringify(detail)).toContain('https://app.slack.com/client/TTEAM/CPROJECT');
   const configuration = await h.click(detail, 'Modifier la configuration');
@@ -1333,7 +1333,7 @@ it('configures through signed channel dispatch and restricts configuration/statu
   await h.configure(); expect(await h.store.project('pilot')).toEqual(project);
   expect(h.posts.at(-1).text).toContain('Projet Projet pilote enregistré');
   await h.command('development projects');
-  expect(h.posts.at(-1).text).toContain('pilot — Projet pilote');
+  expect(h.posts.at(-1).text).toContain('Projet pilote | Activé');
   const postCount = h.posts.length;
   await h.command(`development configure ${JSON.stringify({ ...project, skill: 'other' })}`, 'UOUTSIDER');
   expect((await h.store.project('pilot'))!.skill).toBe('maintenance');
@@ -1365,7 +1365,7 @@ it.each(['<URL>', '<URL|Orientaction frontend>'])('accepts Slack repository link
   expect(await h.store.project('pilot')).toEqual(configured);
   expect(h.posts.at(-1).text).toContain('enregistré');
   await h.command('development projects');
-  expect(h.posts.at(-1).text).toContain('pilot — Projet pilote');
+  expect(h.posts.at(-1).text).toContain('Projet pilote | Activé');
 });
 
 it.each(['not-a-url', '<https://example.com', 'https://', '<not-a-url|https://gitlab.com/example/project>', '<http://example.com/project>', '<https://user:password@example.com/project>', '<https://example.com/project?token=secret>', '<https://example.com/project#fragment>'])('rejects invalid repository input without throwing or saving: %s', async repository => {

@@ -1,5 +1,7 @@
 # Mail Sorter module
 
+Mail rules and pending approvals use six-row tables with numbered controls. Pagination, Add/Edit and reopening approvals update the originating Card. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
+
 Mail Sorter (**Tri des e-mails** in Slack) prepares changes to your own Gmail using your approved rules. You review a Preview before approving labels, archive or Trash actions. It processes individual messages from the latest 100 inbox messages when you request it.
 
 Status: implemented locally and enabled by default. Live Slack/Google/OpenAI integration and model-quality validation remain release checks. The [Mail Sorter contract in the product specification](product-spec.md#mail-sorter-module) owns approved behavior; this guide explains how to use it. [All modules](../README.md#modules-and-project-structure) share the same bot and AI allowance.

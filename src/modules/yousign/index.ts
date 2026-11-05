@@ -114,7 +114,7 @@ export function createYousignModule(config: YousignConfig, database: Database, d
         if (command === 'channels') return show(await channelsPage(actor, context.sql, 0, '', true));
         if (command === 'status') return show(await statusPage(actor, context.sql, 0, '', true));
         return show({ ...main, links: main.links!.map(link => ({ ...link, page: `yousign:${link.page}` })),
-          text: `${main.text}\nCommandes : yousign canaux, yousign statut, yousign aide. Les sélections n’affectent pas Slack Unanswered.`, buttons: [menuButton] });
+          text: `${main.text}\nCommandes : yousign canaux, yousign statut, yousign aide.`, buttons: [menuButton] });
       }
       const bound = payload.type === 'menu_action' ? await navigation.boundTarget(actor, payload.value, payload.timestamp) : undefined;
       if (!bound) return show({ kind: 'Yousign indisponible', text: 'Ce bouton est indisponible. Envoyez menu pour continuer.', buttons: [menuButton] });

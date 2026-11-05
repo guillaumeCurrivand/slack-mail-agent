@@ -64,9 +64,15 @@ export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connecti
     const identity = await api.identity();
     if (identity.id !== connection.identity.id) throw new Error('Identity changed');
     await api.workspace(workspaceId);
-    for (const saved of visible) {
-      try { await api.task(saved.id); accessible.push(saved); }
-      catch { accessNotice = 'Certaines tâches ne sont plus accessibles ou leur accès ne peut pas être vérifié ; elles sont masquées.'; }
+    // Bound provider pressure while avoiding one network round trip per visible row.
+    // No cross-request access cache: every displayed task is checked on every page.
+    for (let offset = 0; offset < visible.length; offset += 4) {
+      const batch = visible.slice(offset, offset + 4);
+      const checks = await Promise.allSettled(batch.map(saved => api.task(saved.id)));
+      checks.forEach((result, index) => {
+        if (result.status === 'fulfilled') accessible.push(batch[index]!);
+        else accessNotice = 'Certaines tâches ne sont plus accessibles ou leur accès ne peut pas être vérifié ; elles sont masquées.';
+      });
     }
   } catch { accessNotice = 'L’accès au compte ou à Mayasquad ne peut pas être vérifié. Aucun contenu de tâche n’est affiché. Reconnectez ClickUp.'; }
   const buttons: Button[] = [];

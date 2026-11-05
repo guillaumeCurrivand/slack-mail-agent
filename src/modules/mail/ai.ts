@@ -1,5 +1,5 @@
 import { z } from 'zod';
-import { uid, ownerKey, ruleSchema, type Actor, type Mail, type Rule, type Match } from './domain.js';
+import { ruleSchema, type Actor, type Mail, type Rule, type Match } from './domain.js';
 import { Budget, PRICE_CARD, costMicro } from '../../core/budget.js';
 
 export const intentSchema = z.object({

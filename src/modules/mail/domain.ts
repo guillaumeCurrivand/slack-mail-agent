@@ -1,4 +1,3 @@
-import type { Actor } from '../../core/identity.js';
 export { ownerKey, uid, type Actor } from '../../core/identity.js';
 import { z } from 'zod';
 

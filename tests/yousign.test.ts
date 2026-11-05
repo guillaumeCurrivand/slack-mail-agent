@@ -99,11 +99,11 @@ async function harness() {
     }))) : []);
   const click = async (post: (typeof posts)[number], label: string, actor = alice, timestamp = post.ts) => {
     let current = post;
-    for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^🧭 /, '') === label); page++) {
-      expect(buttons(current).some(button => button.text?.text.replace(/^🧭 /, '') === 'Actions ▶'), label).toBe(true);
+    for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^(?:🧭|\?) /, '') === label); page++) {
+      expect(buttons(current).some(button => button.text?.text.replace(/^(?:🧭|\?) /, '') === 'Actions ▶'), label).toBe(true);
       current = await click(current, 'Actions ▶', actor, timestamp);
     }
-    const button = buttons(current).find(button => button.text?.text.replace(/^🧭 /, '') === label); expect(button, label).toBeDefined();
+    const button = buttons(current).find(button => button.text?.text.replace(/^(?:🧭|\?) /, '') === label); expect(button, label).toBeDefined();
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: actor.team }, user: { id: actor.user }, channel: { id: actor.channel },
       message: { ts: timestamp }, actions: [{ action_id: button.action_id, value: button.value, action_ts: String(++counter) }] }) }).toString();
     const response = await slackRequest('/slack/actions', raw, 'application/x-www-form-urlencoded'); expect(response.statusCode).toBe(200);
@@ -218,12 +218,12 @@ it('shows recovery navigation without an empty table when no channels can be dis
   const empty = await h.text('yousign canaux');
   expect(empty.blocks.some(block => block.type === 'data_table')).toBe(false);
   expect(empty.text).toContain('Aucun canal partagé');
-  expect(h.buttons(empty).map(button => button.text.text.replace(/^🧭 /, ''))).toEqual(['Menu', 'Retour à Yousign']);
+  expect(h.buttons(empty).map(button => button.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour à Yousign', 'Menu']);
   h.setDirectoryFailure(true);
   const unavailable = await h.text('yousign canaux');
   expect(unavailable.blocks.some(block => block.type === 'data_table')).toBe(false);
   expect(unavailable.text).toContain('ne peut pas être vérifié');
-  expect(h.buttons(unavailable).map(button => button.text.text.replace(/^🧭 /, ''))).toEqual(['Menu', 'Retour à Yousign']);
+  expect(h.buttons(unavailable).map(button => button.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour à Yousign', 'Menu']);
 });
 
 it('keeps previously posted unsuffixed channel controls compatible', async () => {

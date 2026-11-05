@@ -17,12 +17,12 @@ import { starterRules, type Run } from '../src/modules/mail/domain.js';
 
 const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
-const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'token', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'slack' };
-const mailEnv = { ...env, ENABLED_MODULES: 'mail,slack', ENCRYPTION_KEY: randomBytes(32).toString('base64'), GOOGLE_CLIENT_ID: 'client', GOOGLE_CLIENT_SECRET: 'secret', GOOGLE_WORKSPACE_DOMAINS: 'example.com', OPENAI_API_KEY: 'unused' };
+const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'token', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'documentation' };
+const mailEnv = { ...env, ENABLED_MODULES: 'mail,documentation', ENCRYPTION_KEY: randomBytes(32).toString('base64'), GOOGLE_CLIENT_ID: 'client', GOOGLE_CLIENT_SECRET: 'secret', GOOGLE_WORKSPACE_DOMAINS: 'example.com', OPENAI_API_KEY: 'unused' };
 let db: PGlite, sql: Sql;
 beforeAll(async () => { db = new PGlite(); await db.exec(schema); sql = { query: (text, values) => db.query(text, values) }; });
 beforeEach(async () => {
-  await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE; DROP TABLE IF EXISTS slack_selected_channels,slack_handled_events,slack_ai_attempts,slack_unanswered_results');
+  await db.exec('TRUNCATE users,jobs,oauth_states,ai_calls,ai_months,core_navigation_menus,core_navigation_deliveries,core_operation_slots CASCADE');
   vi.stubGlobal('fetch', vi.fn(() => { throw new Error('Unexpected external provider call'); }));
 });
 afterEach(() => vi.unstubAllGlobals());
@@ -34,7 +34,7 @@ function buttons(message: Posted) { return blocks(message).filter((block: any) =
 function title(message: Posted) { return message.body.blocks[0]?.title?.text; }
 function richParts(message: Posted) { return blocks(message).filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements.flatMap((section: any) => section.elements)); }
 function renderedText(message: Posted) { return richParts(message).map((part: any) => part.text ?? '').join(''); }
-function findButton(message: Posted, label: string) { return buttons(message).find((item: any) => item.text.text.replace(/^🧭 /, '') === label); }
+function findButton(message: Posted, label: string) { return buttons(message).find((item: any) => item.text.text.replace(/^(?:🧭|\?) /, '') === label); }
 function button(message: Posted, label: string) { const found = findButton(message, label); expect(found, `${label}; available: ${buttons(message).map((item: any) => item.text.text).join(', ')}`).toBeTruthy(); return found; }
 async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: AssistantModule[] = []) {
   const config = readConfig(overrides), modules = new ModuleRegistry([...createModules(config, sql, overrides).all(), ...additionalModules]);
@@ -104,9 +104,9 @@ it('discovers enabled modules and shared commands in a private main menu without
       const menu = await h.dm(command);
       expect(menu.body.channel).toBe('DALICE');
       expect(menu.body.blocks[0].width).toBe('full');
-      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["Messages Slack sans réponse", 'Budget', "Aide"]);
+      expect(buttons(menu).map((item: any) => item.text.text)).toEqual(["Documentation", 'Budget', "? Aide"]);
       expect(buttons(menu).every((item: any) => item.style === undefined)).toBe(true);
-      expect(blocks(menu).filter((block: any) => block.type === 'actions')).toHaveLength(1);
+      expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([2, 1]);
       expect(new Set(buttons(menu).map((item: any) => item.action_id)).size).toBe(3);
     }
     const guidance = await h.dm('sort');
@@ -115,8 +115,28 @@ it('discovers enabled modules and shared commands in a private main menu without
   } finally { await h.close(); }
 });
 
+it('retires Unanswered even with legacy enablement and refuses old commands and controls without executing saved jobs', async () => {
+  const h = await harness({ ...env, ENABLED_MODULES: 'slack,documentation' });
+  try {
+    const config = readConfig({ ...env, ENABLED_MODULES: 'slack,documentation' });
+    const modules = createModules(config, sql, env);
+    expect(modules.enabledIds()).toEqual(['core', 'documentation']);
+    expect((await h.dm('menu')).body.text).not.toContain('sans réponse');
+    expect(buttons(await h.dm('menu')).map((item: any) => item.text.text)).not.toContain('Messages Slack sans réponse');
+    expect((await h.dm('slack unanswered')).body.text).toContain('préfixe');
+    const old = { method: 'chat.postMessage', ts: '123.456', body: {} };
+    const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: old.ts }, actions: [{ action_id: 'slack:find_unanswered', value: 'old|unanswered', action_ts: randomUUID() }] }) }).toString();
+    expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
+    await h.drain();
+    await new JobStore(sql).enqueue('retired-search', alice, { type: 'text', text: 'unanswered' }, 'slack');
+    expect((await sql.query("SELECT module,status FROM jobs WHERE id='retired-search'")).rows[0]).toMatchObject({ module: 'slack', status: 'queued' });
+    expect((await sql.query("SELECT tablename FROM pg_tables WHERE tablename LIKE 'slack_%'")).rows).toHaveLength(0);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+  } finally { await h.close(); }
+});
+
 it('opens complete built-in help through signed DM dispatch without connections, provider work or domain changes', async () => {
-  const allEnv = { ...mailEnv, ENABLED_MODULES: 'mail,slack,documentation,clickup,yousign,development',
+  const allEnv = { ...mailEnv, ENABLED_MODULES: 'mail,documentation,clickup,yousign,development',
     CLICKUP_CLIENT_ID: 'client', CLICKUP_CLIENT_SECRET: 'secret', CLICKUP_WORKSPACE_ID: '123',
     YOUSIGN_WEBHOOK_SECRET: 'fake-webhook-secret', YOUSIGN_SUBSCRIPTION_ID: 'subscription', SLACK_ADMIN_USER_ID: 'UADMIN',
     DEVELOPMENT_CLICKUP_TOKEN: 'fake', DEVELOPMENT_WORKER_TOKEN: 'fake-worker-token'.repeat(3),
@@ -132,7 +152,6 @@ it('opens complete built-in help through signed DM dispatch without connections,
     expect(title(await h.dm('help'))).toBe(title(guide));
     const capabilities = [
       ['courrier', 'Tri des e-mails', '100 derniers messages', 'Annuler ce traitement'],
-      ['slack', 'Messages Slack sans réponse', '48 heures', 'Vous concerne peut-être'],
       ['documentation', 'Documentation', 'six types de fiches', 'documentation compter'],
       ['clickup', 'ClickUp', 'directement assignées', 'clickup statuts'],
       ['yousign', 'Yousign', 'destinations sont partagées', 'Confirmer cette relance'],
@@ -155,6 +174,9 @@ it('opens complete built-in help through signed DM dispatch without connections,
         expect(renderedText(direct)).toBe(renderedText(clicked));
       }
       const menu = await h.click(clicked, 'Ouvrir le module');
+      const rows = blocks(menu).filter((block: any) => block.type === 'actions');
+      expect(rows.at(-1).elements.every((item: any) => item.text.text.startsWith('? Aide'))).toBe(true);
+      expect(rows.at(-2).elements.every((item: any) => item.text.text.startsWith('🧭 '))).toBe(true);
       const help = await h.click(menu, name === 'Documentation' ? 'Aide' : 'Aide du module');
       expect(help.method).toBe('chat.update');
       expect(help.ts).toBe(menu.ts);
@@ -206,14 +228,14 @@ it('keeps long static help and topics private and pages them without invoking mo
 it('hides disabled modules from help and refuses their older help links after a restart', async () => {
   const first = await harness();
   const guide = await first.dm('aide');
-  const module = await first.click(guide, 'Aide : Messages Slack sans réponse');
+  const module = await first.click(guide, 'Aide : Documentation');
   await first.close();
   const h = await harness({ ...env, ENABLED_MODULES: '' });
   try {
     const empty = await h.dm('aide');
     expect(empty.body.text).toContain('Aucun module');
-    expect(buttons(empty).map((item: any) => item.text.text.replace(/^🧭 /, ''))).toEqual(['Retour au menu']);
-    expect((await h.click(guide, 'Aide : Messages Slack sans réponse')).body.text).toContain('n’est pas activé');
+    expect(buttons(empty).map((item: any) => item.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour au menu']);
+    expect((await h.click(guide, 'Aide : Documentation')).body.text).toContain('n’est pas activé');
     expect((await h.click(module, 'Ouvrir le module')).body.text).toContain('n’est pas activé');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
@@ -228,10 +250,10 @@ it('shows every enabled destination on the main menu without action paging', asy
   try {
     const menu = await h.dm('menu');
     expect(buttons(menu).map((item: any) => item.text.text)).toEqual([
-      'Messages Slack sans réponse', ...names, 'Budget', 'Aide',
+      'Documentation', ...names, 'Budget', '? Aide',
     ]);
     expect(findButton(menu, 'Actions ▶')).toBeUndefined();
-    expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 5]);
+    expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([5, 4, 1]);
     const opened = await h.click(menu, names.at(-1)!);
     expect(opened.method).toBe('chat.update');
     expect(opened.ts).toBe(menu.ts);
@@ -301,7 +323,7 @@ it('shows ordinary workflow controls together and pages only unusually large cho
     let page = first;
     const labels: string[] = [];
     for (let index = 0; index < 20; index++) {
-      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^🧭 /, '')).filter((label: string) => label.startsWith('Choix')));
+      labels.push(...buttons(page).map((item: any) => item.text.text.replace(/^(?:🧭|\?) /, '')).filter((label: string) => label.startsWith('Choix')));
       if (!findButton(page, 'Actions ▶')) break;
       page = await h.click(page, 'Actions ▶');
       expect(page.method).toBe('chat.update');
@@ -365,11 +387,7 @@ it('starts menu work through the existing module handlers and explains missing p
     expect(sorting.ts).toBe(mail.ts);
     expect(sorting.body.text).toContain("Connectez d’abord Gmail");
     button(sorting, 'Menu');
-    const slack = await h.click(await h.click(mail, "Retour au menu"), "Messages Slack sans réponse");
-    expect(buttons(slack).every((item: any) => item.value === undefined || item.value.length > 0)).toBe(true);
-    expect(button(slack, 'Choisir les canaux').style).toBe('primary');
-    expect(buttons(slack).some((item: any) => item.action_id.startsWith('slack:find_unanswered'))).toBe(false);
-    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
+
   } finally { await h.close(); }
 });
 
@@ -480,11 +498,11 @@ it('updates only the clicked menu, checks ownership and keeps module selection o
   const h = await harness();
   try {
     const first = await h.dm('menu'), second = await h.dm('menu');
-    const module = await h.click(first, "Messages Slack sans réponse");
+    const module = await h.click(first, "Documentation");
     expect(module.method).toBe('chat.update');
     expect(module.body.blocks[0].width).toBe('full');
     expect(module.ts).toBe(first.ts);
-    expect(module.body.text).toContain("slack canaux");
+    expect(module.body.text).toContain("documentation");
     const main = await h.click(module, "Retour au menu");
     expect(main.ts).toBe(first.ts);
     const budget = await h.click(second, 'Budget');
@@ -493,8 +511,8 @@ it('updates only the clicked menu, checks ownership and keeps module selection o
     const help = await h.click(main, "Aide");
     expect(help.body.text).toContain("préfixe");
     const updates = h.messages.filter(message => message.method === 'chat.update').length;
-    await h.click(first, "Messages Slack sans réponse", bob);
-    await h.click(first, "Messages Slack sans réponse", alice, second.ts);
+    await h.click(first, "Documentation", bob);
+    await h.click(first, "Documentation", alice, second.ts);
     expect(h.messages.filter(message => message.method === 'chat.update')).toHaveLength(updates);
     expect((await h.dm('channels')).body.text).toContain("préfixe");
   } finally { await h.close(); }
@@ -557,124 +575,6 @@ it('retries rejected workflow updates without reposting and does not replay unce
   } finally { await h.close(); }
 });
 
-it('chooses Slack channels across pages in the same DM message without Gmail or AI', async () => {
-  let channelCount = 12;
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    const request = new URL(url);
-    expect(request.pathname).toBe('/api/users.conversations');
-    return Response.json({ ok: true, channels: Array.from({ length: channelCount }, (_, index) => ({
-      id: `CCHANNEL${index}`, name: `channel-${String(index).padStart(2, '0')}`, is_channel: true, is_private: false,
-    })), response_metadata: { next_cursor: '' } });
-  }));
-  const h = await harness();
-  try {
-    const main = await h.dm('menu');
-    const module = await h.click(main, "Messages Slack sans réponse");
-    const first = await h.click(module, "Choisir les canaux");
-    expect(first.method).toBe('chat.update');
-    expect(first.ts).toBe(main.ts);
-    expect(first.body.text).toContain('page 1/2');
-    const second = await h.click(first, "Suivant");
-    expect(second.ts).toBe(first.ts);
-    expect(second.body.text).toContain('channel-11');
-    const added = await h.click(second, "Ajouter #channel-11");
-    expect(added.method).toBe('chat.update');
-    expect(added.ts).toBe(first.ts);
-    expect(added.body.text).toContain("Canaux sélectionnés : 1");
-    expect(button(added, 'Chercher maintenant').style).toBe('primary');
-    button(added, "Retirer #channel-11");
-    const removed = await h.click(added, "Retirer #channel-11");
-    expect(removed.body.text).toContain("Canaux sélectionnés : 0");
-    expect(buttons(removed).some((item: any) => item.action_id.startsWith('slack:find_unanswered'))).toBe(false);
-    button(removed, "Ajouter #channel-11");
-    channelCount = 1;
-    const adjusted = await h.click(first, "Suivant");
-    expect(adjusted.body.text).toContain('page 1/1');
-    expect(adjusted.body.text).not.toContain('channel-11');
-    const back = await h.click(adjusted, "Retour aux messages Slack sans réponse");
-    expect(back.ts).toBe(main.ts);
-    expect(back.body.text).toContain("Choisissez les canaux");
-    expect(h.messages.filter(message => message.method === 'chat.postMessage')).toHaveLength(1);
-    expect(vi.mocked(fetch).mock.calls.every(([url]) => String(url).includes('users.conversations'))).toBe(true);
-  } finally { await h.close(); }
-});
-
-it('retains inaccessible selections and rejects another user or stale access on channel clicks', async () => {
-  let accessible = true;
-  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
-    const request = new URL(url);
-    expect(request.pathname).toBe('/api/users.conversations');
-    return Response.json({ ok: true, channels: request.searchParams.get('user') === 'UALICE' && accessible
-      ? [{ id: 'GPRIVATE', name: 'planning', is_group: true, is_private: true }] : [], response_metadata: { next_cursor: '' } });
-  }));
-  const h = await harness();
-  try {
-    const first = await h.dm('slack channels');
-    const bobAttempt = await h.click(first, "Ajouter #planning", bob);
-    expect(bobAttempt.body.text).toContain('indisponible');
-    expect(bobAttempt.body.text).not.toContain('planning');
-    accessible = false;
-    const changed = await h.click(first, "Ajouter #planning");
-    expect(changed.body.text).toContain('n’est plus accessible');
-    expect(changed.body.text).toContain("Canaux sélectionnés : 0");
-    accessible = true;
-    const added = await h.click(first, "Ajouter #planning");
-    expect(added.body.text).toContain("Canaux sélectionnés : 1");
-    accessible = false;
-    const unavailable = await h.click(first, "Ajouter #planning");
-    expect(unavailable.body.text).toContain('Canal sélectionné indisponible GPRIVATE');
-    expect(unavailable.body.text).not.toContain('planning');
-    const removed = await h.click(unavailable, 'Retirer GPRIVATE');
-    expect(removed.body.text).toContain("Canaux sélectionnés : 0");
-    expect(removed.body.text).toContain('Aucun canal public ou privé partagé');
-    accessible = true;
-    const messagesAfterRemove = h.messages.length;
-    await sql.query("UPDATE jobs SET status='queued',available_at=now() WHERE module='slack' AND payload->>'action'='channel_select'");
-    await h.drain();
-    expect(h.messages).toHaveLength(messagesAfterRemove);
-    const current = await h.dm('slack channels');
-    expect(current.body.text).toContain("Canaux sélectionnés : 0");
-  } finally { await h.close(); }
-});
-
-it('keeps saved selections removable if channel discovery fails during refresh', async () => {
-  let discoveryCalls = 0;
-  vi.stubGlobal('fetch', vi.fn(async () => {
-    discoveryCalls++;
-    if (discoveryCalls === 3) throw new Error('Channel discovery unavailable');
-    return Response.json({ ok: true, channels: [{ id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false }], response_metadata: { next_cursor: '' } });
-  }));
-  const h = await harness();
-  try {
-    const list = await h.dm('slack channels');
-    const updated = await h.click(list, "Ajouter #general");
-    expect(updated.method).toBe('chat.update');
-    expect(updated.body.text).toContain("Canaux sélectionnés : 1");
-    expect(updated.body.text).toContain('L’accès aux canaux est momentanément indisponible');
-    expect(updated.body.text).not.toContain('selections are unchanged');
-    button(updated, 'Retirer CPUBLIC');
-  } finally { await h.close(); }
-});
-
-it('gives shared guidance for channel controls after Slack Unanswered is disabled', async () => {
-  vi.stubGlobal('fetch', vi.fn(async () => Response.json({ ok: true, channels: [
-    { id: 'CPUBLIC', name: 'general', is_channel: true, is_private: false },
-  ], response_metadata: { next_cursor: '' } })));
-  const enabled = await harness();
-  let list: Posted;
-  try { list = await enabled.dm('slack channels'); }
-  finally { await enabled.close(); }
-  const provider = vi.fn(() => { throw new Error('Disabled module accessed Slack'); });
-  vi.stubGlobal('fetch', provider);
-  const disabled = await harness({ ...env, ENABLED_MODULES: '' });
-  try {
-    const guidance = await disabled.click(list!, 'Ajouter #general');
-    expect(guidance.body.text).toContain("transmise à aucun module");
-    expect(guidance.body.text).not.toContain('general');
-    expect(provider).not.toHaveBeenCalled();
-  } finally { await disabled.close(); }
-});
-
 it('connects through the existing invitation and confirms disconnect without erasing saved rules', async () => {
   const h = await harness(mailEnv);
   try {
@@ -727,8 +627,8 @@ it('keeps old menus recoverable across a restart, disablement and an idempotent 
   const h = await harness({ ...env, ENABLED_MODULES: '' });
   try {
     const fresh = await h.dm('menu');
-    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['Budget', "Aide"]);
-    const unavailable = await h.click(old, "Messages Slack sans réponse");
+    expect(buttons(fresh).map((item: any) => item.text.text)).toEqual(['Budget', "? Aide"]);
+    const unavailable = await h.click(old, "Documentation");
     expect(unavailable.method).toBe('chat.update');
     expect(unavailable.ts).toBe(old.ts);
     expect(unavailable.body.text).toContain("n’est pas activé");
@@ -746,7 +646,7 @@ it('retries explicit Slack rejections but does not blindly repeat uncertain menu
     const menu = await h.drain();
     expect(h.messages).toHaveLength(1);
     h.failNext('uncertain');
-    await expect(h.click(menu, "Messages Slack sans réponse")).rejects.toThrow('Connection lost');
+    await expect(h.click(menu, "Documentation")).rejects.toThrow('Connection lost');
     const count = h.messages.length;
     await h.drain();
     expect(h.messages).toHaveLength(count);
@@ -834,14 +734,15 @@ it('browses mail rules and prepares Add/Edit forms in place without changing rul
     expect(rules.method).toBe('chat.update');
     expect(rules.body.text).toContain('Priority 0');
     expect(rules.body.text).not.toContain('Priority 6');
+    expect(blocks(rules).find((block: any) => block.type === 'data_table').rows).toHaveLength(7);
     const next = await h.click(rules, "Suivant");
     expect(next.ts).toBe(rules.ts);
-    expect(next.body.text).toContain('Priority 3');
+    expect(next.body.text).toContain('Priority 6');
     const edit = await h.click(next, "Modifier 1");
     expect(edit.method).toBe('chat.update');
     expect(edit.ts).toBe(next.ts);
     button(edit, 'Règle par contenu');
-    expect((await sql.query('SELECT definition FROM mail_guided_forms')).rows[0].definition.context.base.id).toBe('rule-3');
+    expect((await sql.query('SELECT definition FROM mail_guided_forms')).rows[0].definition.context.base.id).toBe('rule-6');
     button(await h.click(rules, "Ajouter une règle"), 'Règle par expéditeur');
     expect((await h.dm('change Priority 0')).body.text).toContain("préfixe");
     expect((await h.click(await h.dm('menu', bob), "Tri des e-mails", bob)).body.text).not.toContain('Priority');
@@ -899,7 +800,7 @@ it('reopens saved Previews and Reports without renewing them and excludes stale 
     { ...preview, id: 'expired', created: new Date(Date.now() - 25 * 3600_000).toISOString() },
     { ...preview, id: 'wrong-version', ruleVersion: 5 }, { ...preview, id: 'disconnected', connectionId: 'old' },
     { ...preview, id: 'done', status: 'done' }];
-  state.drafts = Array.from({ length: 4 }, (_, index) => ({ id: `draft-${index}`, kind: 'rules' as const, created: new Date().toISOString(), rules: starterRules() }));
+  state.drafts = Array.from({ length: 7 }, (_, index) => ({ id: `draft-${index}`, kind: 'rules' as const, created: new Date().toISOString(), rules: starterRules() }));
   state.drafts.push({ id: 'expired-draft', kind: 'rules', created: new Date(Date.now() - 25 * 3600_000).toISOString(), rules: starterRules() });
   await store.save(alice, state);
   const h = await harness(mailEnv);
@@ -909,7 +810,7 @@ it('reopens saved Previews and Reports without renewing them and excludes stale 
     expect(pending.body.text).toContain('page 1/2');
     const next = await h.click(pending, "Suivant");
     expect(next.ts).toBe(pending.ts);
-    expect(next.body.text).toContain('preview-1');
+    expect(next.body.text).toContain('Aperçu du tri');
     expect(next.body.text).not.toMatch(/expired|wrong-version|disconnected/);
     const reopened = await h.click(next, "Ouvrir 2");
     expect(reopened.method).toBe('chat.update');
@@ -1013,13 +914,15 @@ it('bounds long rule summaries while retaining every page and action', async () 
   const h = await harness(mailEnv);
   try {
     let page = await h.click(await h.click(await h.dm('menu'), "Tri des e-mails"), "Gérer les règles");
-    for (let n = 0; n < 14; n++) {
-      const text = richParts(page).map((part: any) => part.text).join('\n');
+    for (let n = 0; n < 7; n++) {
+      const table = blocks(page).find((block: any) => block.type === 'data_table');
+      expect(table.rows.length).toBeLessThanOrEqual(7);
+      const text = [renderedText(page), ...table.rows.flat().map((cell: any) => cell.text ?? '')].join('\n');
       expect(text.length).toBeLessThan(12_000);
-      expect(text).toContain(`Long rule ${n * 3}`);
+      expect(text).toContain(`Long rule ${n * 6}`);
       expect(text).toContain("résumés");
       button(await h.seek(page, "Modifier 1"), "Modifier 1"); button(await h.seek(page, "Retirer 1"), "Retirer 1"); button(page, "Retour au menu");
-      if (n < 13) page = await h.click(page, "Suivant");
+      if (n < 6) page = await h.click(page, "Suivant");
     }
     expect(findButton(page, "Suivant")).toBeUndefined();
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();

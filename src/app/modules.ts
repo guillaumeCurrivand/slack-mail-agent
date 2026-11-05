@@ -2,8 +2,6 @@ import { ModuleRegistry } from '../core/modules.js';
 import type { Sql } from '../core/store.js';
 import { readMailConfig } from '../modules/mail/config.js';
 import { createMailModule } from '../modules/mail/index.js';
-import { readSlackConfig } from '../modules/slack/config.js';
-import { createSlackModule } from '../modules/slack/index.js';
 import { createDocumentationModule } from '../modules/documentation/index.js';
 import { readDocumentationAIConfig } from '../modules/documentation/ai.js';
 import type { Config } from './config.js';
@@ -18,7 +16,6 @@ import { createDevelopmentModule } from '../modules/development/index.js';
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
     mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql, config.SLACK_BOT_TOKEN),
-    slack: () => createSlackModule(config.SLACK_BOT_TOKEN, sql, readSlackConfig(env)),
     documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env), config.SLACK_BOT_TOKEN),
     clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
     yousign: () => createYousignModule({ ...readYousignConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),

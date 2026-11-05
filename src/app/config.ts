@@ -13,7 +13,9 @@ export function readConfig(env: NodeJS.ProcessEnv = process.env) {
   const url = new URL(parsed.PUBLIC_URL);
   if (url.protocol !== 'https:' && !(url.protocol === 'http:' && ['localhost', '127.0.0.1'].includes(url.hostname))) throw new Error('PUBLIC_URL requires HTTPS outside localhost.');
   if (url.pathname !== '/' || url.search || url.hash || url.username || url.password) throw new Error('PUBLIC_URL must be an origin without path or credentials.');
-  const enabledModules = parsed.ENABLED_MODULES.split(',').map(id => id.trim()).filter(Boolean);
+  // Retired module: tolerate existing deployments without constructing it or
+  // selecting its queued jobs. Historical data and spending records stay intact.
+  const enabledModules = parsed.ENABLED_MODULES.split(',').map(id => id.trim()).filter(id => id && id !== 'slack');
   if (new Set(enabledModules).size !== enabledModules.length) throw new Error('Duplicate enabled module.');
   return { ...parsed, PUBLIC_URL: url.origin, enabledModules };
 }

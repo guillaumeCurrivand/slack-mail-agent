@@ -12,11 +12,25 @@ export const validResourceUrl = (value: string) => {
 };
 export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
 export const navigationCue = '🧭';
+export const helpCue = '?';
+export const buttonGroup = (button: Button): 'action' | 'navigation' | 'help' => {
+  // Page choices remain actions; structural controls and help have dedicated rows.
+  if (/(?:^|:)controls$/.test(button.action) || button.action === 'core:menu'
+    || /^(?:Précédent|Suivant|Retour|Menu|Valeurs précédentes|Valeurs suivantes|Fermer)(?:\b|$)/i.test(button.label)) return 'navigation';
+  if (/^(?:Aide|Help)(?:\b|$)/i.test(button.label)) return 'help';
+  return 'action';
+};
 export const buttonDisplayLabel = (button: Button) => {
-  // A core:navigate destination can be a page choice; only structural controls get the cue.
-  const navigation = button.action === 'core:controls' || button.action === 'core:menu'
-    || /^(?:Précédent|Suivant|Retour|Menu|Valeurs précédentes|Valeurs suivantes|Fermer)(?:\b|$)/i.test(button.label);
-  return navigation ? `${navigationCue} ${button.label}` : button.label;
+  const group = buttonGroup(button);
+  return group === 'navigation' ? `${navigationCue} ${button.label}` : group === 'help' ? `${helpCue} ${button.label}` : button.label;
+};
+// Stable structural positions on every screen, independent of module assembly.
+const navigationOrder = (button: Button) => {
+  if (/^(?:Précédent|Valeurs précédentes|◀ Actions)/i.test(button.label)) return 0;
+  if (/^(?:Suivant|Valeurs suivantes|Actions ▶)/i.test(button.label)) return 1;
+  if (button.action === 'core:menu' || /^(?:Menu|Retour au menu)$/i.test(button.label)) return 3;
+  if (/^Fermer\b/i.test(button.label)) return 4;
+  return 2;
 };
 export interface Messenger {
   replyTarget?(actor: Actor): { id: string; timestamp: string } | undefined;
@@ -169,25 +183,32 @@ export class Slack implements Messenger {
       const links = message.resourceLinks.filter(link => validResourceUrl(link.url));
       if (links.length) cardBlocks.push({ type: 'rich_text', elements: links.map(link => ({ type: 'rich_text_section', elements: [{ type: 'link', text: link.label, url: link.url }] })) });
     }
+    for (const select of message.selects ?? []) {
+      if (!select.options.length) continue;
+      (message.kind ? cardBlocks : blocks).push({ type: 'actions', elements: [{ type: 'static_select', action_id: select.action,
+        placeholder: { type: 'plain_text', text: select.label.slice(0, 150) },
+        options: select.options.map(option => ({ text: { type: 'plain_text', text: option.label.slice(0, 75) }, value: option.value })) }] });
+    }
     if (message.kind && buttons.length) cardBlocks.push({ type: 'divider' });
     let actionElements: any[] = [];
     const flushActions = () => {
       if (actionElements.length) (message.kind ? cardBlocks : blocks).push({ type: 'actions', elements: actionElements });
       actionElements = [];
     };
-    for (const [index, button] of buttons.entries()) {
-      if (actionElements.length === VISIBLE_ACTION_BUTTONS) flushActions();
-      if (logicalAction(button.action) !== button.action) throw new SlackDeliveryRejected('Invalid logical button action.');
-      const label = buttonDisplayLabel(button);
-      actionElements.push({ type: 'button', text: { type: 'plain_text', text: label.slice(0, 75) }, action_id: `${button.action}~button-${index}`,
-        ...(button.value ? { value: button.value } : {}), ...(button.style ? { style: button.style } : {}) });
-    }
-    flushActions();
-    for (const select of message.selects ?? []) {
-      if (!select.options.length) continue;
-      cardBlocks.push({ type: 'actions', elements: [{ type: 'static_select', action_id: select.action,
-        placeholder: { type: 'plain_text', text: select.label.slice(0, 150) },
-        options: select.options.map(option => ({ text: { type: 'plain_text', text: option.label.slice(0, 75) }, value: option.value })) }] });
+    const groupedButtons = (['action', 'navigation', 'help'] as const)
+      .map(group => {
+        const entries = [...buttons.entries()].filter(([, button]) => buttonGroup(button) === group);
+        return group === 'navigation' ? entries.sort((a, b) => navigationOrder(a[1]) - navigationOrder(b[1])) : entries;
+      });
+    for (const group of groupedButtons) {
+      for (const [index, button] of group) {
+        if (actionElements.length === VISIBLE_ACTION_BUTTONS) flushActions();
+        if (logicalAction(button.action) !== button.action) throw new SlackDeliveryRejected('Invalid logical button action.');
+        const label = buttonDisplayLabel(button);
+        actionElements.push({ type: 'button', text: { type: 'plain_text', text: label.slice(0, 75) }, action_id: `${button.action}~button-${index}`,
+          ...(button.value ? { value: button.value } : {}), ...(button.style ? { style: button.style } : {}) });
+      }
+      flushActions();
     }
     if (message.kind) {
       // Preserve every control across continuation containers.

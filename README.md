@@ -1,8 +1,8 @@
 # Mayassistant — private Slack assistant
 
-Mayassistant is one Slack bot with six independently enabled Modules: Mail Sorter, Slack Unanswered, Documentation, ClickUp, Yousign and Development. Use private DMs for personal Modules. Development is configured and used in both private DMs and its Slack project channels. It reviews channel-linked ClickUp tickets and delegates authorized maintenance fixes to a local Cursor worker.
+Mayassistant is one Slack bot with five independently enabled Modules: Mail Sorter, Documentation, ClickUp, Yousign and Development. Use private DMs for personal Modules. Development is configured and used in both private DMs and its Slack project channels. It reviews channel-linked ClickUp tickets and delegates authorized maintenance fixes to a local Cursor worker.
 
-The application-owned interface is French. Original inventory values, approved rules, message excerpts and URLs remain literal. Timestamps display `DD/MM/YYYY HH:mm (Europe/Paris)`; ClickUp deadlines display the Paris calendar date only. Numbers use French separators. Buttons share horizontal action rows; Slack can wrap them on narrow clients, and Documentation's record selector stays separate. English commands remain compatible alongside the French shortcuts below. See the [presentation contract](docs/product-spec.md#interactive-message-presentation).
+The application-owned interface is French. Original inventory values, approved rules, message excerpts and URLs remain literal. Timestamps display `DD/MM/YYYY HH:mm (Europe/Paris)`; ClickUp deadlines display the Paris calendar date only. Numbers use French separators. Buttons use separate rows: screen actions first, navigation second, and Help last with a compact `?` prefix. Empty groups are omitted and long groups continue on extra rows; Slack can also wrap them on narrow clients. Contextual table actions stay beside their records. English commands remain compatible alongside the French shortcuts below. See the [presentation contract](docs/product-spec.md#interactive-message-presentation).
 
 The [approved product specification](docs/product-spec.md) describes the scope. The application is implemented locally; a real Slack/Google/OpenAI deployment and model-quality evaluation are still required before team rollout.
 
@@ -17,8 +17,8 @@ For contributors, [AGENTS.md](AGENTS.md) points to the [product specification](d
 - Private Slack menus and prefixed commands for all enabled Modules.
 - Mail Sorter rule proposals and starter rules, Google Workspace OAuth with hosted-domain/browser checks and encrypted credentials, separately confirmed Previews, individual-message actions, Reports and conservative undo.
 - Durable PostgreSQL jobs, per-user and per-module serialization, active-operation admission, duplicate-event protection, and mutation checkpoints.
-- A shared $10/month OpenAI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Development uses separately billed local Cursor calls. Channel selection, approval, reports, and undo do not require AI; contextual Slack matching and mail interpretation do.
-- Startup and hourly cleanup follow each enabled Module's retention contract: [Mail Sorter](docs/mail.md#approvals-privacy-and-spending), [Slack Unanswered](docs/slack-unanswered.md#commands-and-results), [Documentation](docs/documentation.md#spending-availability-and-private-state), [ClickUp](docs/clickup.md#reading-results-and-recovering) and [Yousign](docs/yousign.md#receipt-recovery-and-alerts). Disabling a Module pauses its physical cleanup; Documentation inventory/history have lifetime retention.
+- A shared $10/month OpenAI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Development uses separately billed local Cursor calls. Channel selection, approval, reports, and undo do not require AI; mail and natural-language inventory interpretation do.
+- Startup and hourly cleanup follow each enabled Module's retention contract: [Mail Sorter](docs/mail.md#approvals-privacy-and-spending), [Documentation](docs/documentation.md#spending-availability-and-private-state), [ClickUp](docs/clickup.md#reading-results-and-recovering) and [Yousign](docs/yousign.md#receipt-recovery-and-alerts). Disabling a Module pauses its physical cleanup; Documentation inventory/history have lifetime retention.
 
 ## Modules and project structure
 
@@ -27,7 +27,6 @@ All Modules use the same Slack bot and database. OpenAI calls share the existing
 | Module and guide | Enablement ID | What it does | Data ownership | Additional setup |
 | --- | --- | --- | --- | --- |
 | [Mail Sorter — Tri des e-mails](docs/mail.md) | `mail` | Preview and approve Gmail labels, archive and Trash actions | Personal mailbox, rules and runs | Google OAuth, encryption key and OpenAI |
-| [Slack Unanswered — Messages Slack sans réponse](docs/slack-unanswered.md) | `slack` | Find messages needing your reply in selected channels | Personal channel choices and results | Shared-channel/history/profile Slack scopes; OpenAI optional for contextual matching |
 | [Documentation](docs/documentation.md) | `documentation` | Browse, question and maintain Projects, Technologies, Components, Hosts/services, Hosting entries and Tools | Workspace-shared inventory/history; private confirmations and context | No extra credentials for structured operations; OpenAI optional for natural language |
 | [ClickUp](docs/clickup.md) | `clickup` | Read your directly assigned Mayasquad tasks | Personal OAuth connection and task snapshots | ClickUp OAuth, confirmed numeric Workspace ID and encryption key |
 | [Yousign](docs/yousign.md) | `yousign` | Post every event from the existing company webhook to selected channels | Shared destinations and integration-owned delivery checkpoints | Existing webhook secret/subscription/environment and operational alert recipient |
@@ -35,7 +34,7 @@ All Modules use the same Slack bot and database. OpenAI calls share the existing
 
 ClickUp's [personal status filters](docs/clickup.md#personal-status-filters) are implemented locally. Send `clickup statuts` / `clickup statuses`, or choose **Choisir les statuts** in its menu. The table shows ten statuses per page with visible **☑ Retirer** / **☐ Ajouter** toggles; selection and **Réinitialiser le filtre** save automatically, and **Fermer** preserves changes. Each User keeps their own filter; new task requests and Refresh apply it. The default excludes Done/Closed, which explicit choices can include. During incomplete discovery, default-mode changes preserve undiscovered unfinished statuses and offer Retry; Personal List-specific discovery is deferred. See [deployment checks](docs/deployment.md#clickup-release-candidate) for live verification.
 
-`ENABLED_MODULES=mail` is the default. To enable all six, set `ENABLED_MODULES=mail,slack,documentation,clickup,yousign,development` after completing their setup. An empty value runs shared menus/help, budget and health endpoints without Module-specific credentials. Unknown or duplicate IDs fail startup. Preserve existing IDs when enabling another Module, then restart to apply the change.
+`ENABLED_MODULES=mail` is the default. To enable all five, set `ENABLED_MODULES=mail,documentation,clickup,yousign,development` after completing their setup. An empty value runs shared menus/help, budget and health endpoints without Module-specific credentials. Unknown or duplicate active IDs fail startup. The retired `slack` ID is ignored for upgrade compatibility; remove it from the existing value when convenient. Preserve existing IDs when enabling another Module, then restart to apply the change.
 
 Availability is deployment-wide. Disabled Modules expose no routes, execute no queued work and pause their own retention cleanup; pending jobs and state remain for re-enablement. Re-enabling does not renew expired approvals or result controls. Modules are trusted built-in code deployed together.
 
@@ -43,7 +42,7 @@ The implementation is organized as follows:
 
 - `src/app/`: configuration, Module composition, startup and compatibility migrations.
 - `src/core/`: Slack transport, routing, durable jobs, identity/locking, navigation and shared AI budget.
-- `src/modules/mail/`, `src/modules/slack/`, `src/modules/documentation/`, `src/modules/clickup/`, `src/modules/yousign/`, `src/modules/development/`: each Module's behavior, providers, state and retention.
+- `src/modules/mail/`, `src/modules/documentation/`, `src/modules/clickup/`, `src/modules/yousign/`, `src/modules/development/`: each Module's behavior, providers, state and retention.
 
 Documentation's one-time spreadsheet transition has a separate [operator import procedure](docs/documentation-import.md). Shipping the importer does not switch source authority; the real snapshot and mapping require separate review, approval and verified reconciliation.
 
@@ -54,6 +53,8 @@ One Development project can contain several repositories and ClickUp Folders in 
 ### Upgrading an existing installation
 
 Stop the old process before starting this version; do not run old and new workers together during the upgrade. Startup adds module identifiers to existing jobs and AI records, treating old records as Mail Sorter. Mail tables, encrypted credentials, saved rules, previews, and spending totals retain their existing values. Previously queued requests and previously posted buttons still work with their original ownership and approval checks. New DM requests require the `mail` prefix; bare `sort` returns guidance.
+
+Slack Unanswered was removed on 05/11/2026. Old commands and buttons cannot execute it; queued jobs, module tables and historical spending are retained without running module cleanup. See [retirement and UI release notes](docs/deployment.md#module-retirement-and-ui-standardization--05112026).
 
 ## Requirements for the host
 
@@ -80,9 +81,9 @@ Create or update the Slack app for your workspace using [slack-manifest.json](sl
 
 Set **Options Load URL** to the same `/slack/actions` endpoint for the saved selectors in Documentation, Mail and Development forms. Forms reuse the existing Slack token and scopes; submitting a form only prepares a proposal, with separate confirmation required.
 
-The app uses `message.im` events and the bot scopes `im:history`, `chat:write`, `channels:read`, `groups:read`, `channels:history`, `groups:history`, and `users:read`. The read scopes support listing shared channels, reading selected channel histories and threads, and matching Slack profile names. Update the app's scopes and reinstall it to grant them before enabling `slack`; invite the bot to channels users should be able to choose. A private channel appears in `slack channels` only when both the requesting user and the bot belong to it and the installed bot token has `groups:read`. Put the installed bot token, signing secret, and workspace ID in `.env`. Set `SLACK_ADMIN_USER_ID` if one person should receive private operational spending alerts; it grants no access to other users' rules or mail. Otherwise the user whose request crosses the threshold receives the alert.
+Import `slack-manifest.json` into the Slack app and set the real public origin for its request URLs. Development needs channel events and read/history scopes; Yousign needs channel discovery and posting. The removed Unanswered module no longer needs profile access, so the manifest omits `users:read`. Put the installed bot token, signing secret, and workspace ID in `.env`. Set `SLACK_ADMIN_USER_ID` for private operational spending alerts; it grants no access to other users’ mail or rules. Preserve scopes and event subscriptions required by enabled modules when updating the app.
 
-Slack requests must be signed and belong to the configured workspace. Bot messages, edited-message events, unsigned requests and replayed timestamps are excluded from event dispatch. Signed `message.channels` and `message.groups` events are offered only to enabled Modules explicitly registering channel receipt or channel commands; Development alone accepts `development menu` and its own controls in shared channels, including initial project setup. Ticket receipts still require configured project channels. `slack channels` lists only shared channels using a bot token; `slack unanswered` reads selected channel history only on command. Searching long-lived channels may take time or encounter Slack rate limits because older roots must be inspected for recent thread replies. Events are acknowledged after durable enqueue, before module processing.
+Slack requests must be signed and belong to the configured workspace. Bot messages, edited-message events, unsigned requests and replayed timestamps are excluded from event dispatch. Signed `message.channels` and `message.groups` events are offered only to enabled Modules explicitly registering channel receipt or channel commands; Development alone accepts `development menu` and its own controls in shared channels, including initial project setup. Ticket receipts still require configured project channels. Events are acknowledged after durable enqueue, before module processing.
 
 ## Development setup
 
@@ -124,7 +125,7 @@ Each teammate opens `menu` → Tri des e-mails → Connexion Gmail → Connecter
 
 ## OpenAI and the $10 limit
 
-Use a dedicated OpenAI project/key for this application. The pinned initial model is `gpt-4.1-mini-2025-04-14`, with a reviewed price card of $0.40/million input tokens and $1.60/million output tokens. Unknown model names are rejected until their rates and behavior are reviewed. Mail Sorter and Slack Unanswered enforce this at startup; Documentation rejects interpretation while keeping its free paths available. See [model-budget.md](docs/research/model-budget.md) for sources and assumptions.
+Use a dedicated OpenAI project/key for this application. The pinned initial model is `gpt-4.1-mini-2025-04-14`, with a reviewed price card of $0.40/million input tokens and $1.60/million output tokens. Unknown model names are rejected until their rates and behavior are reviewed. Mail Sorter enforces this at startup; Documentation rejects interpretation while keeping its free paths available. See [model-budget.md](docs/research/model-budget.md) for sources and assumptions.
 
 The app counts the immutable input through the Responses token-count endpoint, reserves exact input plus bounded output in integer microdollars, then generates with `store:false`, standard service tier, disabled truncation, and no automatic retries. It conservatively charges all input at the uncached rate. Conversation and classification calls, and future modules, use the same team ledger. Usage is attributed to each module; the global `budget` command shows totals and the module breakdown.
 
@@ -143,7 +144,6 @@ Every typed Module request, including a natural-language follow-up, needs its pr
 | Start here | French command | English command |
 | --- | --- | --- |
 | [Connect Gmail, approve rules, then sort](docs/mail.md#quick-start) | `courrier connecter`, then `courrier trier` | `mail connect`, then `mail sort` |
-| [Choose Slack channels, then search](docs/slack-unanswered.md#quick-start) | `slack canaux`, then `slack sans-réponse` | `slack channels`, then `slack unanswered` |
 | [Browse shared inventory](docs/documentation.md#quick-start) | `documentation projets` | `documentation projects` |
 | [Connect ClickUp, then read tasks](docs/clickup.md#quick-start) | `clickup connecter`, then `clickup tâches` | `clickup connect`, then `clickup tasks` |
 | [Yousign destinations and status](docs/yousign.md#commands-and-status) | `yousign canaux`, `yousign statut` | `yousign channels`, `yousign status` |
@@ -153,7 +153,7 @@ Menus and saved-result navigation use no AI. Work-start buttons and commands can
 
 ## Failure and undo behavior
 
-Mailbox failure handling and conservative undo are documented in [Mail Sorter](docs/mail.md#failure-and-undo-behavior). Slack Unanswered, Documentation, ClickUp and Yousign describe their own access and recovery behavior in their guides. A delivery error can occur after a result or mutation was saved; inspect current state through the relevant Module before assuming it failed.
+Mailbox failure handling and conservative undo are documented in [Mail Sorter](docs/mail.md#failure-and-undo-behavior). Documentation, ClickUp and Yousign describe their own access and recovery behavior in their guides. A delivery error can occur after a result or mutation was saved; inspect current state through the relevant Module before assuming it failed.
 
 ## Tests
 
@@ -175,7 +175,7 @@ Pushes to GitHub `main` run the [VPS deployment workflow](docs/automatic-updates
 
 ## Remaining release checks
 
-Follow each enabled Module's guide and the [deployment guide](docs/deployment.md) for its live checks. The list below covers shared operation and Mail Sorter; Slack contextual matching, Documentation answers/import and ClickUp OAuth/API completeness have additional checks in their contracts.
+Follow each enabled Module's guide and the [deployment guide](docs/deployment.md) for its live checks. The list below covers shared operation and Mail Sorter; Documentation answers/import and ClickUp OAuth/API completeness have additional checks in their contracts.
 
 - Configure the real Slack app, Google OAuth client, allowed Workspace domains, and OpenAI project.
 - Run a live smoke test with a dedicated test mailbox, including Gmail Trash/restore and reconnection.

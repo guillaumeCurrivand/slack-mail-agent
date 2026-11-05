@@ -142,10 +142,10 @@ it('marks structural navigation without marking page choices or changing action 
     { label: 'Lancer', action: 'start', value: 'run', style: 'primary' },
     { label: 'Supprimer', action: 'delete', value: 'item', style: 'danger' },
   ] });
-  const controls = card(body).child_blocks.find((block: any) => block.type === 'actions').elements;
+  const controls = card(body).child_blocks.filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements);
   expect(controls.map((button: any) => [button.text.text, button.style])).toEqual([
-    ['🧭 Retour au menu', undefined], ['Budget', undefined], ['🧭 Actions ▶', undefined],
-    ['Lancer', 'primary'], ['Supprimer', 'danger'],
+    ['Budget', undefined], ['Lancer', 'primary'], ['Supprimer', 'danger'],
+    ['🧭 Actions ▶', undefined], ['🧭 Retour au menu', undefined],
   ]);
   const table = await post({ kind: 'Inventaire', text: 'Fiches', table: {
     columns: ['Nom'], rows: [['Alpha']], rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|alpha' }],
@@ -223,6 +223,44 @@ it('uses visible button rows on Replies, Cards and table pages', async () => {
     expect(rows.map((row: any) => row.elements.length)).toEqual([5, 3]);
     expect(rows.flatMap((row: any) => row.elements.map((element: any) => element.text.text))).toEqual(buttons.map(button => button.label));
     expect(rows.flatMap((row: any) => row.elements).every((element: any) => element.type === 'button')).toBe(true);
+  }
+});
+
+it.each(['reply', 'card', 'table'])('separates actions, navigation and help on a %s for posts and updates', async surface => {
+  const message: AgentMessage = { text: 'Choix',
+    ...(surface !== 'reply' ? { kind: 'Choix' } : {}),
+    ...(surface === 'table' ? { table: { columns: ['Nom'], rows: [['Alpha']] } } : {}),
+    selects: [{ label: 'Filtrer', action: 'filter', options: [{ label: 'Tous', value: 'all' }] }],
+    buttons: [
+      { label: 'Aide du module', action: 'core:navigate', value: 'bound|help' },
+      { label: 'Retour', action: 'core:navigate', value: 'bound|main' },
+      { label: 'Appliquer', action: 'apply', value: 'proposal', style: 'primary' },
+      { label: 'Actions ▶', action: 'development:controls', value: 'bound|1|0' },
+      { label: 'Supprimer', action: 'delete', value: 'item', style: 'danger' },
+    ],
+  };
+  const deliveries: Array<{ url: string; body: any }> = [];
+  const slack = new Slack('token', (async (url, options: any) => {
+    deliveries.push({ url: String(url), body: JSON.parse(options.body) });
+    return Response.json({ ok: true });
+  }) as typeof fetch);
+  await slack.send(actor, message);
+  await slack.update(actor, '123.456', message);
+  expect(deliveries.map(item => item.url.split('/').at(-1))).toEqual(['chat.postMessage', 'chat.update']);
+  expect(deliveries[1]!.body.ts).toBe('123.456');
+  for (const { body } of deliveries) {
+    const rows = body.blocks.flatMap((block: any) => block.child_blocks ?? [block]).filter((block: any) => block.type === 'actions');
+    expect(rows[0].elements[0]).toMatchObject({ type: 'static_select', action_id: 'filter' });
+    const buttonRows = rows.slice(1);
+    expect(buttonRows.map((row: any) => row.elements.map((button: any) => button.text.text))).toEqual([
+      ['Appliquer', 'Supprimer'], ['🧭 Actions ▶', '🧭 Retour'], ['? Aide du module'],
+    ]);
+    const controls = buttonRows.flatMap((row: any) => row.elements);
+    expect(controls.map((button: any) => [button.action_id, button.value, button.style])).toEqual([
+      ['apply~button-2', 'proposal', 'primary'], ['delete~button-4', 'item', 'danger'],
+      ['development:controls~button-3', 'bound|1|0', undefined], ['core:navigate~button-1', 'bound|main', undefined],
+      ['core:navigate~button-0', 'bound|help', undefined],
+    ]);
   }
 });
 

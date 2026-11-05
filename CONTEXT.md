@@ -17,9 +17,6 @@ The name at the beginning of a User message that explicitly selects the Module h
 **Mail Sorter**:
 The Module that sorts a person's connected Gmail using their approved rules.
 
-**Slack Unanswered**:
-A Module that privately lists unanswered messages from a person's selected Slack channels.
-
 **Yousign**:
 The Module for receiving the company's Yousign events and posting notifications to selected Slack channels.
 
@@ -89,12 +86,6 @@ A product or service used by the company, particular Projects, or both, with its
 
 **Change history**:
 The inventory's record of who changed information, when they changed it, and its values before and after each change.
-
-**Unanswered message**:
-A channel message containing a mention, request, or question for which the listed person has not yet replied in the same thread.
-
-**Possibly for you**:
-A group of unanswered messages whose thread context suggests they may concern the recipient, though it does not establish that clearly.
 
 **User message**:
 A Slack DM or connected project-channel message the person typed.

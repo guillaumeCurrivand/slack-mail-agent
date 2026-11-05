@@ -5,7 +5,7 @@ import type { MenuPage } from '../../core/navigation.js';
 import type { Sql } from '../../core/store.js';
 import { escapeCardValue, type MessageTable } from '../../core/slack.js';
 import { interpretQuestion, questionPlan, type QuestionAIConfig, type QuestionPlan } from './ai.js';
-import { referenceLabel, statusText } from './lifecycle.js';
+import { statusText } from './lifecycle.js';
 import { DocumentationStore } from './store.js';
 import { InventoryQueries, inventoryQuery, inventoryQueryHelp, type InventoryQuery } from './inventory-query.js';
 import { resolveMutation, type ResolvedMutation } from './mutations.js';

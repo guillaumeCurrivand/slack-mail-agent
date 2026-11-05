@@ -1,5 +1,7 @@
 # Documentation module
 
+Create/Edit controls now prepare their forms directly from record/list screens, skipping the instruction-only intermediate screen. Modal opening and separate approval retain the existing owner/message binding. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
+
 Documentation maintains the company's shared inventory through private Slack DMs. It records Projects, their Components and Technologies, hosting information, shared Hosts/services and Tools. You can browse records, ask inventory questions and propose individual-record changes. It shows saved links without reading the linked documents.
 
 Status: approved target contract following approval of the ten-ticket breakdown. Tickets 01–10 are implemented locally. Live integration, production deployment and actual spreadsheet import have not been verified or authorized by these implementation tickets. Current Agent safeguards remain in the [product specification](product-spec.md).
@@ -16,7 +18,7 @@ Inventory and append-only history are shared with people who have access to the 
 
 1. DM `menu` and open **Documentation**, or send `documentation projets`.
 2. Select a Project from the visible row button to read its fields and navigate to Components, hosting, Tools and history. Exact lookup also works: `documentation projet Alpha`.
-3. Choose **Ajouter** or **Modifier → Préparer le formulaire → Remplir le formulaire** for guided fields and named relationship choices. **Vérifier** returns a proposal to the originating Card; confirm it separately within 24 hours. Structured commands remain shortcuts: `documentation créer projet {"name":"Alpha"}` or `documentation modifier projet Alpha {"description":"Application équipe"}`.
+3. Choose **Ajouter** or **Modifier**, then **Remplir le formulaire** for guided fields and named relationship choices. **Vérifier** returns a proposal to the originating Card; confirm it separately within 24 hours. Structured commands remain shortcuts: `documentation créer projet {"name":"Alpha"}` or `documentation modifier projet Alpha {"description":"Application équipe"}`.
 4. Optional: ask `documentation où Alpha est-il hébergé ?` or `documentation combien de projets utilisent React ?`. Natural language uses AI interpretation; the answer uses current inventory records. Missing or ambiguous information requires clarification.
 
 Each typed request, including a follow-up about `ce projet`, keeps the `documentation` prefix. All application-owned screens use French under the [shared presentation contract](product-spec.md#interactive-message-presentation). English commands below remain compatible; JSON keys and enums stay in English, and selectors, saved values and URLs stay literal. Dates display Paris local time.

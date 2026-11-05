@@ -37,8 +37,10 @@ export class DevelopmentMenu {
       for (const project of await this.store.projects()) if (await this.accessible(actor, project)) projects.push(project);
       const index = Math.min(Number(list[1]), Math.max(0, Math.ceil(projects.length / pageSize) - 1));
       const rows = projects.slice(index * pageSize, (index + 1) * pageSize);
-      return { kind: 'Projets de développement', text: rows.length ? `Page ${index + 1} — choisissez un projet pour consulter ses traitements.\n${rows.map(p => `${p.id} — ${p.name} — ${p.enabled ? 'activé' : 'suspendu'}`).join('\n')}` : 'Aucun projet accessible. Vous et le bot devez être membres du canal du projet. Configurez un projet ou vérifiez les accès Slack.',
-        links: [...rows.map(p => ({ label: p.name, page: projectPage(p.id) })),
+      return { kind: 'Projets de développement', text: rows.length ? `Page ${index + 1} — choisissez un projet pour consulter ses traitements.` : 'Aucun projet accessible. Vous et le bot devez être membres du canal du projet. Configurez un projet ou vérifiez les accès Slack.',
+        ...(rows.length ? { table: { columns: ['Projet', 'État', 'Canal', 'Dépôts'], rows: rows.map(p => [p.name.slice(0, 200), p.enabled ? 'Activé' : 'Suspendu', p.channel, projectRepositories(p).map(repositoryName).join(', ').slice(0, 500)]) },
+          recordChoices: rows.map(p => ({ label: p.name, page: projectPage(p.id) })) } : {}),
+        links: [
           ...(index ? [{ label: 'Précédent', page: `projects_${index - 1}` }] : []),
           ...((index + 1) * pageSize < projects.length ? [{ label: 'Suivant', page: `projects_${index + 1}` }] : []),
           { label: 'Actualiser', page: `projects_${index}` }], buttons: [configureButton] };

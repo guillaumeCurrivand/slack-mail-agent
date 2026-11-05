@@ -90,7 +90,7 @@ it.each(['project', 'technology', 'host', 'tool', 'component', 'hosting'])('crea
     const command = ({ project: 'projects', technology: 'technologies', host: 'hosts', tool: 'tools', component: `components ${project}`, hosting: `hosting ${component}` } as Record<string, string>)[kind];
     const label = ({ project: 'Ajouter un projet', technology: 'Ajouter une technologie', host: 'Ajouter un hébergeur/service', tool: 'Ajouter un outil', component: 'Ajouter un composant', hosting: 'Ajouter un hébergement' } as Record<string, string>)[kind]!;
     const list = await h.dm(`documentation ${command}`);
-    const entry = await h.click(list, label), prepared = await h.click(entry, 'Préparer le formulaire');
+    const prepared = await h.click(list, label);
     await h.click(prepared, 'Remplir le formulaire');
     const view = h.views.at(-1), data: Record<string, string | string[]> = kind === 'hosting' ? { environment: 'staging', serviceId: host } : { name: 'Créé par formulaire' };
     if (kind === 'component') data.technologies = [technology];
@@ -112,7 +112,7 @@ it.each(['project', 'technology', 'host', 'tool', 'component', 'hosting'])('crea
     expect((await sql.query('SELECT count(*)::int AS n FROM ai_calls')).rows[0].n).toBe(0);
     expect(h.provider).toHaveBeenCalledTimes(1);
     const detail = await h.dm(`documentation ${kind === 'hosting' ? 'hosting-entry' : kind} ${saved.target_id}`);
-    await h.click(await h.click(await h.click(detail, 'Modifier'), 'Préparer le formulaire'), 'Remplir le formulaire');
+    await h.click(await h.click(detail, 'Modifier'), 'Remplir le formulaire');
     const editView = h.views.at(-1), editedField = kind === 'hosting' ? 'environment' : 'name';
     expect(editView.blocks.find((block: any) => block.block_id === editedField).element.initial_value).toBe(data[editedField]);
     if (['component', 'hosting'].includes(kind)) expect(editView.blocks.some((block: any) => block.block_id === (kind === 'component' ? 'projectId' : 'componentId'))).toBe(false);
@@ -131,7 +131,7 @@ it('edits only changed inventory fields, preserves concurrent edits, and rejects
   try {
     const id = await h.seed('project', { name: 'Alpha', description: 'Avant', notes: 'Initiales' });
     const detail = await h.dm(`documentation project ${id}`);
-    const prepared = await h.click(await h.click(detail, 'Modifier'), 'Préparer le formulaire');
+    const prepared = await h.click(detail, 'Modifier');
     await h.click(prepared, 'Remplir le formulaire');
     const view = h.views.at(-1);
     expect((await h.submit(view, { description: 'Après' }, bob)).json().response_action).toBe('errors');
@@ -145,7 +145,7 @@ it('edits only changed inventory fields, preserves concurrent edits, and rejects
     await h.click(proposal, 'Confirmer la modification');
     expect((await sql.query('SELECT fields FROM documentation_projects WHERE id=$1', [id])).rows[0].fields).toMatchObject({ description: 'Après', notes: 'Autre utilisateur' });
     const list = await h.dm('documentation tools');
-    await h.click(await h.click(await h.click(list, 'Ajouter un outil'), 'Préparer le formulaire'), 'Remplir le formulaire');
+    await h.click(await h.click(list, 'Ajouter un outil'), 'Remplir le formulaire');
     const toolView = h.views.at(-1);
     expect((await h.submit(toolView, { name: 'Tool', projects: [randomUUID()] })).json().errors.projects).toBeTruthy();
     const suggest = (actor = alice) => h.signed('/slack/actions', { type: 'block_suggestion', team: { id: actor.team }, user: { id: actor.user }, block_id: 'projects', action_id: 'value', value: 'Alpha', view: toolView });
@@ -262,7 +262,7 @@ it('preserves full URL lists and untouched empty values while editing a long inv
     const urls = Array.from({ length: 10 }, (_, index) => `https://example.com/${index}/${'x'.repeat(index === 6 ? 10 : 365)}`);
     const id = await h.seed('project', { name: 'Large', description: '', repositories: urls, documentationLinks: [] });
     const detail = await h.dm(`documentation project ${id}`);
-    await h.click(await h.click(await h.click(detail, 'Modifier'), 'Préparer le formulaire'), 'Remplir le formulaire');
+    await h.click(await h.click(detail, 'Modifier'), 'Remplir le formulaire');
     const view = h.views.at(-1), fields = view.blocks.filter((block: any) => block.block_id?.startsWith('repositories_'));
     expect(fields.flatMap((block: any) => block.element.initial_value.split('\n'))).toEqual(urls);
     expect(fields.every((block: any) => block.element.initial_value.length <= block.element.max_length)).toBe(true);

@@ -8,7 +8,7 @@ import type { Sql } from '../../core/store.js';
 import { recordTitle, type RecordKind } from './domain.js';
 import { documentationSchema, DocumentationStore } from './store.js';
 import { documentationImportSchema } from './import.js';
-import { Lifecycle, lifecycleHelp, lifecycleButton, statusText, referenceLabel } from './lifecycle.js';
+import { Lifecycle, lifecycleHelp, lifecycleButton, statusText } from './lifecycle.js';
 import { Catalog } from './catalog.js';
 import { projectHelp as help, catalogHelp, componentHelp, hostHelp, hostingHelp, toolHelp } from './help.js';
 import { InventoryChanges } from './changes.js';
@@ -47,10 +47,17 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
   async function page(actor: Actor, destination: string): Promise<MenuPage> {
     const part = /^content_(\d{1,6})_(.+)$/.exec(destination);
     const target = part?.[2] ?? destination;
-    const content = await recordContent(actor, target);
+    let content = await recordContent(actor, target);
     const formDestination = inventoryFormDestination(target);
     if (formDestination && !/indisponible|restauration/i.test(content.kind ?? '')) return { ...content, text: 'Complétez les champs et choisissez les relations dans un formulaire Slack. Vous examinerez ensuite une proposition avant de confirmer. Aucun appel d’IA.',
       buttons: [{ label: 'Préparer le formulaire', action: 'form_prepare', value: formDestination, bound: true }] };
+    // Create/edit links prepare the draft directly, removing an instruction-only
+    // screen. Opening the modal and approving the proposal remain separate.
+    const formLinks = (content.links ?? []).filter(link => inventoryFormDestination(link.page));
+    if (formLinks.length) content = { ...content,
+      buttons: [...content.buttons ?? [], ...formLinks.map(link => ({ label: link.label, action: 'form_prepare', value: inventoryFormDestination(link.page)!, bound: true }))],
+      links: content.links?.filter(link => !formLinks.includes(link)),
+    };
     // Independent edits can grow a Project beyond creation's single-Card limit.
     // Split only between lines so escaping and exact field values remain intact.
     const chunks = valuePages(content);

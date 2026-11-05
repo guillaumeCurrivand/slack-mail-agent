@@ -1,5 +1,7 @@
 # ClickUp module — approved feature contract
 
+Task pages recheck every visible task’s access in batches of at most four concurrent reads, preserving row order and hiding failed checks. Account/Workspace checks and snapshot expiry remain unchanged; there is no cross-request access cache. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
+
 Status: original connection/task-listing behavior approved on 01/10/2026 and implemented. Personal status filters approved on 02/10/2026 and implemented locally. Automated checks use fake providers; live status-catalogue completeness, Slack behavior and production deployment remain unverified. Approval of this contract does not authorize provisioning or deployment.
 
 ClickUp privately lists tasks directly assigned to your connected account in the configured Mayasquad Workspace. It is read-only and uses no AI. This document owns its feature contract; the [product specification](product-spec.md) owns assistant-wide safeguards. See the [module overview](../README.md#modules-and-project-structure) for other capabilities, [Adding a module](adding-a-module.md) and [ADR 0002](adr/0002-private-assistant-modules.md) for extension conventions, and the [tracker spec](../.scratch/clickup/spec.md) and [interview record](../.scratch/clickup/interview.md) for design history.

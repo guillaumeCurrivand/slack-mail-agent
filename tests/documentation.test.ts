@@ -25,10 +25,10 @@ afterAll(async () => db.close());
 
 type Posted = { method: string; body: any; ts: string; controls?: any[] };
 function parts(message: Posted): any[] { return message.body.blocks.flatMap((block: any) => block.child_blocks ?? [block]); }
-function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^🧭 /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: cellValue(row[0]) } }))) : []); }
+function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^(?:🧭|\?) /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: cellValue(row[0]) } }))) : []); }
 function rowName(columns: string[], row: any[]): string { return cellValue(row[Math.max(0, columns.indexOf('Nom'))]); }
 function findButton(message: Posted, label: string) {
-  const direct = buttons(message).find(item => item.text.text.replace(/^🧭 /, '') === label)
+  const direct = buttons(message).find(item => item.text.text.replace(/^(?:🧭|\?) /, '') === label)
     ?? buttons(message).find(item => item.type === 'static_select' && item.text.text.replace(/^\d+\. /, '').split(' / ').includes(label));
   if (direct) return direct;
   const table = parts(message).find(block => block.type === 'data_table');
@@ -1349,7 +1349,7 @@ it('creates a shared Project only after its owner confirms and lets another User
   try {
     const main = await h.dm('menu');
     const menu = await h.click(main, 'Documentation');
-    expect(buttons(menu).map(item => item.text.text)).toEqual(["Projets", "Ajouter un projet", "Technologies", "Hébergeurs/services", "Outils", "Archivé", "Historique", "Aide", "Retour au menu"]);
+    expect(buttons(menu).map(item => item.text.text)).toEqual(["Ajouter un projet", "Projets", "Technologies", "Hébergeurs/services", "Outils", "Archivé", "Historique", "Aide", "Retour au menu"]);
     const proposal = await h.dm('documentation create project {"name":"Alpha"}');
     expect(kind(proposal)).toBe("Confirmation de création du projet");
     expect(bodyText(proposal)).toContain("Description: Inconnu");
@@ -1379,7 +1379,7 @@ it('maintains company-wide Outils with descriptive referents, shared edits and a
     const detail = await h.dm('documentation tool slack', bob);
     const id = await recordId(detail);
     expect(bodyText(detail)).toContain("Toute l’entreprise: Oui");
-    button(await h.click(detail, "Modifier", bob), 'Préparer le formulaire');
+    button(await h.click(detail, "Modifier", bob), 'Remplir le formulaire');
     const pending = await h.dm(`documentation modifier tool ${id} {"name":"Slack Chat","usage":"Company chat","referent":null}`);
     await h.click(await h.dm(`documentation modifier tool ${id} {"usage":"Bob usage","notes":"Bob notes"}`, bob), "Confirmer la modification", bob);
     await h.click(pending, "Confirmer la modification");
@@ -1468,7 +1468,7 @@ it('paginates Outils, ambiguous exact lookups, Project relationships and shared 
     await h.click(await h.dm("documentation créer projet {\"name\":\"Parent\"}"), "Confirmer la création");
     const projectId = await recordId(await h.dm('documentation project Parent'));
     const toolMenu = await h.click(await h.click(await h.dm('menu'), 'Documentation'), "Outils");
-    button(await h.click(toolMenu, "Ajouter un outil"), 'Préparer le formulaire');
+    button(await h.click(toolMenu, "Ajouter un outil"), 'Remplir le formulaire');
     for (let index = 0; index < 41; index++) await h.click(await h.dm(`documentation créer outil ${JSON.stringify({ name: 'Same', projects: [projectId] })}`), "Confirmer la création");
     const list = await h.dm('documentation tools', bob);
     expect(bodyText(list)).toContain('page 1/2 · 41 Outils');
@@ -1499,7 +1499,7 @@ it('maintains shared Hosts/services with explicit costs, overwrite history and r
     await h.click(proposal, "Confirmer la création");
     const detail = await h.dm('documentation host ovh', bob);
     const id = await recordId(detail);
-    button(await h.click(detail, "Modifier", bob), 'Préparer le formulaire');
+    button(await h.click(detail, "Modifier", bob), 'Remplir le formulaire');
     const pending = await h.dm(`documentation modifier host ${id} {"monthlyCost":12.5,"currency":"eur","name":"OVH Compute"}`);
     await h.click(await h.dm(`documentation modifier host ${id} {"monthlyCost":20,"currency":"EUR","notes":"Bob notes"}`, bob), "Confirmer la modification", bob);
     await h.click(pending, "Confirmer la modification");
@@ -1528,7 +1528,7 @@ it('records distinct Component environments, shared services and production-firs
         await h.click(await h.dm(`documentation créer composant ${JSON.stringify({ name: `${projectName} ${type}`, projectId, type })}`), "Confirmer la création");
         const component = await h.dm(`documentation component ${projectName} ${type}`);
         const componentId = await recordId(component); components.push(componentId);
-        button(await h.click(await h.click(component, "Hébergements"), "Ajouter un hébergement"), 'Préparer le formulaire');
+        button(await h.click(await h.click(component, "Hébergements"), "Ajouter un hébergement"), 'Remplir le formulaire');
         for (const environment of ['staging', 'production']) {
           const proposal = await h.dm(`documentation create hosting ${JSON.stringify({ componentId, serviceId: 'Shared cloud', environment, urls: ['https://example.com/app'], accessInstructions: 'See password manager' })}`);
           expect(kind(proposal)).toBe("Créer Hébergement — confirmation");
@@ -1664,7 +1664,7 @@ it('maintains the shared Technology catalog with separate confirmations, exact l
     await h.click(proposal, "Confirmer la création");
     const detail = await h.dm('documentation technology react', bob);
     const id = await recordId(detail);
-    button(await h.click(detail, "Modifier", bob), 'Préparer le formulaire');
+    button(await h.click(detail, "Modifier", bob), 'Remplir le formulaire');
     const pending = await h.dm(`documentation modifier technology ${id} {"name":"React UI","category":null}`);
     await h.click(await h.dm(`documentation modifier technology ${id} {"category":"Bob category","notes":"Bob notes"}`, bob), "Confirmer la modification", bob);
     await h.click(pending, "Confirmer la modification");
@@ -1696,7 +1696,7 @@ it('maintains Project Components with many shared Technologies and stable naviga
       const detail = await h.dm(`documentation project ${name}`);
       const projectId = await recordId(detail); projectIds.push(projectId);
       const components = await h.click(detail, "Composants");
-      button(await h.click(components, "Ajouter un composant"), 'Préparer le formulaire');
+      button(await h.click(components, "Ajouter un composant"), 'Remplir le formulaire');
       const proposal = await h.dm(`documentation create component ${JSON.stringify({ name: `${name} UI`, projectId, type: 'frontend', technologies: ['React', technologyIds[1]] })}`);
       expect(kind(proposal)).toBe("Créer Composant — confirmation");
       for (const name of ['React', 'TypeScript']) expect(bodyText(proposal)).toContain(name);
@@ -1913,7 +1913,7 @@ it('overwrites only confirmed fields after another User edits them and records a
     await h.click(await h.dm("documentation créer projet {\"name\":\"Original\",\"description\":\"Initial\",\"notes\":\"Initial notes\"}"), "Confirmer la création");
     const details = await h.dm('documentation project Original');
     const id = await recordId(details);
-    button(await h.click(details, "Modifier"), 'Préparer le formulaire');
+    button(await h.click(details, "Modifier"), 'Remplir le formulaire');
     const proposal = await h.dm(`documentation edit project ${id} {"name":"Alice name","description":"A"}`);
     expect(kind(proposal)).toBe("Confirmation de modification du projet");
     expect(bodyText(proposal)).toContain("Nom: Alice name");
@@ -2252,7 +2252,7 @@ it('keeps signed ingress and workspace validation and pauses disabled Documentat
     expect(kind(await h.click(list, "Retour au menu"))).toBe('Menu');
     expect(kind(await h.click(menu, 'Documentation', bob))).toBe("Menu indisponible");
     const add = await h.click(documentation, "Ajouter un projet");
-    button(add, 'Préparer le formulaire');
+    button(add, 'Remplir le formulaire');
     expect(kind(await h.dm('projects'))).toBe("Aide");
     const proposal = await h.dm('documentation create project {"name":"Paused"}');
     expect((await h.enqueueClick(proposal, button(proposal, "Confirmer la création"), { ...alice, team: 'TOTHER' })).statusCode).toBe(403);

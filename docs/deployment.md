@@ -8,6 +8,30 @@ The confirmed production host port is **3001**. Compose maps `127.0.0.1:3001` to
 
 For a documentation-only change, pulling the commit is sufficient if the running app already includes the latest code release. The full procedure below is needed to deploy the module refactor or another runtime change.
 
+## Module retirement and UI standardization — 05/11/2026
+
+Target branch: `main`. Use the reviewed release commit for deployment; local verification does not establish production success. Unrelated mail-error and worker-configuration work is excluded from this release. Pushes to `main` trigger the configured deployment workflow.
+
+Slack Unanswered is removed. The retired `slack` entry in `ENABLED_MODULES` is ignored, so no required environment change or manual database migration is needed. Remove that entry when maintaining `.env`, preserving other IDs and all credentials. Existing module tables, pending jobs and historical spending remain untouched, and retired jobs are never selected. Retired module cleanup no longer runs; see [retained data](slack-unanswered.md#upgrade-and-retained-data). Do not drop tables or reset the database volume.
+
+The manifest drops the now-unused `users:read` scope. Applying the manifest to the installed Slack app is a separate operator step; the code release works with the existing grant. Preserve channel read/history scopes and events needed by Development, and channel discovery/posting for Yousign.
+
+After review, commit and push, replace the placeholder below with the reviewed commit SHA. On the confirmed server:
+
+```bash
+cd /opt/slack-mail-agent &&
+TARGET_COMMIT='<reviewed-main-commit-sha>' &&
+git fetch origin main &&
+git pull --ff-only origin main &&
+test "$(git rev-parse HEAD)" = "$TARGET_COMMIT" &&
+bash scripts/deploy.sh &&
+curl --fail http://127.0.0.1:3001/ready
+```
+
+The script rebuilds and restarts the app with the existing environment and database volume. Post-deploy, verify `/ready`, `menu` and `aide` list only the five current modules; old `slack` commands/buttons must not start work. Check six-row Mail rules/approvals, the Development project table, Documentation Add/Edit opening preparation directly, and Previous/Next/Back/Menu/Close ordering with Help last. Check pagination and form confirmation update the same message in DMs and the original Development thread. External OAuth pages and native forms remain platform exceptions. Open ClickUp tasks and verify denied tasks are hidden. Use a consented test record to confirm another User cannot act on someone else’s proposal, and verify no mutation occurs before approval.
+
+A fake-provider regression measures a 40-task access-check page at 1 second instead of 4 seconds with 100 ms per request, using at most four concurrent reads. This does not measure production response time, provider rate limits, Slack rendering or paid-model quality. Test those separately before reporting a live deployment as successful. Older release sections below are historical where superseded, particularly Unanswered instructions; do not re-enable the retired module.
+
 ## Development release candidate
 
 Target branch: existing `main`. This implementation is a locally verified release candidate; no production update has been performed. Deploy only a reviewed, pushed commit and record its SHA as `TARGET_COMMIT` on the server. Preserve `.env`, the encryption key, Compose project and database volume.
@@ -39,6 +63,12 @@ Target branch: `main`; deploy only the reviewed, pushed commit using the fetch, 
 After active local work finishes, stop the local worker gracefully, update its checkout to the same reviewed commit, run `npm ci` and `npm run build` with Node 24+, then restart with its existing configuration/token/state directory. Old workers can still run reviews/builds but cannot claim detection; the updated worker's capability field requires the updated server. Configure one matching worker entry per repository before enabling **Choix des dépôts → Automatique** through the confirmed Slack form.
 
 Post-deploy: check `/ready`, open Development configuration and verify the saved mode and in-place confirmation. With a consented pilot ticket, verify every candidate gets a read-only detection, one or both repositories are selected with explanations, no build starts before Ready for AI, and `to build` waits for all selected pushes. Check uncertain detection offers manual selection and repeated polling does not create another inspection. Local fake-provider/Git verification does not establish live Cursor judgment, Slack rendering or deployment success.
+
+### Shared button rows — 13/10/2026
+
+Deploy the reviewed, pushed `main` commit with the fetch and rebuild/restart commands above. This presentation change adds no environment variables, migrations, Slack settings/scopes or local-worker changes. Preserve the existing environment and database volume.
+
+After `/ready` succeeds, open a fresh `menu` and visit each enabled Module, plus `development menu` in a project channel. Verify actions first, navigation on separate following rows and Help last with a compact `?` prefix. Empty groups are omitted and groups above five buttons wrap onto more rows. Check a table, a paged result and a consented confirmation: the response should update the same eligible Card. Previously posted Cards acquire the layout when refreshed; they are not bulk edited. Native forms and authorization links keep their existing behavior. Local tests do not establish live Slack rendering or deployment success.
 
 ### Guided workflows across Modules — 15/10/2026
 
@@ -233,7 +263,7 @@ After `/ready` succeeds, open a fresh `clickup statuts` picker on desktop and a 
 
 The French interface and horizontal action groups follow the same runtime rebuild/restart procedure after their reviewed `main` changes are committed and pushed. No environment variables, scopes, secrets or database migrations are added. Existing saved values, old controls, approvals, expiry times and AI checkpoints remain compatible. This is locally verified work; successful production deployment and live Slack layout still require observation.
 
-After updating and checking `/ready`, send `aide` and open each enabled Module. Check French menus/help, side-by-side buttons and visible Documentation row actions on desktop and a narrow client. Open an existing record to verify clickable URLs and French dates/numbers; reopening old generated text should show a French notice while retaining its original content. Check `courrier aide`, `slack aide` and `documentation aide`; English shortcuts should continue to work. Use approved synthetic data for mutation checks, and do not make paid model requests solely to verify translation. Slack may wrap buttons when space is limited.
+After updating and checking `/ready`, send `aide` and open each enabled Module. Check French menus/help, side-by-side buttons and visible Documentation row actions on desktop and a narrow client. Open an existing record to verify clickable URLs and French dates/numbers; reopening old generated text should show a French notice while retaining its original content. Check `courrier aide`, `clickup aide` and `documentation aide`; English shortcuts should continue to work. Use approved synthetic data for mutation checks, and do not make paid model requests solely to verify translation. Slack may wrap buttons when space is limited.
 
 The shared Slack renderer requests `width: "full"` for every grouped panel, including continuation panels, as specified in [interactive message presentation](product-spec.md#interactive-message-presentation). This runtime change requires the existing [update-and-restart procedure](#update-and-restart) after its `main` commit is pushed. There are no environment, permission, or database migration changes.
 
@@ -264,7 +294,7 @@ git rev-parse HEAD &&
 curl --fail http://127.0.0.1:3001/ready
 ```
 
-Compare the printed revision with the handoff's target commit. After readiness succeeds, privately browse Projects, Technologies, Hosts/services, Tools, Archived and History. Confirm tables render on desktop and mobile, up-to-40-record pagination works, and each visible **Ouvrir** row button updates the clicked message. Inspect Components and **Hosting entries** from a Project, click saved repository/documentation/hosting links, and check that ordinary screens show names/context rather than record identifiers. In a consented test record, propose a selected-field edit and inspect the complete before/after review without applying unintended changes. Confirm unavailable historical before-values and current reference names are labeled, value pages stay complete, and a different User/DM cannot use private row buttons or review controls. Verify existing Mail Sorter and Slack Unanswered navigation remains usable when enabled. These browsing checks use no AI or Gmail. Also check a long answer changes pages within one Slack message, generated HTTP(S) links are clickable, paging/Back/Menu/Close labels show the compass cue, page-specific choices and **Ouvrir** have no compass, and action-cell fallback text appears on clients that lack row-action support. On desktop and a narrow Slack client, check that `menu`, a module menu, a workflow Card, a Reply and a table screen show all ordinary controls in visible button rows without **+N autres** or **Actions ▶**; check that the larger ClickUp status picker still reaches every choice through **◀ Actions** and **Actions ▶**.
+Compare the printed revision with the handoff's target commit. After readiness succeeds, privately browse Projects, Technologies, Hosts/services, Tools, Archived and History. Confirm tables render on desktop and mobile, up-to-40-record pagination works, and each visible **Ouvrir** row button updates the clicked message. Inspect Components and **Hosting entries** from a Project, click saved repository/documentation/hosting links, and check that ordinary screens show names/context rather than record identifiers. In a consented test record, propose a selected-field edit and inspect the complete before/after review without applying unintended changes. Confirm unavailable historical before-values and current reference names are labeled, value pages stay complete, and a different User/DM cannot use private row buttons or review controls. Verify existing Mail Sorter and ClickUp navigation remains usable when enabled. These browsing checks use no AI or Gmail. Also check a long answer changes pages within one Slack message, generated HTTP(S) links are clickable, paging/Back/Menu/Close labels show the compass cue, page-specific choices and **Ouvrir** have no compass, and action-cell fallback text appears on clients that lack row-action support. On desktop and a narrow Slack client, check that `menu`, a module menu, a workflow Card, a Reply and a table screen show all ordinary controls in visible button rows without **+N autres** or **Actions ▶**; check that the larger ClickUp status picker still reaches every choice through **◀ Actions** and **Actions ▶**.
 
 ## Documentation import release candidate
 
@@ -348,7 +378,7 @@ The dump contains application data; keep it out of the Git checkout and handle i
 
 ## Confirm the deployment
 
-The script requires a successful readiness request with `{"ok":true}`, then shows container status and recent app logs. This checks the application and its database connection; it does not verify Slack delivery or Gmail authorization. Confirm the app stays running, then DM `help`, `mail help`, and `budget` to the bot. If Slack Unanswered is enabled, also DM `slack channels` and confirm the channel picker lists a private channel shared by you and the bot, select it, then DM `slack unanswered`. These commands do not modify the mailbox; contextual matching in `slack unanswered` may use the shared AI budget. Use the deployed public origin's `/ready` endpoint as well to check the HTTPS proxy path.
+The script requires a successful readiness request with `{"ok":true}`, then shows container status and recent app logs. This checks the application and its database connection; it does not verify Slack delivery or Gmail authorization. Confirm the app stays running, then DM `help`, `mail help`, and `budget` to the bot. The retired Unanswered module must not appear in menus or execute old commands. These shared browsing checks do not modify the mailbox. Use the deployed public origin's `/ready` endpoint as well to check the HTTPS proxy path.
 
 If the readiness check fails, inspect the logs and keep the release marked unverified. If failure occurred after stopping the old app but before `docker compose up`, `docker compose start app` can restart the still-existing old container. Once the new app has started, database migrations may already have run: assess schema and queued-work compatibility before reverting code or restoring a backup. Do not remove the database volume to retry an update.
 
@@ -374,7 +404,7 @@ Documentation tickets 01 and 02 add opt-in shared Projects, lifetime history, pr
 
 Deploy the reviewed `main` commit with the [update-and-restart commands](#update-and-restart), preserving `.env`, the Compose project and database volume. Stop the old app before starting the new version as the script does; older workers do not understand edit confirmations. The feature remains a locally verified release candidate until deployment/readiness and live Slack checks are observed. With no `TEST_DATABASE_URL`, the real PostgreSQL confirmation, cross-User overwrite and rollback tests are skipped; run them against a disposable test database before relying on cross-connection concurrency guarantees.
 
-After `/ready` succeeds, DM `menu` and open Documentation → Projects. Check Help, Add Project, Back/Menu and pagination; existing Mail Sorter/Slack Unanswered menus should remain usable. With a consented synthetic test record, send `documentation create project {"name":"Deployment smoke test"}`, review all fields and confirm. Repeat the click and verify exactly one Project/history entry. A second User should see the Project and actor/source-attributed history, while the first User's navigation controls and pending confirmations remain private. Check saved HTTP(S) links on details with a synthetic linked record. These Documentation checks need no AI or Gmail. Do not import the real spreadsheet or switch inventory authority as part of this deployment; import is a later separately approved operator task.
+After `/ready` succeeds, DM `menu` and open Documentation → Projects. Check Help, Add Project, Back/Menu and pagination; existing Mail Sorter/ClickUp menus should remain usable. With a consented synthetic test record, send `documentation create project {"name":"Deployment smoke test"}`, review all fields and confirm. Repeat the click and verify exactly one Project/history entry. A second User should see the Project and actor/source-attributed history, while the first User's navigation controls and pending confirmations remain private. Check saved HTTP(S) links on details with a synthetic linked record. These Documentation checks need no AI or Gmail. Do not import the real spreadsheet or switch inventory authority as part of this deployment; import is a later separately approved operator task.
 
 For ticket 02, open the test Project's Edit instructions. Alice proposes `documentation edit project <test-identifier> {"description":"A"}`; Bob proposes and confirms `documentation edit project <test-identifier> {"description":"B","notes":"Bob notes"}`. Confirm Alice's original Card and check description A, notes Bob notes and Alice's B → A history. Save a later description from Bob, click Alice's old confirmation again, and verify it reports the saved outcome while preserving Bob's later value. Inspect both Project History and the Module's shared History list, including pagination. Confirm another User cannot approve Alice's pending Card. These are manual post-deployment checks, not results observed during local implementation.
 
@@ -438,6 +468,8 @@ Propose an edit, archive its target from another User, and click the edit: it mu
 
 ## Safe work-launch release candidate
 
+> Historical release instructions. Superseded by the current in-place interface and the 05/11/2026 Unanswered retirement above.
+
 Ticket 04 adds Sort inbox and Find unanswered to the Module menus. It also creates `core_operation_slots` and the module-owned `slack_unanswered_results` display cache automatically, and changes the worker advisory-lock scope. No manual database migration, new secret, Slack scope, or Google permission is required. Keep `WORKER_CONCURRENCY` at 2–4; the default and existing `.env.example` use 2. Stop the old app before starting this version, as the deployment script does, so old workers cannot process new operation jobs. Result pagination buttons from the old version ask for a fresh search; new result pages reuse the original calculation without another paid AI call and recheck current channel access.
 
 Deploy the reviewed `main` commit with the update-and-restart commands above, preserving the existing `.env`, Compose project and database volume. After `/ready` succeeds, DM `menu` and open each enabled Module. Confirm that Sort inbox reports missing Gmail or starts a separate Preview Card when a valid account and rules are present; no mailbox changes occur until that Preview is approved. Confirm Find unanswered reports missing channel selections or posts a separate private result Card with source links and an incomplete-results notice when contextual AI is unavailable. Open Back/Menu while a test provider call is running and confirm navigation and the other Module respond. Two rapid starts of the same operation should produce one work result and a status Card naming the original request. A later deliberate start should work. These live checks can use paid AI and should be done with the existing shared allowance and a consented test account.
@@ -446,11 +478,15 @@ This is a local release candidate until real Slack/Gmail/OpenAI behavior and pro
 
 ## Slack channel management release candidate
 
+> Historical release instructions. Superseded by the current in-place interface and the 05/11/2026 Unanswered retirement above.
+
 Ticket 03 adds Slack Unanswered → Choose channels and makes `slack channels` a private list that updates in place for pagination and Add/Remove. It adds no environment variables, Slack scopes, or manual database migration; it uses ticket 01's idempotent navigation tables. Deploy with the update-and-restart procedure above. After readiness succeeds, DM `menu`, open Slack Unanswered → Choose channels, page through eligible shared channels, Add one and Remove it. Verify the same Agent message changes, the selection status changes, and Back returns to the module menu. If you have an inaccessible saved selection, verify it appears by ID with a Remove button and no channel content. Browsing must not start `slack unanswered` or use AI. Slack Unanswered must be enabled in the existing `ENABLED_MODULES` value for this smoke test.
 
 Ticket 03 local verification on 2026-09-25: 124 automated tests passed; TypeScript check and build passed. Two real PostgreSQL tests were skipped without `TEST_DATABASE_URL`. Live Slack, AI, and production deployment remain unverified.
 
 ## DM navigation and Gmail connection release candidate
+
+> Historical release instructions. Superseded by the current in-place interface and the 05/11/2026 Unanswered retirement above.
 
 Ticket 02 extends these menus with Manage rules, Latest report and Pending approvals. It adds no environment variables, permissions or schema changes beyond ticket 01's automatic navigation tables. After deploying both slices with the procedure above, open Manage rules and page through the list, open Latest report, and reopen a pending item if one exists. Verify that reopening posts a separate Card without changing the saved item or approving it. Add/Edit instructions must retain the `mail` prefix; opening rule management must not save, delete or apply anything. Starter rules and removal require a subsequent approval, so do not approve them merely for a navigation smoke test.
 
@@ -464,6 +500,8 @@ Local verification on 2026-09-25: 114 automated tests passed; TypeScript check a
 
 ## Module refactor release: `510c05f`
 
+> Historical release instructions. Superseded by the current in-place interface and the 05/11/2026 Unanswered retirement above.
+
 - No new required secrets or Slack/Google permissions. `ENABLED_MODULES` defaults to `mail`; existing configurations keep Mail Sorter enabled. An explicitly empty value disables all modules.
 - Startup automatically adds module identifiers to jobs and AI accounting records. Existing mail state, credentials, and spending remain in place. There is no separate migration command.
 - Stop the old worker before the new one starts; do not run old and new versions together during this upgrade. The Compose sequence above does this.
@@ -472,9 +510,13 @@ Local verification on 2026-09-25: 114 automated tests passed; TypeScript check a
 
 ## Slack Unanswered channel picker fix
 
+> Historical release instructions. Superseded by the current in-place interface and the 05/11/2026 Unanswered retirement above.
+
 When Slack Unanswered is enabled, `ENABLED_MODULES` must include `slack` (for example, `mail,slack`). This fix changes only how channel-selection buttons are arranged in outgoing Slack messages. It requires no new environment variables, Slack permissions, or manual database migration. Rebuild and restart the app using the procedure above, then verify that `slack channels` displays selectable channels and that a selection is retained. See [Slack Unanswered](slack-unanswered.md) for the feature contract and [README](../README.md) for the required Slack scopes and module configuration.
 
 ## Slack Unanswered follow-up fixes: `93c000a` and `dea466d`
+
+> Historical release instructions. Superseded by the current in-place interface and the 05/11/2026 Unanswered retirement above.
 
 These commits detect new requests after a user's reply in a selected channel thread, filter obvious follow-up acknowledgements, guide contextual matching to recognize indirect confirmation requests in any language, and accept a valid AI citation to the asker's intervening explanation. They add no required environment variables, Slack permissions, or manual database migration. Deploy the runtime change with the update-and-restart procedure above.
 

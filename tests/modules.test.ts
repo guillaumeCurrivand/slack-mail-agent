@@ -190,15 +190,15 @@ it('keeps navigation and the other module responsive during a held mail scan whi
     if (String(url).endsWith('/labels')) return Response.json({ labels: [] });
     throw new Error(`Unexpected provider call: ${url}`);
   }));
-  const config = readConfig({ ...mailEnv, ENABLED_MODULES: 'mail,slack' });
-  const modules = createModules(config, sql, { ...mailEnv, ENABLED_MODULES: 'mail,slack' });
+  const config = readConfig({ ...mailEnv, ENABLED_MODULES: 'mail,documentation' });
+  const modules = createModules(config, sql, { ...mailEnv, ENABLED_MODULES: 'mail,documentation' });
   for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
   const jobs = new JobStore(sql);
   await jobs.enqueueOperation('a-sort-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', "Trier la boîte de réception");
   await jobs.enqueueOperation('duplicate-held', alice, { type: 'text', text: 'sort' }, 'mail', 'sort', "Trier la boîte de réception");
   await jobs.enqueue('z-mail-conflict', alice, { type: 'text', text: 'report' }, 'mail');
   await jobs.enqueue('navigate', alice, { type: 'text', text: 'menu' });
-  await jobs.enqueueOperation('search-other', alice, { type: 'text', text: 'unanswered' }, 'slack', 'unanswered', "Chercher les messages sans réponse");
+  await jobs.enqueue('search-other', alice, { type: 'text', text: 'projects' }, 'documentation');
   const held = new Set<string>();
   const query = (text: string, values?: any[]) => text.includes('pg_try_advisory_lock')
     ? Promise.resolve({ rows: [{ locked: !held.has(values![0]) && Boolean(held.add(values![0])) }] })
@@ -212,10 +212,10 @@ it('keeps navigation and the other module responsive during a held mail scan whi
   try {
     await started;
     const deadline = Date.now() + 3000;
-    while ((!messages.some(message => message.kind === 'Menu') || !messages.some(message => message.kind === "Messages sans réponse") || !messages.some(message => message.kind === "Traitement en cours")) && Date.now() < deadline)
+    while ((!messages.some(message => message.kind === 'Menu') || !messages.some(message => message.kind === "Projets") || !messages.some(message => message.kind === "Traitement en cours")) && Date.now() < deadline)
       await new Promise(resolve => setTimeout(resolve, 20));
     expect(messages.some(message => message.kind === 'Menu')).toBe(true);
-    expect(messages.some(message => message.kind === "Messages sans réponse")).toBe(true);
+    expect(messages.some(message => message.kind === "Projets")).toBe(true);
     expect(messages.some(message => message.kind === "Traitement en cours")).toBe(true);
     expect((await sql.query("SELECT status FROM jobs WHERE id='z-mail-conflict'")).rows[0].status).toBe('queued');
     expect(listCalls).toBe(1);
