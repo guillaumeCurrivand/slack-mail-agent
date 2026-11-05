@@ -172,7 +172,7 @@ it('creates and edits Mail rules with no paid interpretation, separate approval 
     const rule = (await store.load(alice)).rules[0]!;
     expect(rule.name).toBe(values.name);
     const rules = await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles');
-    await h.click(await h.click(rules, 'Modifier 1'), 'Règle par expéditeur');
+    await h.click(await h.click(await h.click(rules, 'Ouvrir'), 'Modifier'), 'Règle par expéditeur');
     expect((await h.submit(h.views.at(-1), { condition: 'Condition révisée' })).json()).toEqual({});
     const edit = await h.drain();
     expect(edit.ts).toBe(rules.ts);
@@ -215,7 +215,7 @@ it('offers tailored Mail forms and changes rule type only after a separate appro
     const rule = (await store.load(alice)).rules[0]!;
     expect(rule).toMatchObject({ kind: 'semantic', senders: [] });
     const rules = await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles');
-    const edit = await h.click(rules, 'Modifier 1');
+    const edit = await h.click(await h.click(rules, 'Ouvrir'), 'Modifier');
     expect(h.buttons(edit).filter(button => button.action_id.startsWith('mail:form_open')).map(button => button.text.text)).toEqual(['Règle par contenu', 'Règle par expéditeur']);
     await h.click(edit, 'Règle par expéditeur');
     const senderView = h.views.at(-1);
@@ -228,7 +228,7 @@ it('offers tailored Mail forms and changes rule type only after a separate appro
     await h.click(change, 'Approuver les règles');
     expect((await store.load(alice)).rules[0]).toMatchObject({ id: rule.id, kind: 'sender', senders: ['billing@example.com'] });
     const senderRules = await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles');
-    await h.click(await h.click(senderRules, 'Modifier 1'), 'Règle par contenu');
+    await h.click(await h.click(await h.click(senderRules, 'Ouvrir'), 'Modifier'), 'Règle par contenu');
     expect(h.views.at(-1).blocks.some((block: any) => block.block_id?.startsWith('senders_'))).toBe(false);
     expect((await h.submit(h.views.at(-1), {})).json()).toEqual({});
     await h.click(await h.drain(), 'Approuver les règles');
@@ -302,7 +302,7 @@ it('rejects copied form buttons and stale Mail edits without overwriting a newer
     const store = new Store(sql), state = await store.load(alice);
     state.rules = [{ id: 'rule', name: 'Original', kind: 'sender', category: 'custom', condition: 'Adresse', senders: ['a@example.com'], labels: [], action: 'keep', examples: ['Conserver'] }];
     await store.save(alice, state);
-    const prepared = await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Modifier 1');
+    const prepared = await h.click(await h.click(await h.click(await h.click(await h.dm('menu'), 'Tri des e-mails'), 'Gérer les règles'), 'Ouvrir'), 'Modifier');
     await h.click({ ...prepared, ts: '999.999' }, 'Règle par expéditeur');
     await h.click(prepared, 'Règle par expéditeur', bob);
     expect(h.provider).not.toHaveBeenCalled();

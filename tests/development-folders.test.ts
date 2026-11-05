@@ -1,5 +1,27 @@
-import { expect, it } from 'vitest';
+import { expect, it, vi } from 'vitest';
 import { ClickupDevelopment } from '../src/modules/development/providers.js';
+
+it('prepares a complete eight-Space form catalogue within four provider round trips', async () => {
+  vi.useFakeTimers();
+  try {
+    let active = 0, peak = 0;
+    const client = new ClickupDevelopment('fake', (async input => {
+      active++; peak = Math.max(peak, active);
+      await new Promise(resolve => setTimeout(resolve, 100));
+      active--;
+      const path = new URL(String(input)).pathname;
+      return Response.json(path.endsWith('/team') ? { teams: [{ id: '1', name: 'Workspace' }] }
+        : path.endsWith('/space') ? { spaces: Array.from({ length: 8 }, (_, i) => ({ id: String(i + 10), name: `Space ${i}` })) }
+          : { folders: [{ id: path.split('/').at(-2), name: 'Folder' }] });
+    }) as typeof fetch);
+    const start = Date.now();
+    const result = client.folders();
+    await vi.runAllTimersAsync();
+    expect(await result).toHaveLength(8);
+    expect(Date.now() - start).toBeLessThanOrEqual(400);
+    expect(peak).toBeLessThanOrEqual(4);
+  } finally { vi.useRealTimers(); }
+});
 
 function provider(responses: Record<string, unknown>) {
   const paths: string[] = [];
@@ -41,4 +63,32 @@ it.each([{}, { folders: [{ id: 'not-an-id', name: 'Broken' }] }, { folders: [{ i
 it('fails discovery on a denied Space and distinguishes an empty authorized inventory', async () => {
   await expect(provider({ '/team': { teams: [] } }).client.folders()).resolves.toEqual([]);
   await expect(provider({ '/team': { teams: [{ id: '1', name: 'Maya' }] } }).client.folders()).rejects.toThrow('403');
+});
+
+it('shares in-flight catalogue reads, expires successful snapshots and forces refresh without caching failures', async () => {
+  vi.useFakeTimers();
+  try {
+    let calls = 0, denied = false;
+    const client = new ClickupDevelopment('fake', (async () => {
+      calls++;
+      await new Promise(resolve => setTimeout(resolve, 100));
+      return Response.json(denied ? {} : { teams: [] }, { status: denied ? 403 : 200 });
+    }) as typeof fetch);
+    const first = client.folders(), second = client.folders();
+    await vi.runAllTimersAsync();
+    expect(await first).toEqual(await second);
+    expect(calls).toBe(1);
+    await client.folders(); expect(calls).toBe(1);
+    const refresh = client.folders(true); await vi.runAllTimersAsync(); await refresh;
+    expect(calls).toBe(2);
+    await vi.advanceTimersByTimeAsync(60_001);
+    const expired = client.folders(); await vi.runAllTimersAsync(); await expired;
+    expect(calls).toBe(3);
+    denied = true;
+    const failed = expect(client.folders(true)).rejects.toThrow('403');
+    await vi.runAllTimersAsync(); await failed;
+    denied = false;
+    const retry = client.folders(); await vi.runAllTimersAsync(); await retry;
+    expect(calls).toBe(5);
+  } finally { vi.useRealTimers(); }
 });

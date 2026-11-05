@@ -1,3 +1,4 @@
+import { tableBlocks } from './slack-blocks.js';
 import { expect, it } from 'vitest';
 import { Slack, type AgentMessage } from '../src/core/slack.js';
 
@@ -5,10 +6,15 @@ const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 
 it('keeps data tables outside containers, links displayed web destinations and rejects oversized tables before delivery', async () => {
   const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ["Nom", "Liens"], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: "Retour", action: 'core:navigate', value: 'bound|main' }] });
-  expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'data_table', 'container']);
+  expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'layout', 'container']);
+  expect(body.blocks[1].rows).toHaveLength(1);
+  expect(body.blocks[1].rows[0].items).toHaveLength(1);
+  expect(body.blocks[1].rows[0].items[0].width).toBe('wide');
+  expect(body.blocks[1].rows[0].items[0].horizontal_alignment).toBeUndefined();
+  expect(body.blocks[1].fallback).toEqual([body.blocks[1].rows[0].items[0].block]);
   expect(body.blocks[0].child_blocks.every((block: any) => block.type !== 'actions')).toBe(true);
-  expect(body.blocks[1].rows[1][0]).toEqual({ type: 'raw_text', text: 'Literal <@UBOB>' });
-  expect(body.blocks[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
+  expect(tableBlocks(body.blocks)[1].rows[1][0]).toEqual({ type: 'raw_text', text: 'Literal <@UBOB>' });
+  expect(tableBlocks(body.blocks)[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
   const sent: unknown[] = [];
   const slack = new Slack('token', (async () => { sent.push(true); return Response.json({ ok: true }); }) as typeof fetch);
   await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ["Nom"], rows: [['x'.repeat(20_000)]] } })).rejects.toThrow('exceeds Slack limits');
@@ -21,7 +27,7 @@ it('renders labelled table toggles and non-interactive rows with consistent colu
     rowButtons: [{ label: '☑ Retirer', action: 'clickup:status_remove', value: 'bound|editor|0|choice' }, null],
     rowButtonColumn: 'Sélection', rowButtonFallback: 'Ouvrez clickup statuts dans un client Slack récent',
   } });
-  const table = body.blocks.find((block: any) => block.type === 'data_table');
+  const table = tableBlocks(body.blocks).find((block: any) => block.type === 'data_table');
   expect(table.rows.map((row: any[]) => row.length)).toEqual([3, 3, 3]);
   expect(table.rows[0][2].text).toBe('Sélection');
   expect(table.rows[1][2]).toEqual({ type: 'action_cell', element: {
@@ -150,7 +156,7 @@ it('marks structural navigation without marking page choices or changing action 
   const table = await post({ kind: 'Inventaire', text: 'Fiches', table: {
     columns: ['Nom'], rows: [['Alpha']], rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|alpha' }],
   } });
-  expect(table.blocks[1].rows[1][1].element.text.text).toBe('Ouvrir');
+  expect(tableBlocks(table.blocks)[1].rows[1][1].element.text.text).toBe('Ouvrir');
 });
 
 it.each(['Connexion', 'Connect'])('makes all displayed %s URLs clickable', async kind => {

@@ -4,6 +4,8 @@ export class TicketOutsideFolder extends Error {}
 export type FolderChoice = { id: string; name: string; space: string; workspace: string };
 
 export class ClickupDevelopment {
+  private catalogue?: { expires: number; folders: FolderChoice[] };
+  private catalogueRequest?: Promise<FolderChoice[]>;
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
   private async request(path: string, method = 'GET', body?: unknown) {
     const response = await this.fetcher(`https://api.clickup.com/api/v2${path}`, { method,
@@ -17,20 +19,39 @@ export class ClickupDevelopment {
     if (!Array.isArray(data.lists)) throw new Error('Liste ClickUp incomplète.');
     return data.lists.map((list: any) => String(list.id));
   }
-  async folders(): Promise<FolderChoice[]> {
+  async folders(refresh = false): Promise<FolderChoice[]> {
+    if (this.catalogueRequest) return structuredClone(await this.catalogueRequest);
+    if (!refresh && this.catalogue && this.catalogue.expires > Date.now()) return structuredClone(this.catalogue.folders);
+    // Cache only complete discovery, never access checks or failed/partial results.
+    this.catalogue = undefined;
+    this.catalogueRequest = this.discoverFolders();
+    try {
+      const folders = await this.catalogueRequest;
+      this.catalogue = { expires: Date.now() + 60_000, folders };
+      return structuredClone(folders);
+    } finally { this.catalogueRequest = undefined; }
+  }
+  private async discoverFolders(): Promise<FolderChoice[]> {
     const records = (data: any, key: string): Array<{ id: string; name: string }> => {
       if (!Array.isArray(data[key]) || data[key].some((item: any) => !item || !/^\d{1,100}$/.test(String(item.id)) || typeof item.name !== 'string' || !item.name.trim()))
         throw new Error('Catalogue ClickUp incomplet.');
       return data[key].filter((item: any) => !item.archived).map((item: any) => ({ id: String(item.id), name: item.name }));
     };
-    const result = new Map<string, FolderChoice>();
-    for (const workspace of records(await this.request('/team'), 'teams')) {
-      for (const space of records(await this.request(`/team/${workspace.id}/space?archived=false`), 'spaces')) {
-        for (const folder of records(await this.request(`/space/${space.id}/folder?archived=false`), 'folders')) {
-          result.set(folder.id, { ...folder, space: space.name, workspace: workspace.name });
-        }
+    // Flatten each level before the next: nested pools could exceed the limit.
+    const map = async <T, R>(items: T[], read: (item: T) => Promise<R>): Promise<R[]> => {
+      const result: R[] = [];
+      for (let i = 0; i < items.length; i += 4) {
+        const batch = await Promise.allSettled(items.slice(i, i + 4).map(read));
+        const failure = batch.find(entry => entry.status === 'rejected');
+        if (failure?.status === 'rejected') throw failure.reason;
+        result.push(...batch.map(entry => (entry as PromiseFulfilledResult<R>).value));
       }
-    }
+      return result;
+    };
+    const workspaces = records(await this.request('/team'), 'teams');
+    const spaces = (await map(workspaces, async workspace => records(await this.request(`/team/${workspace.id}/space?archived=false`), 'spaces').map(space => ({ ...space, workspace: workspace.name })))).flat();
+    const folders = (await map(spaces, async space => records(await this.request(`/space/${space.id}/folder?archived=false`), 'folders').map(folder => ({ ...folder, space: space.name, workspace: space.workspace })))).flat();
+    const result = new Map(folders.map(folder => [folder.id, folder]));
     return [...result.values()].sort((a, b) => `${a.workspace}/${a.space}/${a.name}/${a.id}`.localeCompare(`${b.workspace}/${b.space}/${b.name}/${b.id}`, 'fr'));
   }
   async tasks(project: Project): Promise<Array<{ id: string; status: string }>> {

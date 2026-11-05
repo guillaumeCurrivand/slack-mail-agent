@@ -32,10 +32,9 @@ export class DevelopmentRouting {
       const index = Math.min(Number(page.slice(7)), Math.max(0, Math.ceil(routes.length / 8) - 1));
       const rows = routes.slice(index * 8, (index + 1) * 8);
       return { kind: 'Tickets et dépôts', text: rows.length ? `Page ${index + 1}. Ouvrez un ticket pour choisir ses dépôts ou consulter son affectation.` : 'Aucun ticket partagé enregistré. Publiez son lien dans le canal commun, ou passez-le à Ready for AI dans ClickUp. Il attendra votre choix avant tout travail.',
-        ...(rows.length ? { table: { columns: ['Ticket', 'Dépôts'], rows: rows.map(r => [r.snapshot.name.slice(0, 300), r.selected?.map(p => p.name).join(', ') || 'Aucun']),
-          rowButtonColumn: 'État / actions', rowButtonFallback: 'Ouvrez le ticket avec les boutons sous le tableau.',
+        ...(rows.length ? { table: { columns: ['Ticket', 'Dépôts'], rows: rows.map(r => [r.snapshot.name, r.selected?.map(p => p.name).join(', ') || 'Aucun']),
+          rowButtonColumn: 'Actions', rowButtonFallback: 'Ouvrez development menu dans un client Slack récent.',
           rowButtons: rows.map(r => ({ label: r.selected ? 'Affecté — gérer' : 'À affecter', action: 'routing_open', value: r.ticket, bound: true })) } } : {}),
-        buttons: rows.map(r => ({ label: r.snapshot.name.slice(0, 60), action: 'routing_open', value: r.ticket, bound: true })),
         links: [...(index ? [{ label: 'Précédent', page: `routes_${index - 1}` }] : []), ...((index + 1) * 8 < routes.length ? [{ label: 'Suivant', page: `routes_${index + 1}` }] : []), { label: 'Actualiser', page }, { label: 'Retour aux projets', page: 'projects_0' }] };
     }
     const history = /^route_runs_([\w-]+)_(\d{1,6})$/.exec(page);
@@ -57,9 +56,17 @@ export class DevelopmentRouting {
       buttons: [...(blocked ? [] : [{ label: selected ? 'Modifier les dépôts' : 'Choisir les dépôts', action: 'routing_begin', value: route.ticket, bound: true }]), ...(treatments.buttons ?? [])],
       links: [{ label: 'Traitements du ticket', page: `route_runs_${route.ticket}_0` }, ...(selected ?? []).filter(p => candidates.some(c => sameDestination(c, p))).map(p => ({ label: `Suivre ${p.name}`, page: `history_${p.id}_0` })), { label: 'Actualiser', page }, ...back] };
   }
-  private picker(proposal: RouteProposal): MenuPage {
-    return { kind: 'Choisir les dépôts', text: `Sélectionnez un ou plusieurs dépôts du projet avec Ajouter/Retirer, puis vérifiez votre choix.\nSélection : ${proposal.candidates.filter(p => selectedDestination(proposal.selected, p)).map(p => p.name).join(', ') || 'aucun dépôt'}\n\n${proposal.candidates.map(p => `${p.name} — ${p.repository}${p.enabled ? '' : ' (suspendu)'}`).join('\n')}`,
-      buttons: [...proposal.candidates.filter(p => p.enabled).map(p => ({ label: `${selectedDestination(proposal.selected, p) ? 'Retirer' : 'Ajouter'} ${p.name}`, action: selectedDestination(proposal.selected, p) ? 'routing_remove' : 'routing_add', value: `${proposal.id}|${destinationKey(p)}`, bound: true })),
+  private picker(proposal: RouteProposal, requestedPage = 0): MenuPage {
+    const pages = Math.max(1, Math.ceil(proposal.candidates.length / 5));
+    const page = Math.max(0, Math.min(requestedPage, pages - 1));
+    const visible = proposal.candidates.slice(page * 5, (page + 1) * 5);
+    return { kind: 'Choisir les dépôts', text: `Sélectionnez un ou plusieurs dépôts du projet avec Ajouter/Retirer, puis vérifiez votre choix.\nPage ${page + 1}/${pages} · ${proposal.selected.length} dépôts sélectionnés.`,
+      table: { columns: ['Dépôt', 'URL', 'État'], rows: visible.map(p => [p.name, p.repository, p.enabled ? selectedDestination(proposal.selected, p) ? 'Sélectionné' : 'Non sélectionné' : 'Suspendu']),
+        rowButtons: visible.map(p => p.enabled ? { label: `${selectedDestination(proposal.selected, p) ? 'Retirer' : 'Ajouter'} ${p.name}`, action: selectedDestination(proposal.selected, p) ? 'routing_remove' : 'routing_add', value: `${proposal.id}|${destinationKey(p)}`, bound: true } : null),
+        rowButtonFallback: 'Ouvrez development menu dans un client Slack récent.' },
+      buttons: [
+        ...(page ? [{ label: 'Précédent', action: 'routing_page', value: `${proposal.id}|${page - 1}`, bound: true }] : []),
+        ...(page + 1 < pages ? [{ label: 'Suivant', action: 'routing_page', value: `${proposal.id}|${page + 1}`, bound: true }] : []),
         ...(proposal.selected.length ? [{ label: 'Vérifier les dépôts', action: 'routing_check', value: proposal.id, bound: true, style: 'primary' as const }] : []),
         { label: 'Annuler', action: 'routing_cancel', value: proposal.id, bound: true }], links: back };
   }
@@ -78,18 +85,24 @@ export class DevelopmentRouting {
     }
     const separator = bound.value.lastIndexOf('|');
     const changing = ['routing_add', 'routing_remove'].includes(String(payload.action));
-    const id = changing ? bound.value.slice(0, separator) : bound.value;
+    const paging = payload.action === 'routing_page';
+    const id = changing || paging ? bound.value.slice(0, separator) : bound.value;
     let proposal = await this.saved.proposal(actor, id);
     const route = proposal && await this.saved.get(proposal.ticket);
     if (!proposal || !route) return show(unavailable);
     const candidates = await this.candidates(actor, route);
     if (!candidates.length) return show(unavailable);
+    if (paging) {
+      const page = bound.value.slice(separator + 1);
+      if (proposal.state !== 'pending' || route.revision !== proposal.base_revision || !/^\d{1,6}$/.test(page)) return show(unavailable);
+      return show(this.picker(proposal, Number(page)));
+    }
     if (changing) {
       if (proposal.state !== 'pending' || route.revision !== proposal.base_revision) return show(unavailable);
       const project = bound.value.slice(separator + 1);
       if (!candidates.some(p => p.enabled && (destinationKey(p) === project || p.id === project))) return show(unavailable);
       proposal = await this.saved.choose(actor, id, project, payload.action === 'routing_add', eventId);
-      return show(proposal ? this.picker(proposal) : unavailable);
+      return show(proposal ? this.picker(proposal, Math.floor(proposal.candidates.findIndex(p => destinationKey(p) === project || p.id === project) / 5)) : unavailable);
     }
     if (payload.action === 'routing_check') {
       proposal = await this.saved.seal(actor, id);
@@ -106,6 +119,7 @@ export class DevelopmentRouting {
       catch { return show({ ...unavailable, text: 'Lecture ClickUp indisponible. Aucun choix enregistré ; réessayez après rétablissement des accès.' }); }
     }
     const state = await this.saved.confirm(actor, id, payload.action === 'routing_cancel', ticket);
-    return show({ kind: 'Dépôts du ticket', text: state === 'applied' ? 'Choix enregistré. Chaque dépôt sélectionné dispose de son propre traitement ; les clics répétés ne démarrent aucun travail supplémentaire.' : state === 'unchanged' ? 'Les dépôts sont inchangés. Aucun nouveau traitement.' : state === 'busy' ? 'Modification indisponible : une correction existe ou un traitement a démarré. Aucun choix modifié.' : state === 'cancelled' ? 'Choix annulé. Aucun nouveau travail.' : state === 'legacy' ? 'Des traitements antérieurs existent pour ce ticket. Faites réconcilier leurs résultats par l’opérateur avant de l’affecter ; aucun traitement historique n’a été relancé.' : 'Le choix ou la configuration a changé. Rouvrez le ticket ; aucun nouveau travail.', links: [{ label: 'Ouvrir le ticket', page: `route_${route.ticket}` }, ...back] });
+    if (state === 'cancelled' || state === 'unchanged') return show(await this.page(actor, `route_${route.ticket}`));
+    return show({ kind: 'Dépôts du ticket', text: state === 'applied' ? 'Choix enregistré. Chaque dépôt sélectionné dispose de son propre traitement ; les clics répétés ne démarrent aucun travail supplémentaire.' : state === 'busy' ? 'Modification indisponible : une correction existe ou un traitement a démarré. Aucun choix modifié.' : state === 'legacy' ? 'Des traitements antérieurs existent pour ce ticket. Faites réconcilier leurs résultats par l’opérateur avant de l’affecter ; aucun traitement historique n’a été relancé.' : 'Le choix ou la configuration a changé. Rouvrez le ticket ; aucun nouveau travail.', links: [{ label: 'Ouvrir le ticket', page: `route_${route.ticket}` }, ...back] });
   }
 }

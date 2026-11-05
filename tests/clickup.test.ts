@@ -1,3 +1,4 @@
+import { tableBlocks } from './slack-blocks.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -667,7 +668,7 @@ it('routes signed French status commands and editor controls through Slack ingre
     await h.run(job, job.actor, job.id); const picker = h.messages.at(-1)!;
     const rendered: any[] = [];
     await new Slack('unused', (async (_input, options) => { rendered.push(JSON.parse(String(options?.body))); return Response.json({ ok: true }); }) as typeof fetch).send(alice, picker);
-    const table = rendered[0].blocks.find((block: any) => block.type === 'data_table');
+    const table = tableBlocks(rendered[0].blocks).find((block: any) => block.type === 'data_table');
     expect(table.rows[0].map((cell: any) => cell.text)).toEqual(['Statut', 'Inclus', 'Disponibilité', 'Sélection']);
     expect(table.rows.slice(1).every((row: any[]) => row[3].type === 'action_cell')).toBe(true);
     const add = table.rows.find((row: any[]) => row[0].text === 'Closed')[3].element;
@@ -839,7 +840,7 @@ it('renders the result as a native Slack table with literal values and ClickUp l
   const sent: any[] = [];
   const slack = new Slack('fake', (async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) as typeof fetch);
   await slack.send(alice, result);
-  const table = sent[0].blocks.find((block: any) => block.type === 'data_table');
+  const table = tableBlocks(sent[0].blocks).find((block: any) => block.type === 'data_table');
   expect(table.rows.length).toBe(2);
   expect(JSON.stringify(table)).toContain('https://app.clickup.com/t/one');
 });

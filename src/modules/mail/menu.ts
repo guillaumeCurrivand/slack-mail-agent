@@ -20,19 +20,24 @@ export function mailMenu(state: UserState, page: string): MenuPage {
       : [{ label: "Connecter Gmail", action: 'menu_connect', value: '', style: 'primary' }], links: back,
   };
   const rulesPage = /^rules-(\d{1,6})$/.exec(page);
+  if (page.startsWith('rule-')) {
+    const rule = state.rules.find(rule => rule.id === page.slice(5));
+    if (!rule) return { kind: 'Règle indisponible', text: 'Cette règle n’existe plus.', links: [{ label: 'Retour aux règles', page: 'rules-0' }] };
+    return { kind: `Règle — ${rule.name}`, text: `Condition : ${escapeCardValue(rule.condition)}\nAction : ${stateLabel(rule.action)}\nLibellés : ${escapeCardValue(rule.labels.join(', ')) || 'aucun'}\nExpéditeurs : ${escapeCardValue(rule.senders.join('\n')) || 'analyse du contenu'}\nExemples :\n${rule.examples.map(escapeCardValue).join('\n')}`,
+      buttons: [{ label: 'Modifier', action: 'form_prepare', value: rule.id, bound: true }, { label: 'Retirer', action: 'menu_remove_rule', value: rule.id }],
+      links: [{ label: 'Retour aux règles', page: `rules-${Math.floor(state.rules.indexOf(rule) / PAGE_SIZE)}` }] };
+  }
   if (rulesPage) {
     const pages = Math.max(1, Math.ceil(state.rules.length / PAGE_SIZE));
     const current = Math.min(Number(rulesPage[1]), pages - 1);
     const visible = state.rules.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
     const buttons: Button[] = [{ label: "Ajouter une règle", action: 'form_prepare', value: 'new', bound: true, style: 'primary' }, { label: "Modèles de règles", action: 'menu_starters', value: '' }];
-    const rows = visible.map((rule, index) => {
-      buttons.push({ label: `Modifier ${index + 1}`, action: 'form_prepare', value: rule.id, bound: true }, { label: `Retirer ${index + 1}`, action: 'menu_remove_rule', value: rule.id });
-      const short = (value: string, limit: number) => value.length > limit ? `${value.slice(0, limit)}…` : value;
-      return [String(index + 1), short(rule.name, 100), short(rule.condition, 500), stateLabel(rule.action),
-        short(rule.labels.join(', '), 300) || 'aucun', short(rule.senders.join(', '), 360) || 'analyse du contenu'];
+    const rows = visible.map(rule => {
+      return [rule.name, rule.condition, stateLabel(rule.action), rule.labels.join(', ') || 'aucun',
+        rule.senders.length ? `${rule.senders.length} adresses — ouvrir la règle` : 'analyse du contenu'];
     });
-    return { kind: "Gérer les règles", text: `Vos règles — page ${current + 1}/${pages}\nLes conditions, libellés et listes d’expéditeurs longs sont résumés.${!rows.length ? '\nAucune règle approuvée. Ajoutez une règle ou examinez les modèles.' : ''}`, buttons,
-      ...(rows.length ? { table: { columns: ['N°', 'Règle', 'Condition', 'Action', 'Libellés', 'Expéditeurs'], rows } } : {}),
+    return { kind: "Gérer les règles", text: `Vos règles — page ${current + 1}/${pages}\nOuvrez une règle pour consulter ses expéditeurs et exemples, la modifier ou la retirer.${!rows.length ? '\nAucune règle approuvée. Ajoutez une règle ou examinez les modèles.' : ''}`, buttons,
+      ...(rows.length ? { table: { columns: ['Règle', 'Condition', 'Traitement', 'Libellés', 'Expéditeurs'], rows }, recordChoices: visible.map(rule => ({ label: rule.name, page: `rule-${rule.id}` })) } : {}),
       links: [...(current > 0 ? [{ label: "Précédent", page: `rules-${current - 1}` }] : []), ...(current + 1 < pages ? [{ label: "Suivant", page: `rules-${current + 1}` }] : []), ...back],
     };
   }
@@ -42,8 +47,8 @@ export function mailMenu(state: UserState, page: string): MenuPage {
     const current = Math.min(Number(pendingPage[1]), pages - 1);
     const visible = pending.slice(current * PAGE_SIZE, (current + 1) * PAGE_SIZE);
     return { kind: "Approbations en attente", text: `Approbations en attente — page ${current + 1}/${pages}\n${!visible.length ? 'Aucune approbation en attente. Revenez au tri des e-mails pour gérer les règles ou demander un nouveau tri.\n' : ''}Ouvrir un élément enregistré ne prolonge pas sa validité.`,
-      ...(visible.length ? { table: { columns: ['N°', 'Proposition', 'Créée le'], rows: visible.map((item, index) => [String(index + 1), item.label.slice(0, 300), formatDate(item.created)]) } } : {}),
-      buttons: visible.map((item, index) => ({ label: `Ouvrir ${index + 1}`, action: item.action, value: item.id })),
+      ...(visible.length ? { table: { columns: ['N°', 'Proposition', 'Créée le'], rows: visible.map((item, index) => [String(index + 1), item.label, formatDate(item.created)]),
+        rowButtons: visible.map((item, index) => ({ label: `Ouvrir ${index + 1}`, action: item.action, value: item.id })) } } : {}),
       links: [...(current > 0 ? [{ label: "Précédent", page: `pending-${current - 1}` }] : []), ...(current + 1 < pages ? [{ label: "Suivant", page: `pending-${current + 1}` }] : []), ...back],
     };
   }

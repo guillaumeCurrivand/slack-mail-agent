@@ -13,6 +13,7 @@ import type { Database } from '../src/core/transactions.js';
 import { createDevelopmentModule } from '../src/modules/development/index.js';
 import { DevelopmentStore } from '../src/modules/development/store.js';
 import { projectSchema, type Ticket } from '../src/modules/development/domain.js';
+import { tableBlocks } from './slack-blocks.js';
 
 const token = 'synthetic-worker-token-at-least-32-characters';
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'bot', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'development', DEVELOPMENT_CLICKUP_TOKEN: 'clickup', DEVELOPMENT_WORKER_TOKEN: token };
@@ -140,6 +141,48 @@ async function newForm(h: Awaited<ReturnType<typeof harness>>) {
   await h.click(prepared, 'Remplir le formulaire');
   return { prepared, view: h.views.at(-1) };
 }
+
+it('reuses a complete catalogue across signed form preparations and forces explicit refresh', async () => {
+  const h = await harness();
+  try {
+    const first = await newForm(h);
+    const reads = () => h.requests.filter(path => path.startsWith('/api/v2/')).length;
+    expect(reads()).toBe(3);
+    await h.click(first.prepared, 'Annuler');
+    const second = await newForm(h);
+    expect(reads()).toBe(3);
+    h.folders.push({ id: '789', name: 'Nouveau dossier', archived: false });
+    const refreshed = await h.click(second.prepared, 'Actualiser les dossiers');
+    expect(reads()).toBe(6);
+    await h.click(refreshed, 'Remplir le formulaire');
+    expect((await h.suggest(h.views.at(-1), 'Nouveau')).json().options[0].value).toBe('789');
+    expect((await h.suggest(second.view)).json().options).toEqual([]);
+    expect(await h.store.projects()).toEqual([]);
+  } finally { await h.app.close(); }
+});
+
+it('pages repository row actions and retains selection on its page before separate confirmation', async () => {
+  const h = await harness();
+  try {
+    await h.store.save({ ...project, repositories: Array.from({ length: 7 }, (_, i) => `https://github.com/example/repo-${i}`) }, 'many-repositories');
+    const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
+    const list = await h.click(await h.command('development menu'), 'Tickets et dépôts');
+    const picker = await h.click(await h.click(list, 'À affecter'), 'Choisir les dépôts');
+    expect(tableBlocks(picker.blocks).find(block => block.type === 'data_table').rows).toHaveLength(6);
+    const next = await h.click(picker, 'Suivant');
+    const table = tableBlocks(next.blocks).find(block => block.type === 'data_table');
+    expect(table.rows).toHaveLength(3);
+    const selected = await h.click(next, table.rows[2][3].element.text.text);
+    expect(selected.ts).toBe(picker.ts);
+    expect(selected.text).toContain('Page 2/2');
+    expect(selected.text).toContain('1 dépôts sélectionnés');
+    expect(await h.store.history('pilot')).toHaveLength(0);
+    const confirmation = await h.click(selected, 'Vérifier les dépôts');
+    expect(confirmation.text).toContain('repo-6');
+    await h.click(confirmation, 'Annuler');
+    expect(await h.store.history('pilot')).toHaveLength(0);
+  } finally { await h.app.close(); }
+});
 
 async function sharedProjects(h: Awaited<ReturnType<typeof harness>>) {
   await h.configure();
@@ -378,7 +421,7 @@ it('treats unchanged repository confirmation as a no-op and supports editing pri
   await h.click(await chooseRepositories(h), 'Confirmer les dépôts');
   const picker = await h.click(await assignment(h, actor), 'Modifier les dépôts', actor);
   const confirmation = await h.click(picker, 'Vérifier les dépôts', actor);
-  expect((await h.click(confirmation, 'Confirmer les dépôts', actor)).text).toContain('inchangés');
+  expect((await h.click(confirmation, 'Confirmer les dépôts', actor)).text).toContain('Dépôts confirmés');
   expect((await h.sql.query('SELECT * FROM development_runs')).rows).toHaveLength(2);
 });
 
@@ -1190,7 +1233,7 @@ it('browses projects, configuration, history and run details through signed butt
   const configuration = await h.click(detail, 'Modifier la configuration');
   expect(configuration.text).toContain('formulaire');
   const history = await h.click(detail, 'Voir les traitements');
-  expect(JSON.stringify(history)).toContain('Ouvrir');
+  expect(JSON.stringify(history)).toContain('Actions / état');
   const next = await h.click(history, 'Suivant');
   expect(next.text).toContain('Page 2');
   const run = await h.click(next, 'En attente du worker');

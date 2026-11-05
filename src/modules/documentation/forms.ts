@@ -37,18 +37,21 @@ export class InventoryForms extends GuidedForms<InventoryFormResult> {
     if (operation === 'edit' && (!record || record.archived)) return;
     const base = (record?.fields ?? {}) as InventoryValues;
     const defaults: InventoryValues = { ...base, ...(operation === 'create' && target ? { [kind === 'component' ? 'projectId' : 'componentId']: target } : {}) };
+    const editableKeys = keys[kind].filter(key => operation !== 'edit' || !['projectId', 'componentId'].includes(key));
+    const kinds = [...new Set(editableKeys.map(key => references[key]).filter((kind): kind is Kind => !!kind))];
+    // Independent selector reads share one preparation round trip, without caching inventory.
+    const choices = new Map(await Promise.all(kinds.map(async reference => [reference, reference === 'project'
+      ? (await this.database.query('SELECT id,fields,archived FROM documentation_projects WHERE team=$1 ORDER BY fields->>\'name\',id', [actor.team])).rows
+      : (await this.database.query("SELECT r.id,r.fields,r.archived,p.fields->>'name' AS parent FROM documentation_records r LEFT JOIN documentation_projects p ON p.team=r.team AND p.id=r.parent_id WHERE r.team=$1 AND r.kind=$2 ORDER BY r.fields->>'name',r.id", [actor.team, reference])).rows] as const)));
     const fields: FormField[] = [];
-    for (const key of keys[kind]) {
-      if (operation === 'edit' && ['projectId', 'componentId'].includes(key)) continue;
+    for (const key of editableKeys) {
       const initial = defaults[key];
       const field: FormField = { key, label: labels[key]!, required: ['name', 'projectId', 'componentId', 'serviceId'].includes(key), max: ['name', 'category', 'type', 'role', 'environment'].includes(key) ? 120 : 1500 };
       if (key === 'currency') field.max = 3;
       if (key === 'monthlyCost') field.max = 30;
       if (references[key]) {
         const reference = references[key]!;
-        const rows = reference === 'project'
-          ? (await this.database.query('SELECT id,fields,archived FROM documentation_projects WHERE team=$1 ORDER BY fields->>\'name\',id', [actor.team])).rows
-          : (await this.database.query("SELECT r.id,r.fields,r.archived,p.fields->>'name' AS parent FROM documentation_records r LEFT JOIN documentation_projects p ON p.team=r.team AND p.id=r.parent_id WHERE r.team=$1 AND r.kind=$2 ORDER BY r.fields->>'name',r.id", [actor.team, reference])).rows;
+        const rows = choices.get(reference)!;
         field.kind = ['projects', 'technologies'].includes(key) ? 'choices' : 'choice';
         field.limit = key === 'projects' ? 20 : 50;
         field.choices = rows.filter(row => !row.archived || initial === row.id || (Array.isArray(initial) && initial.includes(row.id))).map(row => ({ value: row.id, label: `${`${row.fields.name}${row.parent ? ` / ${row.parent}` : ''}`.slice(0, row.archived ? 53 : 63)}${row.archived ? ' (archivé)' : ''} · ${row.id.slice(0, 8)}` }));

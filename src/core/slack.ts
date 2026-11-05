@@ -5,7 +5,7 @@ export type Button = { label: string; action: string; value: string; style?: 'pr
 export type TableCell = string | Array<{ text: string; url?: string }>;
 export type MessageTable = { columns: string[]; rows: TableCell[][]; rowButtons?: Array<Button | null>; rowButtonColumn?: string; rowButtonFallback?: string };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; selects?: MessageSelect[] };
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; selects?: MessageSelect[] };
 export const validResourceUrl = (value: string) => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>\\]/.test(value); }
   catch { return false; }
@@ -26,8 +26,8 @@ export const buttonDisplayLabel = (button: Button) => {
 };
 // Stable structural positions on every screen, independent of module assembly.
 const navigationOrder = (button: Button) => {
-  if (/^(?:Précédent|Valeurs précédentes|◀ Actions)/i.test(button.label)) return 0;
-  if (/^(?:Suivant|Valeurs suivantes|Actions ▶)/i.test(button.label)) return 1;
+  if (/^(?:Précédent|Valeurs précédentes|Tableau précédent|◀ Actions)/i.test(button.label)) return 0;
+  if (/^(?:Suivant|Valeurs suivantes|Tableau suivant|Actions ▶)/i.test(button.label)) return 1;
   if (button.action === 'core:menu' || /^(?:Menu|Retour au menu)$/i.test(button.label)) return 3;
   if (/^Fermer\b/i.test(button.label)) return 4;
   return 2;
@@ -222,7 +222,7 @@ export class Slack implements Messenger {
       if (!table.columns.length || table.columns.length + (table.rowButtons ? 1 : 0) > 20 || table.rows.length < 1 || table.rows.length > 200 || table.rows.some(row => row.length !== table.columns.length) || (table.rowButtons && table.rowButtons.length !== table.rows.length))
         throw new SlackDeliveryRejected('Invalid message table.');
       const rows: TableCell[][] = [table.columns, ...table.rows];
-      const rowButtonColumn = table.rowButtonColumn ?? 'Ouvrir';
+      const rowButtonColumn = table.rowButtonColumn ?? 'Actions';
       const rowButtonFallback = table.rowButtonFallback ?? 'Rechercher la fiche dans le DM';
       const actionSize = table.rowButtons ? rowButtonColumn.length + table.rowButtons.reduce((sum, button) =>
         sum + (button ? Math.max(buttonDisplayLabel(button).slice(0, 75).length, rowButtonFallback.length) : 1), 0) : 0;
@@ -251,8 +251,12 @@ export class Slack implements Messenger {
           ...(button.style ? { style: button.style } : {}),
         }, fallback: { type: 'raw_text', text: rowButtonFallback } } : { type: 'raw_text', text: '—' }];
       });
-      blocks.push({ type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
-        rows: [[...table.columns.map(column => ({ type: 'raw_text', text: column || ' ' })), ...(table.rowButtons ? [{ type: 'raw_text', text: rowButtonColumn }] : [])], ...dataRows] });
+      const dataTable = { type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
+        rows: [[...table.columns.map(column => ({ type: 'raw_text', text: column || ' ' })), ...(table.rowButtons ? [{ type: 'raw_text', text: rowButtonColumn }] : [])], ...dataRows] };
+      // A single, unaligned layout item fills the available row, even for short content.
+      // Keep a native table fallback for clients without layout support.
+      blocks.push({ type: 'layout', label: message.kind?.slice(0, 150) ?? 'Résultats',
+        rows: [{ items: [{ width: 'wide', block: dataTable }] }], fallback: [dataTable] });
       for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
     }
     if (blocks.length > 50) throw new SlackDeliveryRejected('Message has too many Slack blocks.');

@@ -141,14 +141,15 @@ export class DevelopmentConfiguration {
     const bound = payload.type === 'menu_action' && await new Navigation(context.sql, context.messenger).boundTarget(actor, payload.value, payload.timestamp);
     if (!bound) return show(expired);
     if (payload.action === 'configuration_prepare') {
-      const prior = bound.value.startsWith('form:') ? await this.saved.get(actor, bound.value.slice(5)) : undefined;
-      if (bound.value.startsWith('form:') && (!prior || prior.channel !== actor.channel)) return show(expired);
-      const base = prior ? prior.base : bound.value === 'new' ? null : bound.value.startsWith('project:') ? await this.store.project(bound.value.slice(8)) : undefined;
+      const destination = bound.value.replace(/^refresh:/, '');
+      const prior = destination.startsWith('form:') ? await this.saved.get(actor, destination.slice(5)) : undefined;
+      if (destination.startsWith('form:') && (!prior || prior.channel !== actor.channel)) return show(expired);
+      const base = prior ? prior.base : destination === 'new' ? null : destination.startsWith('project:') ? await this.store.project(destination.slice(8)) : undefined;
       // Candidate values belong to this User; an invalid destination must remain correctable.
       if (base === undefined || !await this.access(actor, base)) return show('Projet inaccessible. Vérifiez les accès Slack et rouvrez les projets.');
       let folders: FolderChoice[];
-      const retry = [{ label: 'Actualiser les dossiers', action: 'configuration_prepare', value: bound.value, bound: true }];
-      try { folders = await this.clickup.folders(); }
+      const retry = [{ label: 'Actualiser les dossiers', action: 'configuration_prepare', value: `refresh:${destination}`, bound: true }];
+      try { folders = await this.clickup.folders(!!prior || bound.value.startsWith('refresh:')); }
       catch { return show('Les dossiers ClickUp n’ont pas pu être chargés complètement. Vérifiez les accès de l’intégration puis actualisez les dossiers. Aucun projet modifié.', retry); }
       if (!folders.length) return show('Aucun dossier ClickUp actif accessible à l’intégration Development. Vérifiez ses accès et la présence de dossiers, puis actualisez les dossiers. Aucun projet modifié.', retry);
       if (prior) {
@@ -172,7 +173,9 @@ export class DevelopmentConfiguration {
         if (problem) return show(`${problem}\nAucune configuration enregistrée.`, [{ label: 'Corriger le formulaire', action: 'configuration_prepare', value: `form:${form.id}`, bound: true }]);
       }
       const state = await this.saved.finish(actor, form.id, cancel);
-      return show(state === 'applied' ? `Projet ${form.candidate!.name} enregistré. ${form.candidate!.enabled ? 'Projet activé.' : 'Projet suspendu.'}` : state === 'already_applied' ? 'Cette configuration a déjà été enregistrée. Aucune nouvelle modification.' : state === 'cancelled' ? 'Configuration annulée. Aucune nouvelle modification.' : 'Configuration non enregistrée : formulaire expiré ou projet modifié. Rouvrez le projet pour continuer.', [], state === 'applied' || state === 'already_applied' ? [{ label: 'Ouvrir le projet', page: projectPage(form.candidate!.id) }, ...home] : home);
+      if (state === 'cancelled') return this.menus.show(actor, eventId, context,
+        await this.menus.page(actor, form.base ? projectPage(form.base.id) : 'projects_0'), bound.target);
+      return show(state === 'applied' ? `Projet ${form.candidate!.name} enregistré. ${form.candidate!.enabled ? 'Projet activé.' : 'Projet suspendu.'}` : state === 'already_applied' ? 'Cette configuration a déjà été enregistrée. Aucune nouvelle modification.' : 'Configuration non enregistrée : formulaire expiré ou projet modifié. Rouvrez le projet pour continuer.', [], state === 'applied' || state === 'already_applied' ? [{ label: 'Ouvrir le projet', page: projectPage(form.candidate!.id) }, ...home] : home);
     }
     return show(expired);
   }

@@ -96,6 +96,13 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
         ...message, buttons: [...(message.buttons ?? []), menuButton],
       }) },
         admitSort: (user, sourceId) => new JobStore(context.sql).claimOperation(sourceId, user, 'mail', SORT_OPERATION),
+        showMenu: async (user, state, destination) => {
+          const page = mailMenu(state, destination);
+          await new Navigation(context.sql, context.messenger).show(user, eventId, { ...page,
+            links: page.links?.map(link => ({ ...link, page: `mail:${link.page}` })),
+            recordChoices: page.recordChoices?.map(link => ({ ...link, page: `mail:${link.page}` })),
+            buttons: [...page.buttons ?? [], menuButton] });
+        },
         intelligence: new OpenAI(config.OPENAI_API_KEY, config.OPENAI_MODEL, context.budget),
         connectUrl: user => oauth.invitation(user),
         mailbox: (user, state) => new Gmail(vault.open<Tokens>(state.connection!.encryptedTokens, ownerKey(user)), config.GOOGLE_CLIENT_ID, config.GOOGLE_CLIENT_SECRET,

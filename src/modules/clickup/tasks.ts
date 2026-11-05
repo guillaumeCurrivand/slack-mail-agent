@@ -9,7 +9,6 @@ import { filterSummary, matchesStatus } from './status-filter.js';
 
 const day = (value: number) => new Intl.DateTimeFormat('sv-SE', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
 const date = (value: number) => new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', year: 'numeric', month: '2-digit', day: '2-digit' }).format(value);
-const shorten = (value: string, length = 90) => value.length > length ? `${value.slice(0, length - 1)}…` : value;
 const eligible = (task: Task, subject: string, filter: StatusFilter) => !task.archived && task.assignees.includes(subject) && matchesStatus(filter, task.status, !['done', 'closed'].includes(task.statusType));
 const sort = (a: Task, b: Task) => (a.due === null ? '9999-99-99' : day(a.due)).localeCompare(b.due === null ? '9999-99-99' : day(b.due)) || a.name.localeCompare(b.name, 'fr') || a.id.localeCompare(b.id);
 
@@ -57,8 +56,17 @@ export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor:
 }
 
 export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connection, workspaceId: string, sourceId: string, requestedPage: number): Promise<MenuPage> {
-  const count = Math.max(1, Math.ceil(scan.tasks.length / 40)), page = Math.min(requestedPage, count - 1);
-  const visible = scan.tasks.slice(page * 40, (page + 1) * 40), accessible: Task[] = [];
+  // Keep complete names and locations; use smaller pages when values are long.
+  const pages: Task[][] = [[]];
+  const tableBudget = Math.max(1000, 16_000 - filterSummary(scan.filter ?? { mode: 'default' }).length);
+  let size = 0;
+  for (const task of scan.tasks) {
+    const length = task.name.length + task.url.length + task.status.length + task.priority.length + task.workspace.length + task.list.length + 80;
+    if (pages.at(-1)!.length && (pages.at(-1)!.length >= 40 || size + length > tableBudget)) { pages.push([]); size = 0; }
+    pages.at(-1)!.push(task); size += length;
+  }
+  const count = pages.length, page = Math.max(0, Math.min(requestedPage, count - 1));
+  const visible = pages[page]!, accessible: Task[] = [];
   let accessNotice = '';
   try {
     const identity = await api.identity();
@@ -88,9 +96,10 @@ export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connecti
     scan.complete && !scan.tasks.length ? 'Aucune tâche assignée correspondant à ce filtre dans Mayasquad.' : '',
     scan.notice, accessNotice,
   ].filter(Boolean).join('\n');
-  return { kind: 'Mes tâches ClickUp', text, bindButtons: true, buttons,
+  // Result paging must revisit this handler and recheck live task access, never cached display rows.
+  return { kind: 'Mes tâches ClickUp', text, bindButtons: true, buttons, tablePaging: false,
     ...(accessible.length ? { table: { columns: ['Tâche', 'Statut', 'Échéance', 'Priorité', 'Workspace', 'Liste'], rows: accessible.map(task => [
-      [{ text: shorten(task.name), url: task.url }], shorten(task.status), task.due === null ? '—' : `${date(task.due)}${day(task.due) < day(Date.now()) ? ' · En retard' : ''}`, shorten(task.priority), shorten(task.workspace), shorten(task.list),
+      [{ text: task.name, url: task.url }], task.status, task.due === null ? '—' : `${date(task.due)}${day(task.due) < day(Date.now()) ? ' · En retard' : ''}`, task.priority, task.workspace, task.list,
     ]) } } : {}),
   };
 }

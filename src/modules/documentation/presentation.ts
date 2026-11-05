@@ -11,7 +11,6 @@ const labels: Record<string, string> = { name: "Nom", aliases: "Alias", descript
 const referenceKinds: Record<string, Kind> = { projectId: 'project', projects: 'project', componentId: 'component', serviceId: 'host', technologies: 'technology' };
 const urlFields = new Set(['repositories', 'documentationLinks', 'urls']);
 const title = (field: string) => labels[field] ?? field;
-const abbreviation = (text: string, limit = 180) => text.length > limit ? `${text.slice(0, limit)}… [abrégé ; ouvrir les détails de la fiche]` : text;
 export const tableSize = (table: MessageTable) => table.columns.join('').length + table.rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0);
 
 /** Module-owned names, relationships and values. The transport only receives literal cells. */
@@ -36,7 +35,7 @@ export class InventoryPresentation {
     const parts = (summary ? urls.slice(0, 1) : urls).flatMap((url, index) => {
       let label = url;
       if (!exact && validResourceUrl(url)) { const parsed = new URL(url); label = `${field === 'repositories' ? "Dépôt" : field === 'documentationLinks' ? 'Documentation' : "Ouvrir"}: ${parsed.host}${parsed.pathname}${parsed.search}${parsed.hash}`; }
-      return [...(index ? [{ text: '\n' }] : []), { text: summary ? abbreviation(label, 100) : label, ...(validResourceUrl(url) ? { url } : {}) }];
+      return [...(index ? [{ text: '\n' }] : []), { text: label, ...(validResourceUrl(url) ? { url } : {}) }];
     });
     return summary && urls.length > 1 ? [...parts, { text: `\n+ ${urls.length - 1} autres liens (ouvrir les détails de la fiche)` }] : parts;
   }
@@ -87,13 +86,11 @@ export class InventoryPresentation {
         if (field === 'cost') return record.fields.monthlyCost == null ? "Inconnu" : `${formatNumber(Number(record.fields.monthlyCost))} ${record.fields.currency}`;
         if (field === 'usedBy') return `${record.fields.companyWide === true ? "Toute l’entreprise\n" : record.fields.companyWide === null ? "Toute l’entreprise : inconnu\n" : ''}${cellText(await this.value('projects', record.fields.projects))}`;
         const value = await this.value(field, record.fields[field]);
-        return typeof value === 'string' ? abbreviation(value) + ((field === 'name' || field === 'environment') && record.archived ? " [Archivé]" : '') : value;
+        return typeof value === 'string' ? value + ((field === 'name' || field === 'environment') && record.archived ? " [Archivé]" : '') : value;
       }));
     }));
-    // Keep every record and row action while fitting Slack's data-table character budget.
+    // valuePages preserves complete cells and their record actions within Slack's budget.
     const table: MessageTable = { columns, rows };
-    if (tableSize(table) > 17_000) table.rows = rows.map(row => row.map(cell => typeof cell === 'string' ? abbreviation(cell, 70) : cell.map(part => ({ ...part, text: abbreviation(part.text, 70) }))));
-    if (tableSize(table) > 19_000) table.rows = table.rows.map(row => row.map(cell => typeof cell === 'string' ? abbreviation(cell, 40) : "Liens : ouvrir la fiche"));
     const names = await Promise.all(records.map(record => this.name(record.kind, record.id)));
     const choices = names.map((name, index) => ({ label: `${index + 1}. ${name}`.slice(0, 75), page: destinations?.[index] ?? `${records[index]!.kind}_${records[index]!.id}` }));
     return { table, recordChoices: choices };
@@ -109,7 +106,8 @@ export function valuePages(content: MenuPage): MenuPage[] {
   }
   if (!content.table) return textPages.map(text => ({ ...content, text }));
   const tables: MessageTable[] = [{ columns: content.table.columns, rows: [] }];
-  for (const row of content.table.rows) {
+  const sources: number[][] = [[]];
+  for (const [source, row] of content.table.rows.entries()) {
     const chunks = row.map(cell => {
       if (typeof cell !== 'string') {
         const pieces: Array<Exclude<TableCell, string>> = [[]];
@@ -125,11 +123,18 @@ export function valuePages(content: MenuPage): MenuPage[] {
     const count = Math.max(...chunks.map(parts => parts.length));
     for (let i = 0; i < count; i++) {
       const piece = chunks.map((parts, index) => parts[i] ?? (index === 0 ? `${cellText(row[0]!)} (suite)` : ''));
-      if (tableSize({ ...tables.at(-1)!, rows: [...tables.at(-1)!.rows, piece] }) > 18_000) tables.push({ columns: content.table.columns, rows: [] });
+      if (tables.at(-1)!.rows.length >= 100 || tableSize({ ...tables.at(-1)!, rows: [...tables.at(-1)!.rows, piece] }) > 17_000) {
+        tables.push({ columns: content.table.columns, rows: [] });
+        sources.push([]);
+      }
       tables.at(-1)!.rows.push(piece);
+      sources.at(-1)!.push(source);
     }
   }
-  return Array.from({ length: Math.max(textPages.length, tables.length) }, (_, index) => ({ ...content, text: textPages[index] ?? "Valeurs enregistrées complètes (suite).", table: tables[index] }));
+  return Array.from({ length: Math.max(textPages.length, tables.length) }, (_, index) => ({ ...content, text: textPages[index] ?? "Valeurs enregistrées complètes (suite).",
+    table: tables[index] && { ...content.table!, ...tables[index]!, ...(content.table!.rowButtons ? { rowButtons: sources[index]!.map(source => content.table!.rowButtons![source]!) } : {}) },
+    ...(content.recordChoices?.length === content.table!.rows.length ? { recordChoices: sources[index]?.map(source => content.recordChoices![source]!) ?? [] } : {}),
+  }));
 }
 
 const operations: Record<string, string> = { create: "créer", edit: "modifier", archive: "archiver", restore: "restaurer" };

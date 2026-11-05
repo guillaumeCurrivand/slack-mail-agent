@@ -1,3 +1,4 @@
+import { tableBlocks } from './slack-blocks.js';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
@@ -93,7 +94,7 @@ async function harness() {
     return posts.filter(post => post.channel === actor.channel).at(-1)!;
   };
   // Workflow tests identify compact table controls by their channel's row name.
-  const buttons = (post: (typeof posts)[number]) => post.blocks.flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements
+  const buttons = (post: (typeof posts)[number]) => tableBlocks(post.blocks).flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements
     : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element,
       text: { ...cell.element.text, text: `${cell.element.text.text.replace(/^[☐☑] /, '')} ${row[0].text}` },
     }))) : []);
@@ -163,9 +164,9 @@ it('shares selections through signed private routing while hiding private destin
 
 it('renders a channel table with signed checkbox-style controls that update and persist in place', async () => {
   const h = await harness(), list = await h.text('yousign canaux');
-  const table = list.blocks.find(block => block.type === 'data_table');
+  const table = tableBlocks(list.blocks).find(block => block.type === 'data_table');
   expect(table?.rows[0].map((cell: any) => cell.text)).toEqual(['Canal', 'Visibilité', 'Notifications', 'Sélection']);
-  expect(list.blocks.map(block => block.type)).toEqual(['container', 'data_table', 'container']);
+  expect(list.blocks.map(block => block.type)).toEqual(['container', 'layout', 'container']);
   expect(table.rows.slice(1).map((row: any[]) => row.slice(0, 3).map(cell => cell.text))).toEqual([
     ['#legal', 'Privé', 'Désactivées'], ['#sales', 'Public', 'Désactivées'],
   ]);
@@ -179,16 +180,16 @@ it('renders a channel table with signed checkbox-style controls that update and 
   expect((await h.sql.query('SELECT * FROM yousign_destinations')).rows).toHaveLength(0);
   const activated = await h.click(list, 'Activer #legal');
   expect(activated.ts).toBe(list.ts);
-  const activeRow = activated.blocks.find(block => block.type === 'data_table')!.rows[1];
+  const activeRow = tableBlocks(activated.blocks).find(block => block.type === 'data_table')!.rows[1];
   expect(activeRow[2].text).toBe('Activées');
   expect(activeRow[3].element.text.text).toBe('☑ Retirer');
   expect(activeRow[3].element.style).toBe('danger');
   expect(activeRow[3].element.action_id).toMatch(/^yousign:channel_remove~button-\d+$/);
   const reopened = await h.text('yousign channels');
-  expect(reopened.blocks.find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
+  expect(tableBlocks(reopened.blocks).find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
   const removed = await h.click(reopened, 'Retirer #legal');
   expect(removed.ts).toBe(reopened.ts);
-  expect(removed.blocks.find(block => block.type === 'data_table')!.rows[1][3].element.text.text).toBe('☐ Activer');
+  expect(tableBlocks(removed.blocks).find(block => block.type === 'data_table')!.rows[1][3].element.text.text).toBe('☐ Activer');
 });
 
 it('opens the same channel table from menu navigation and typed commands', async () => {
@@ -196,12 +197,12 @@ it('opens the same channel table from menu navigation and typed commands', async
   const main = await h.click(await h.text('menu'), 'Yousign');
   const page = await h.click(main, 'Choisir les canaux');
   expect(page.ts).toBe(main.ts);
-  const typedTable = typed.blocks.find(block => block.type === 'data_table')!, menuTable = page.blocks.find(block => block.type === 'data_table')!;
+  const typedTable = tableBlocks(typed.blocks).find(block => block.type === 'data_table')!, menuTable = tableBlocks(page.blocks).find(block => block.type === 'data_table')!;
   expect(menuTable.rows.map((row: any[]) => row.slice(0, 3))).toEqual(typedTable.rows.map((row: any[]) => row.slice(0, 3)));
   expect(menuTable.rows[1][3].element.action_id).toMatch(/^yousign:channel_add~button-\d+$/);
   const selected = await h.click(page, 'Activer #legal');
   expect(selected.ts).toBe(page.ts);
-  expect(selected.blocks.find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
+  expect(tableBlocks(selected.blocks).find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
 });
 
 it('retains inaccessible selections and hides their rows when current access is lost', async () => {
@@ -216,19 +217,19 @@ it('retains inaccessible selections and hides their rows when current access is 
 it('shows recovery navigation without an empty table when no channels can be displayed', async () => {
   const h = await harness(); h.aliceChannels.length = 0;
   const empty = await h.text('yousign canaux');
-  expect(empty.blocks.some(block => block.type === 'data_table')).toBe(false);
+  expect(tableBlocks(empty.blocks).some(block => block.type === 'data_table')).toBe(false);
   expect(empty.text).toContain('Aucun canal partagé');
   expect(h.buttons(empty).map(button => button.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour à Yousign', 'Menu']);
   h.setDirectoryFailure(true);
   const unavailable = await h.text('yousign canaux');
-  expect(unavailable.blocks.some(block => block.type === 'data_table')).toBe(false);
+  expect(tableBlocks(unavailable.blocks).some(block => block.type === 'data_table')).toBe(false);
   expect(unavailable.text).toContain('ne peut pas être vérifié');
   expect(h.buttons(unavailable).map(button => button.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour à Yousign', 'Menu']);
 });
 
 it('keeps previously posted unsuffixed channel controls compatible', async () => {
   const h = await harness(), list = await h.text('yousign canaux');
-  const row = list.blocks.find(block => block.type === 'data_table')!.rows.find((row: any[]) => row[0].text === '#sales');
+  const row = tableBlocks(list.blocks).find(block => block.type === 'data_table')!.rows.find((row: any[]) => row[0].text === '#sales');
   const legacy = { ...list, blocks: [{ type: 'actions', elements: [{ ...row[3].element, action_id: 'yousign:channel_add', text: { type: 'plain_text', text: 'Activer #sales' } }] }] };
   await h.click(legacy, 'Activer #sales');
   expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'CPUBLIC' }]);
@@ -311,7 +312,7 @@ it('does not repeat uncertain effects and requires exact actor/DM-bound confirma
   expect(attention.ts).toBe(status.ts);
   expect(JSON.stringify(attention.blocks)).toContain('signer.done');
   expect(JSON.stringify(attention.blocks)).not.toContain('signature_request.done');
-  expect(attention.blocks.find(block => block.type === 'data_table').rows).toHaveLength(2);
+  expect(tableBlocks(attention.blocks).find(block => block.type === 'data_table').rows).toHaveLength(2);
   const proposal = await h.click(attention, 'Examiner #sales');
   expect(proposal.ts).toBe(status.ts);
   expect(proposal.text).toContain('Contrat'); expect(proposal.text).toContain('doublon');
@@ -409,17 +410,17 @@ it('paginates the shared selector and accepts eligible externally shared channel
   const h = await harness();
   for (let index = 0; index < 12; index++) h.aliceChannels.push({ id: `CEXTERNAL${index}`, name: `external-${String(index).padStart(2, '0')}`, is_channel: true, is_ext_shared: true });
   const first = await h.text('yousign channels'); expect(first.text).toContain('page 1/2');
-  const firstRows = first.blocks.find(block => block.type === 'data_table')!.rows.slice(1);
+  const firstRows = tableBlocks(first.blocks).find(block => block.type === 'data_table')!.rows.slice(1);
   expect(firstRows).toHaveLength(10);
   expect(firstRows.every((row: any[]) => row[3].type === 'action_cell')).toBe(true);
   expect(new Set(firstRows.map((row: any[]) => row[3].element.action_id)).size).toBe(10);
   expect(h.buttons(first).some(button => /Actions/.test(button.text.text))).toBe(false);
   const second = await h.click(first, 'Suivant'); expect(second.ts).toBe(first.ts); expect(second.text).toContain('page 2/2');
-  expect(second.blocks.find(block => block.type === 'data_table')!.rows.slice(1).map((row: any[]) => row[0].text)).toEqual(['#external-10', '#external-11', '#legal', '#sales']);
+  expect(tableBlocks(second.blocks).find(block => block.type === 'data_table')!.rows.slice(1).map((row: any[]) => row[0].text)).toEqual(['#external-10', '#external-11', '#legal', '#sales']);
   expect(h.buttons(second).some(button => /Actions/.test(button.text.text))).toBe(false);
   const selected = await h.click(second, 'Activer #external-10');
   expect(selected.ts).toBe(first.ts);
-  expect(selected.blocks.find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
+  expect(tableBlocks(selected.blocks).find(block => block.type === 'data_table')!.rows[1][2].text).toBe('Activées');
   expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'CEXTERNAL10' }]);
   const previous = await h.click(selected, 'Précédent');
   expect(previous.ts).toBe(first.ts); expect(previous.text).toContain('page 1/2');

@@ -1,5 +1,5 @@
 import { ownerKey, uid, type Actor } from './identity.js';
-import { buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger } from './slack.js';
+import { buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger, type MessageTable } from './slack.js';
 import type { Sql } from './store.js';
 
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
@@ -81,22 +81,44 @@ const splitText = (value: string, reply: boolean): string[] => {
   return pages;
 };
 
+function tablePages(table: MessageTable, budget: number): MessageTable[] {
+  const pages: MessageTable[] = [];
+  let first = 0, size = table.columns.join('').length;
+  for (let index = 0; index < table.rows.length; index++) {
+    const rowSize = table.rows[index]!.reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0)
+      + (table.rowButtons ? Math.max(75, table.rowButtonFallback?.length ?? 0) : 0);
+    if (index > first && (size + rowSize > budget || index - first >= 100)) {
+      pages.push({ ...table, rows: table.rows.slice(first, index), ...(table.rowButtons ? { rowButtons: table.rowButtons.slice(first, index) } : {}) });
+      first = index; size = table.columns.join('').length;
+    }
+    size += rowSize;
+  }
+  pages.push({ ...table, rows: table.rows.slice(first), ...(table.rowButtons ? { rowButtons: table.rowButtons.slice(first) } : {}) });
+  return pages;
+}
+
 function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0, namespace = 'core'): AgentMessage {
   const textPages = splitText(message.text, !message.kind);
-  const textPage = Math.max(0, Math.min(requestedText, textPages.length - 1));
+  // Retain full rows and their bound actions in saved content; only delivery is paged.
+  const budget = 19_000 - Math.max(...textPages.map(text => text.length))
+    - (message.resourceLinks ?? []).reduce((sum, link) => sum + link.label.length + link.url.length, 0)
+    - (message.buttons ?? []).reduce((sum, button) => sum + button.label.length, 0);
+  const tables = message.table ? message.tablePaging === false ? [message.table] : tablePages(message.table, budget) : [];
+  const contentPages = Math.max(textPages.length, tables.length);
+  const textPage = Math.max(0, Math.min(requestedText, contentPages - 1));
   // Ordinary screens keep all choices visible in short Slack action rows.
   const { pages, pinned } = needsControlPaging(message)
-    ? controlPages(message.buttons ?? [], textPages.length > 1)
+    ? controlPages(message.buttons ?? [], contentPages > 1)
     : { pages: [message.buttons ?? []], pinned: [] as Button[] };
   const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
   const pageButton = (label: string, nextControl: number, nextText: number) => ({ label, action: `${namespace}:controls`, value: `${id}|${nextControl}|${nextText}`, ...(namespace === 'core' ? { scope: 'core' as const } : {}) });
-  return { ...message, text: textPages.length > 1 ? `Réponse — page ${textPage + 1}/${textPages.length}\n${textPages[textPage]}` : message.text,
-    ...(textPage && message.table ? { table: undefined } : {}),
+  return { ...message, text: contentPages > 1 ? `Réponse — page ${textPage + 1}/${contentPages}\n${textPages[textPage] ?? ''}` : message.text,
+    ...(message.table ? { table: tables[textPage] } : {}),
     buttons: [...pages[controlPage]!, ...pinned,
       ...(controlPage ? [pageButton(previousActions, controlPage - 1, textPage)] : []),
       ...(controlPage + 1 < pages.length ? [pageButton(nextActions, controlPage + 1, textPage)] : []),
-      ...(textPage ? [pageButton('Précédent', controlPage, textPage - 1)] : []),
-      ...(textPage + 1 < textPages.length ? [pageButton('Suivant', controlPage, textPage + 1)] : [])] };
+      ...(textPage ? [pageButton(tables.length > 1 ? 'Tableau précédent' : 'Précédent', controlPage, textPage - 1)] : []),
+      ...(textPage + 1 < contentPages ? [pageButton(tables.length > 1 ? 'Tableau suivant' : 'Suivant', controlPage, textPage + 1)] : [])] };
 }
 
 /** Recorded Agent messages can update only through owner- and message-bound controls. */

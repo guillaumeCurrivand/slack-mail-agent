@@ -70,7 +70,7 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
       }
       if (command === 'cancel') {
         await store.cancel(actor, value);
-        return show({ kind: 'ClickUp', text: 'La proposition est annulée ou déjà indisponible.' });
+        return show(connectionPage(await store.connection(actor)));
       }
       if (command === 'confirm') {
         const proposal = await store.confirmation(actor, value, true);

@@ -38,7 +38,7 @@ export class DevelopmentMenu {
       const index = Math.min(Number(list[1]), Math.max(0, Math.ceil(projects.length / pageSize) - 1));
       const rows = projects.slice(index * pageSize, (index + 1) * pageSize);
       return { kind: 'Projets de développement', text: rows.length ? `Page ${index + 1} — choisissez un projet pour consulter ses traitements.` : 'Aucun projet accessible. Vous et le bot devez être membres du canal du projet. Configurez un projet ou vérifiez les accès Slack.',
-        ...(rows.length ? { table: { columns: ['Projet', 'État', 'Canal', 'Dépôts'], rows: rows.map(p => [p.name.slice(0, 200), p.enabled ? 'Activé' : 'Suspendu', p.channel, projectRepositories(p).map(repositoryName).join(', ').slice(0, 500)]) },
+        ...(rows.length ? { table: { columns: ['Projet', 'État', 'Canal', 'Dépôts'], rows: rows.map(p => [p.name, p.enabled ? 'Activé' : 'Suspendu', p.channel, projectRepositories(p).map(repositoryName).join(', ')]) },
           recordChoices: rows.map(p => ({ label: p.name, page: projectPage(p.id) })) } : {}),
         links: [
           ...(index ? [{ label: 'Précédent', page: `projects_${index - 1}` }] : []),
@@ -89,10 +89,9 @@ export class DevelopmentMenu {
       if (access.get(run.config.channel)) rows.push(run);
     }
     return { kind: `Traitements — ${project.name}`, text: `Page ${index + 1}. ${rows.length ? 'Cliquez sur l’état pour ouvrir le résultat et ses actions : annuler une attente, relancer un traitement éligible ou gérer les dépôts. Les actions demandent confirmation ; un état terminé ne peut pas être déclaré manuellement.' : 'Aucun traitement sur cette page.'}`,
-      ...(rows.length ? { table: { columns: ['Ticket / dépôt', 'Type', 'Essais'], rows: rows.map(run => [`${run.ticket.name} / ${repositoryName(run.config.repository)}`.slice(0, 300), run.kind === 'build' ? 'Correction' : run.kind === 'scope' ? 'Détection des dépôts' : 'Analyse', `${run.attempts}/2`]),
-        rowButtonColumn: 'État', rowButtonFallback: 'Ouvrez le traitement avec les boutons sous le tableau.',
-        rowButtons: rows.map(run => ({ label: labels[run.state] ?? run.state, action: 'open_run', value: runPage(run.id).slice(4), bound: true })) },
-        buttons: rows.map(run => ({ label: `Ouvrir : ${run.ticket.name} / ${repositoryName(run.config.repository)}`.slice(0, 70), action: 'open_run', value: runPage(run.id).slice(4), bound: true })) } : {}),
+      ...(rows.length ? { table: { columns: ['Ticket / dépôt', 'Type', 'Essais'], rows: rows.map(run => [`${run.ticket.name} / ${repositoryName(run.config.repository)}`, run.kind === 'build' ? 'Correction' : run.kind === 'scope' ? 'Détection des dépôts' : 'Analyse', `${run.attempts}/2`]),
+        rowButtonColumn: 'Actions / état', rowButtonFallback: 'Ouvrez development menu dans un client Slack récent.',
+        rowButtons: rows.map(run => ({ label: labels[run.state] ?? run.state, action: 'open_run', value: runPage(run.id).slice(4), bound: true })) } } : {}),
       links: [...(index ? [{ label: 'Précédent', page: `history_${project.id}_${index - 1}` }] : []), ...(found.length > pageSize ? [{ label: 'Suivant', page: `history_${project.id}_${index + 1}` }] : []),
         { label: 'Actualiser', page: `history_${project.id}_${index}` }, { label: 'Retour au projet', page: projectPage(project.id) }, ...back] };
   }
@@ -110,9 +109,8 @@ export class DevelopmentMenu {
     }
     return { kind: 'Traitements du ticket', text: `Page ${index + 1}. ${rows.length ? 'Ouvrez un traitement pour voir le résultat et la prochaine action disponible. Les confirmations restent séparées.' : 'Aucun traitement accessible sur cette page.'}`,
       ...(rows.length ? { table: { columns: ['Dépôt', 'Type', 'Mis à jour'], rows: rows.map(run => [repositoryName(run.config.repository), run.kind === 'build' ? 'Correction' : run.kind === 'scope' ? 'Détection des dépôts' : 'Analyse', formatDate(run.updated_at)]),
-        rowButtonColumn: 'État / actions', rowButtonFallback: 'Ouvrez le traitement avec les boutons sous le tableau.',
-        rowButtons: rows.map(run => ({ label: labels[run.state] ?? run.state, action: 'open_run', value: runPage(run.id).slice(4), bound: true })) },
-        buttons: rows.map(run => ({ label: `Ouvrir : ${repositoryName(run.config.repository)} — ${labels[run.state] ?? run.state}`.slice(0, 70), action: 'open_run', value: runPage(run.id).slice(4), bound: true })) } : {}),
+        rowButtonColumn: 'Actions / état', rowButtonFallback: 'Ouvrez development menu dans un client Slack récent.',
+        rowButtons: rows.map(run => ({ label: labels[run.state] ?? run.state, action: 'open_run', value: runPage(run.id).slice(4), bound: true })) } } : {}),
       links: [...(index ? [{ label: 'Précédent', page: `route_runs_${ticket}_${index - 1}` }] : []), ...(found.length > pageSize ? [{ label: 'Suivant', page: `route_runs_${ticket}_${index + 1}` }] : []), { label: 'Actualiser', page: `route_runs_${ticket}_${index}` }, { label: 'Retour au ticket', page: `route_${ticket}` }] };
   }
 
@@ -140,7 +138,9 @@ export class DevelopmentMenu {
         catch { return this.show(actor, eventId, context, { kind: 'Relance indisponible', text: 'Lecture ClickUp indisponible. Aucune relance enregistrée. Réessayez la confirmation après rétablissement des accès.', links: back }); }
       }
       const state = await this.store.confirm(actor, value, action === 'cancel', ticket);
-      return this.show(actor, eventId, context, { kind: 'Développement — confirmation', text: state === 'applied' ? proposal.operation === 'cancel_run' ? 'Traitement annulé avant sa prise en charge. Aucun travail en cours n’a été interrompu. Le statut ClickUp reste inchangé ; une correction annulée ne repart pas au prochain passage de la surveillance.' : proposal.operation === 'retry' ? 'Relance enregistrée. Cette confirmation ne peut créer qu’un seul traitement.' : proposal.operation === 'pause' ? 'Projet suspendu. Les traitements déjà démarrés peuvent terminer.' : 'Projet réactivé. Les tickets Ready for AI et la file existante sont éligibles au worker.' : state === 'already_applied' ? 'Cette demande a déjà été appliquée. Aucune nouvelle action effectuée ; consultez le projet pour connaître son état actuel.' : state === 'cancelled' ? 'Demande annulée.' : 'Confirmation expirée, configuration modifiée ou traitement indisponible (il a peut-être déjà démarré). Revenez au suivi avant de préparer une nouvelle demande.', links: [{ label: 'Voir les traitements', page: `history_${proposal.project.id}_0` }, { label: 'Retour au projet', page: projectPage(proposal.project.id) }] }, bound.target);
+      if (state === 'cancelled') return this.show(actor, eventId, context,
+        await this.page(actor, run ? runPage(run.id) : projectPage(proposal.project.id)), bound.target);
+      return this.show(actor, eventId, context, { kind: 'Développement — confirmation', text: state === 'applied' ? proposal.operation === 'cancel_run' ? 'Traitement annulé avant sa prise en charge. Aucun travail en cours n’a été interrompu. Le statut ClickUp reste inchangé ; une correction annulée ne repart pas au prochain passage de la surveillance.' : proposal.operation === 'retry' ? 'Relance enregistrée. Cette confirmation ne peut créer qu’un seul traitement.' : proposal.operation === 'pause' ? 'Projet suspendu. Les traitements déjà démarrés peuvent terminer.' : 'Projet réactivé. Les tickets Ready for AI et la file existante sont éligibles au worker.' : state === 'already_applied' ? 'Cette demande a déjà été appliquée. Aucune nouvelle action effectuée ; consultez le projet pour connaître son état actuel.' : 'Confirmation expirée, configuration modifiée ou traitement indisponible (il a peut-être déjà démarré). Revenez au suivi avant de préparer une nouvelle demande.', links: [{ label: 'Voir les traitements', page: `history_${proposal.project.id}_0` }, { label: 'Retour au projet', page: projectPage(proposal.project.id) }] }, bound.target);
     }
     const runAction = ['propose_retry', 'propose_cancel_run'].includes(String(action));
     const run = runAction ? await this.store.runByPage(value) : undefined;

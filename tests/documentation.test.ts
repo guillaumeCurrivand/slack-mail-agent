@@ -1,3 +1,4 @@
+import { tableBlocks } from './slack-blocks.js';
 import { createHmac, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -24,7 +25,7 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
 type Posted = { method: string; body: any; ts: string; controls?: any[] };
-function parts(message: Posted): any[] { return message.body.blocks.flatMap((block: any) => block.child_blocks ?? [block]); }
+function parts(message: Posted): any[] { return tableBlocks(message.body.blocks).flatMap((block: any) => block.child_blocks ?? [block]); }
 function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^(?:🧭|\?) /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: cellValue(row[0]) } }))) : []); }
 function rowName(columns: string[], row: any[]): string { return cellValue(row[Math.max(0, columns.indexOf('Nom'))]); }
 function findButton(message: Posted, label: string) {
@@ -42,7 +43,7 @@ const fieldLabel = (value: string) => ({ notes: "Notes", type: "Type", environme
 function visibleLinks(message: Posted): string[] {
   const urls: string[] = [];
   const visit = (value: any) => { if (!value || typeof value !== 'object') return; if (value.type === 'link') urls.push(value.url); for (const item of Object.values(value)) { if (Array.isArray(item)) item.forEach(visit); else if (item && typeof item === 'object') visit(item); } };
-  message.body.blocks.forEach(visit); return urls;
+  tableBlocks(message.body.blocks).forEach(visit); return urls;
 }
 function tableRows(message: Posted): Record<string, string>[] {
   const table = parts(message).find(block => ['table', 'data_table'].includes(block.type));
@@ -216,10 +217,10 @@ it('renders native top-level tables with private row buttons, clickable saved li
     expect(visibleLinks(proposal)).toEqual(['https://example.com/alpha?branch=main', 'http://docs.example.com/alpha']);
     await h.click(proposal, "Confirmer la création");
     const list = await h.dm('documentation projects');
-    const table = list.body.blocks.find((block: any) => block.type === 'data_table');
-    expect(table.rows[0].map(cellValue)).toEqual(["Nom", "Description", "Liens", "Ouvrir"]);
+    const table = tableBlocks(list.body.blocks).find((block: any) => block.type === 'data_table');
+    expect(table.rows[0].map(cellValue)).toEqual(["Nom", "Description", "Liens", "Actions"]);
     expect(table.rows).toHaveLength(2);
-    expect(list.body.blocks.filter((block: any) => block.type === 'data_table')).toHaveLength(1);
+    expect(tableBlocks(list.body.blocks).filter((block: any) => block.type === 'data_table')).toHaveLength(1);
     expect(table.rows[1][3].type).toBe('action_cell');
     expect(parts(list).filter(block => block.type === 'actions').flatMap(block => block.elements).filter((element: any) => element.type === 'static_select')).toHaveLength(0);
     expect(parts(list).filter(block => block.type === 'actions').flatMap(block => block.elements).filter((element: any) => element.type === 'button').some((element: any) => element.text.text === 'Alpha')).toBe(false);
@@ -286,7 +287,7 @@ it('preserves all long relationship comparison values across native table pages 
     const before = (await sql.query('SELECT created_at,applied_at FROM documentation_confirmations WHERE id=$1', [confirmation])).rows[0];
     let page = await h.click(proposal, "Examiner les valeurs"), original = '', replacement = '', pages = 0;
     while (true) {
-      const table = page.body.blocks.find((block: any) => block.type === 'data_table');
+      const table = tableBlocks(page.body.blocks).find((block: any) => block.type === 'data_table');
       expect(table).toBeTruthy();
       const nativeSize = JSON.stringify(table.rows);
       expect(nativeSize).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
@@ -863,26 +864,50 @@ it('queries every relationship direction and keeps company-wide Outils separate 
   } finally { await h.app.close(); }
 });
 
-it('keeps every long-result identity visible and labels abbreviated fields with detail controls', async () => {
+it('keeps complete long-result values and private record controls', async () => {
   const h = await harness();
   try {
     for (let i = 0; i < 9; i++) await h.click(await h.dm(`documentation créer projet ${JSON.stringify({ name: `Long ${i}`, description: 'D'.repeat(1500), notes: 'N'.repeat(1500) })}`), "Confirmer la création");
     const first = await h.dm('documentation search {"target":"project"}');
     const text = bodyText(first);
     for (let i = 0; i < 9; i++) expect(text).toContain(`Long ${i}`);
-    expect(text).toContain("[abrégé ; ouvrir les détails de la fiche]");
+    expect(text).toContain("D".repeat(1500)); expect(text).not.toContain("abrégé");
     expect(bodyText(await h.click(first, 'Long 7'))).toContain('D'.repeat(1500));
     expect(buttons(first).some(control => control.text.text === 'Suivant')).toBe(false);
   } finally { await h.app.close(); }
 });
 
-it('keeps eight Tool identities visible when literal markup makes their escaped summaries exceed a Card', async () => {
+it('pages complete list values while retaining the correct record action on every page', async () => {
+  const h = await harness();
+  try {
+    const names = Array.from({ length: 16 }, (_, i) => `Long ${String(i).padStart(2, '0')}`);
+    for (const name of names) await sql.query('INSERT INTO documentation_projects(team,id,fields) VALUES($1,$2,$3)',
+      [alice.team, randomUUID(), JSON.stringify({ name, description: name + 'D'.repeat(1400) })]);
+    let current = await h.dm('documentation projects');
+    const seen: string[] = [];
+    for (let page = 0; page < 4; page++) {
+      const table = parts(current).find(block => block.type === 'data_table');
+      for (const row of table.rows.slice(1)) {
+        const name = cellValue(row[0]); seen.push(name);
+        expect(cellValue(row[1])).toBe(name + 'D'.repeat(1400));
+        const detail = await h.click(current, name);
+        expect(bodyText(detail)).toContain(name + 'D'.repeat(1400));
+      }
+      const next = buttons(current).find(control => control.text.text === 'Valeurs suivantes');
+      if (!next) break;
+      current = await h.click(current, 'Valeurs suivantes');
+    }
+    expect(seen).toEqual(names);
+  } finally { await h.app.close(); }
+});
+
+it('keeps Tool identities and complete literal markup visible', async () => {
   const h = await harness();
   try {
     for (let i = 0; i < 9; i++) await h.click(await h.dm(`documentation créer outil ${JSON.stringify({ name: `Tool ${i} ${'_'.repeat(110)}`, category: '_'.repeat(120), usage: '_'.repeat(1500), referent: '_'.repeat(1500), companyWide: true })}`), "Confirmer la création");
     const first = await h.dm('documentation search {"target":"tool"}');
     for (let i = 0; i < 9; i++) expect(bodyText(first)).toContain(`Tool ${i}`);
-    expect(bodyText(first)).toContain("abrégé");
+    expect(bodyText(first)).toContain("_".repeat(1500)); expect(bodyText(first)).not.toContain("abrégé");
     expect(buttons(first).some(control => control.text.text === 'Suivant')).toBe(false);
   } finally { await h.app.close(); }
 });

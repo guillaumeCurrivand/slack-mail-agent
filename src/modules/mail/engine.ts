@@ -15,6 +15,7 @@ export type EngineDependencies = {
   mailbox: (actor: Actor, state: UserState) => Mailbox;
   connectUrl: (actor: Actor) => Promise<string>;
   admitSort?: (actor: Actor, eventId: string) => Promise<string>;
+  showMenu?: (actor: Actor, state: UserState, page: string) => Promise<void>;
 };
 const HELP = mailHelp.text;
 
@@ -162,6 +163,7 @@ export class Engine {
       }
       state.drafts = state.drafts.filter(d => d.id !== value);
       await this.d.store.save(actor, state);
+      if (action === 'cancel_draft' && this.d.showMenu) return this.d.showMenu(actor, state, draft.kind === 'connection' ? 'connection' : 'rules-0');
       return this.send(actor, action === 'cancel_draft' ? "Proposition annulée." : draft.kind === 'connection' ? `Connexion établie pour ${state.connection!.email}. Envoyez courrier modèles pour examiner les premières règles, ou courrier trier si vos règles sont prêtes.` : "Vos changements de règles sont enregistrés. Envoyez courrier trier pour créer un aperçu.");
     }
     if (action === 'disconnect') {
@@ -177,7 +179,9 @@ export class Engine {
     if (action === 'report') return this.report(actor, state, run.id);
     if (action === 'cancel_run') {
       if (run.status === 'preview') run.status = 'cancelled';
-      await this.d.store.save(actor, state); return this.send(actor, `État du traitement : ${stateLabel(run.status)}.`);
+      await this.d.store.save(actor, state);
+      if (run.status === 'cancelled' && this.d.showMenu) return this.d.showMenu(actor, state, 'main');
+      return this.send(actor, `État du traitement : ${stateLabel(run.status)}.`);
     }
     if (action === 'accept_item' || action === 'skip_item') {
       if (run.status !== 'preview') return this.send(actor, "Cet aperçu ne peut plus être modifié.");

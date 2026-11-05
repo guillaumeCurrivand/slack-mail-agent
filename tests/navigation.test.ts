@@ -1,3 +1,4 @@
+import { tableBlocks } from './slack-blocks.js';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -29,8 +30,8 @@ afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
 type Posted = { method: string; body: any; ts: string };
-function blocks(message: Posted) { return message.body.blocks.flatMap((block: any) => block.type === 'container' ? [block, ...block.child_blocks] : [block]); }
-function buttons(message: Posted) { return blocks(message).filter((block: any) => block.type === 'actions').flatMap((block: any) => block.elements); }
+function blocks(message: Posted) { return tableBlocks(message.body.blocks).flatMap((block: any) => block.type === 'container' ? [block, ...block.child_blocks] : [block]); }
+function buttons(message: Posted) { return blocks(message).flatMap((block: any) => block.type === 'actions' ? block.elements : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => cell.element)) : []); }
 function title(message: Posted) { return message.body.blocks[0]?.title?.text; }
 function richParts(message: Posted) { return blocks(message).filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements.flatMap((section: any) => section.elements)); }
 function renderedText(message: Posted) { return richParts(message).map((part: any) => part.text ?? '').join(''); }
@@ -276,13 +277,40 @@ it('namespaces and binds module-menu table actions through signed dispatch', asy
   const h = await harness(env, [fixture]);
   try {
     const menu = await h.dm('menu'), page = await h.click(menu, 'Table fixture');
-    const control = page.body.blocks.find((block: any) => block.type === 'data_table').rows[1][1].element;
+    const control = tableBlocks(page.body.blocks).find((block: any) => block.type === 'data_table').rows[1][1].element;
     expect(control.action_id).toMatch(/^table_fixture:toggle~button-\d+$/);
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: page.ts },
       actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }],
     }) }).toString();
     expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
     expect((await h.drain()).body.text).toContain('Modification enregistrée : Active');
+  } finally { await h.close(); }
+});
+
+it('pages oversized tables in place without truncating values or losing row action bindings', async () => {
+  const opened: string[] = [];
+  const fixture: AssistantModule = { id: 'large_table', name: 'Grande liste', description: 'Long rows', menuActions: ['open'],
+    async menu() { return { kind: 'Grande liste', text: 'Valeurs complètes', bindButtons: true,
+      table: { columns: ['Nom', 'Valeur'], rows: Array.from({ length: 8 }, (_, i) => [String(i), String(i).repeat(4000)]),
+        rowButtons: Array.from({ length: 8 }, (_, i) => ({ label: `Voir ${i}`, action: 'open', value: String(i) })) } }; },
+    async handle(actor, payload, _eventId, context) {
+      const bound = await new Navigation(context.sql, context.messenger).boundTarget(actor, payload.value, payload.timestamp);
+      if (bound) opened.push(bound.value);
+      await context.messenger.send(actor, { text: bound ? `Fiche ${bound.value}` : 'Indisponible' });
+    },
+  };
+  const h = await harness(env, [fixture]);
+  try {
+    const first = await h.click(await h.dm('menu'), 'Grande liste');
+    const second = await h.click(first, 'Tableau suivant');
+    expect(second.ts).toBe(first.ts);
+    const rows = [first, second].flatMap(page => tableBlocks(page.body.blocks).find(block => block.type === 'data_table').rows.slice(1));
+    expect(rows.map(row => row[1].text)).toEqual(Array.from({ length: 8 }, (_, i) => String(i).repeat(4000)));
+    expect(rows.map(row => row[2].element.value.split('|').at(-1))).toEqual(Array.from({ length: 8 }, (_, i) => String(i)));
+    expect(findButton(await h.click(second, 'Tableau précédent'), 'Voir 0')).toBeTruthy();
+    await h.click(second, 'Voir 7', bob); expect(opened).toEqual([]);
+    await h.click(second, 'Voir 7'); expect(opened).toEqual(['7']);
+    expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
 });
 
@@ -738,7 +766,7 @@ it('browses mail rules and prepares Add/Edit forms in place without changing rul
     const next = await h.click(rules, "Suivant");
     expect(next.ts).toBe(rules.ts);
     expect(next.body.text).toContain('Priority 6');
-    const edit = await h.click(next, "Modifier 1");
+    const edit = await h.click(await h.click(next, "Ouvrir"), "Modifier");
     expect(edit.method).toBe('chat.update');
     expect(edit.ts).toBe(next.ts);
     button(edit, 'Règle par contenu');
@@ -780,13 +808,13 @@ it('offers starter rules and removal as separately approved Proposals, then reop
     const saved = await h.click(mail, "Gérer les règles");
     expect(saved.body.text).toContain('Urgent');
     expect((await h.click(reopened, "Approuver les règles")).body.text).toContain('déjà traitée');
-    const savedWithRemove = await h.seek(saved, "Retirer 1");
-    const remove = await h.click(savedWithRemove, "Retirer 1");
+    const savedWithRemove = await h.click(saved, "Ouvrir");
+    const remove = await h.click(savedWithRemove, "Retirer");
     expect(remove.body.text).toContain('Supprimer la règle Urgent');
     expect((await h.click(mail, "Gérer les règles")).body.text).toContain('Urgent');
     await h.click(remove, "Approuver les règles");
     expect((await h.click(mail, "Gérer les règles")).body.text).not.toContain('Urgent');
-    expect((await h.click(savedWithRemove, "Retirer 1")).body.text).toContain('n’est plus disponible');
+    expect((await h.click(savedWithRemove, "Retirer")).body.text).toContain('n’est plus disponible');
     expect((await h.click(pending, "Ouvrir 1")).body.text).toContain('indisponible');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
@@ -918,10 +946,10 @@ it('bounds long rule summaries while retaining every page and action', async () 
       const table = blocks(page).find((block: any) => block.type === 'data_table');
       expect(table.rows.length).toBeLessThanOrEqual(7);
       const text = [renderedText(page), ...table.rows.flat().map((cell: any) => cell.text ?? '')].join('\n');
-      expect(text.length).toBeLessThan(12_000);
+      expect(text.length).toBeLessThan(20_000);
       expect(text).toContain(`Long rule ${n * 6}`);
-      expect(text).toContain("résumés");
-      button(await h.seek(page, "Modifier 1"), "Modifier 1"); button(await h.seek(page, "Retirer 1"), "Retirer 1"); button(page, "Retour au menu");
+      expect(text).not.toContain("…");
+      const detail = await h.click(page, "Ouvrir"); button(detail, "Modifier"); button(detail, "Retirer"); button(page, "Retour au menu");
       if (n < 6) page = await h.click(page, "Suivant");
     }
     expect(findButton(page, "Suivant")).toBeUndefined();

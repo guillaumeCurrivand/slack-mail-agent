@@ -1,6 +1,6 @@
 # Mail Sorter module
 
-Mail rules and pending approvals use six-row tables with numbered controls. Pagination, Add/Edit and reopening approvals update the originating Card. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
+Mail rules and pending approvals use up to six-row tables with contextual actions. **Ouvrir** on a rule shows its full condition, labels, senders and examples, plus **Modifier** and **Retirer**. Conditions and labels in lists are not shortened; sender counts link conceptually to the complete rule detail. Pending approvals open from their own row. Pagination, Add/Edit and reopening approvals update the originating Card. Cancellation returns to the relevant rules, connection or module screen. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
 
 Mail Sorter (**Tri des e-mails** in Slack) prepares changes to your own Gmail using your approved rules. You review a Preview before approving labels, archive or Trash actions. It processes individual messages from the latest 100 inbox messages when you request it.
 
