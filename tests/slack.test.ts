@@ -1,8 +1,27 @@
-import { tableBlocks } from './slack-blocks.js';
+import { tableBlocks, validLayoutFallbacks } from './slack-blocks.js';
 import { expect, it } from 'vitest';
 import { Slack, type AgentMessage } from '../src/core/slack.js';
 
 const actor = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
+
+it.each(['post', 'update'])('delivers %s tables with only stable block types in layout fallbacks', async mode => {
+  const slack = new Slack('fake', (async (_url, options) => {
+    const body = JSON.parse(String(options?.body));
+    return Response.json(validLayoutFallbacks(body.blocks) ? { ok: true } : { ok: false, error: 'invalid_blocks' });
+  }) as typeof fetch);
+  const message = { kind: 'Projets', text: 'Choisissez un projet', table: { columns: ['Projet'], rows: [['Alpha']],
+    rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|project' }] } };
+  await expect(mode === 'post' ? slack.send(actor, message) : slack.update(actor, '123.456', message)).resolves.toBeUndefined();
+});
+
+it('preserves every row in compatibility text for tables beyond legacy table limits', async () => {
+  const rows = Array.from({ length: 200 }, (_, index) => [`${index}: ${'x'.repeat(60)}`]);
+  const body = await post({ kind: 'Longue liste', text: '', table: { columns: ['Valeur'], rows } });
+  expect(validLayoutFallbacks(body.blocks)).toBe(true);
+  const fallback = body.blocks[1].fallback[0];
+  expect(fallback.type).toBe('rich_text');
+  expect(fallback.elements.slice(1).map((row: any) => row.elements[0].text)).toEqual(rows.map(row => row[0]));
+});
 
 it('keeps data tables outside containers, links displayed web destinations and rejects oversized tables before delivery', async () => {
   const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ["Nom", "Liens"], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: "Retour", action: 'core:navigate', value: 'bound|main' }] });
@@ -11,7 +30,9 @@ it('keeps data tables outside containers, links displayed web destinations and r
   expect(body.blocks[1].rows[0].items).toHaveLength(1);
   expect(body.blocks[1].rows[0].items[0].width).toBe('wide');
   expect(body.blocks[1].rows[0].items[0].horizontal_alignment).toBeUndefined();
-  expect(body.blocks[1].fallback).toEqual([body.blocks[1].rows[0].items[0].block]);
+  expect(body.blocks[1].fallback[0].type).toBe('rich_text');
+  expect(body.blocks[1].fallback[0].elements[1].elements).toContainEqual({ type: 'text', text: 'Literal <@UBOB>' });
+  expect(body.blocks[1].fallback[0].elements[1].elements).toContainEqual({ type: 'link', text: 'Documentation', url: 'https://example.com/docs' });
   expect(body.blocks[0].child_blocks.every((block: any) => block.type !== 'actions')).toBe(true);
   expect(tableBlocks(body.blocks)[1].rows[1][0]).toEqual({ type: 'raw_text', text: 'Literal <@UBOB>' });
   expect(tableBlocks(body.blocks)[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
@@ -34,6 +55,7 @@ it('renders labelled table toggles and non-interactive rows with consistent colu
     type: 'button', text: { type: 'plain_text', text: '☑ Retirer' }, action_id: 'clickup:status_remove~button-0', value: 'bound|editor|0|choice',
   }, fallback: { type: 'raw_text', text: 'Ouvrez clickup statuts dans un client Slack récent' } });
   expect(table.rows[2][2]).toEqual({ type: 'raw_text', text: '—' });
+  expect(body.blocks[1].fallback[0].elements[1].elements).toContainEqual({ type: 'text', text: 'Ouvrez clickup statuts dans un client Slack récent' });
 });
 
 async function post(message: AgentMessage) {

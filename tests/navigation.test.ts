@@ -1,4 +1,4 @@
-import { tableBlocks } from './slack-blocks.js';
+import { tableBlocks, validLayoutFallbacks } from './slack-blocks.js';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -50,6 +50,7 @@ async function harness(overrides: NodeJS.ProcessEnv = env, additionalModules: As
     const outcome = failure; failure = undefined;
     if (outcome === 'reject') return Response.json({ ok: false, error: 'ratelimited' });
     const body = JSON.parse(String(options?.body)), ts = body.ts ?? `${Date.now()}.${messages.length + 1}`;
+    if (!validLayoutFallbacks(body.blocks)) return Response.json({ ok: false, error: 'invalid_blocks' });
     messages.push({ method, body, ts });
     if (outcome === 'uncertain') throw new Error('Connection lost after delivery');
     return Response.json({ ok: true, channel: body.channel, ts });

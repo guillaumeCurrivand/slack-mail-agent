@@ -254,9 +254,16 @@ export class Slack implements Messenger {
       const dataTable = { type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
         rows: [[...table.columns.map(column => ({ type: 'raw_text', text: column || ' ' })), ...(table.rowButtons ? [{ type: 'raw_text', text: rowButtonColumn }] : [])], ...dataRows] };
       // A single, unaligned layout item fills the available row, even for short content.
-      // Keep a native table fallback for clients without layout support.
+      // Layout fallbacks allow stable blocks only, not data_table or action_cell.
+      // Rich text retains all rows/links without the legacy table's smaller limits.
+      const fallback = { type: 'rich_text', elements: dataTable.rows.map(row => ({ type: 'rich_text_section',
+        elements: [...row.flatMap((cell: any, index: number) => [
+          ...(index ? [{ type: 'text', text: ' | ' }] : []),
+          ...(cell.type === 'rich_text' ? cell.elements[0].elements : [{ type: 'text', text: cell.type === 'action_cell' ? cell.fallback.text : cell.text }]),
+        ]), { type: 'text', text: '\n' }],
+      })) };
       blocks.push({ type: 'layout', label: message.kind?.slice(0, 150) ?? 'Résultats',
-        rows: [{ items: [{ width: 'wide', block: dataTable }] }], fallback: [dataTable] });
+        rows: [{ items: [{ width: 'wide', block: dataTable }] }], fallback: [fallback] });
       for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
     }
     if (blocks.length > 50) throw new SlackDeliveryRejected('Message has too many Slack blocks.');
