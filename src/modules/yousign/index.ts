@@ -5,7 +5,8 @@ import { Navigation, type MenuPage } from '../../core/navigation.js';
 import { formatDate } from '../../core/presentation.js';
 import { escapeCardValue, menuButton, type Button } from '../../core/slack.js';
 import type { Database } from '../../core/transactions.js';
-import { YousignChannels } from './channels.js';
+import { destinationChannelsPage } from '../../core/destination-channels.js';
+import { SlackChannels } from '../../core/slack-channels.js';
 import type { YousignConfig } from './config.js';
 import { deliverEvent } from './delivery.js';
 import { parseEvent, verifyYousign } from './events.js';
@@ -17,35 +18,13 @@ const pageNumber = (value: string) => /^\d{1,6}$/.test(value) ? Number(value) : 
 
 export function createYousignModule(config: YousignConfig, database: Database, dependencies: { fetcher?: typeof fetch } = {}): AssistantModule {
   const identity: IntegrationActor = { kind: 'integration', team: config.SLACK_TEAM_ID, integration: config.YOUSIGN_SUBSCRIPTION_ID };
-  const directory = new YousignChannels(config.SLACK_BOT_TOKEN, dependencies.fetcher);
+  const directory = new SlackChannels(config.SLACK_BOT_TOKEN, dependencies.fetcher);
   const store = (sql: Database = database) => new YousignStore(sql, identity);
   const back = (standalone: boolean) => [{ label: 'Retour à Yousign', page: standalone ? 'yousign:main' : 'main' }];
   const main: MenuPage = { kind: 'Yousign', text: 'Notifications de tous les événements du webhook Yousign de l’entreprise. Les canaux sélectionnés sont partagés entre tous les utilisateurs. À examiner regroupe les échecs et livraisons incertaines ; Statut conserve tout l’historique. Aucun appel d’IA.', links: [{ label: 'Choisir les canaux', page: 'channels_0' }, { label: 'À examiner', page: 'attention_0' }, { label: 'Statut', page: 'status_0' }] };
 
-  async function channelsPage(actor: Actor, sql: Database, requested = 0, notice = '', standalone = false): Promise<MenuPage> {
-    let available;
-    try { available = await directory.list(actor.user); }
-    catch { return { kind: 'Canaux Yousign', text: 'L’accès aux canaux ne peut pas être vérifié. Aucun canal n’est affiché ni modifié. Réouvrez la liste plus tard.', buttons: [menuButton], links: back(standalone) }; }
-    const selected = new Map((await store(sql).destinations()).map(row => [row.channel_id, row.id]));
-    const pages = Math.max(1, Math.ceil(available.length / 10)), current = Math.min(requested, pages - 1);
-    const visible = available.slice(current * 10, (current + 1) * 10);
-    const rowButtons: Button[] = visible.map(channel => selected.has(channel.id)
-      ? { label: '☑ Retirer', action: 'channel_remove', value: `${channel.id}|${selected.get(channel.id)}|${current}`, style: 'danger' }
-      : { label: '☐ Activer', action: 'channel_add', value: `${channel.id}|${current}` });
-    const buttons: Button[] = [];
-    if (current) buttons.push({ label: 'Précédent', action: 'channel_page', value: String(current - 1) });
-    if (current + 1 < pages) buttons.push({ label: 'Suivant', action: 'channel_page', value: String(current + 1) });
-    buttons.push(menuButton);
-    return { kind: 'Canaux Yousign', bindButtons: true, links: back(standalone), buttons,
-      ...(visible.length ? { table: { columns: ['Canal', 'Visibilité', 'Notifications'],
-        rows: visible.map(channel => [`#${channel.name}`, channel.private ? 'Privé' : 'Public', selected.has(channel.id) ? 'Activées' : 'Désactivées']),
-        rowButtons, rowButtonColumn: 'Sélection', rowButtonFallback: 'Ouvrez yousign canaux dans un client Slack récent',
-      } } : {}), text: [notice,
-      'Liste partagée : Activer autorise immédiatement les futurs messages Yousign dans ce canal. Retirer annule les messages en attente. Les canaux auxquels vous n’avez pas accès sont masqués.',
-      `Canaux (page ${current + 1}/${pages}) :`,
-      !available.length ? 'Aucun canal partagé avec le bot. Invitez-le dans les canaux à sélectionner.' : '',
-    ].filter(Boolean).join('\n') };
-  }
+  const channelsPage = (actor: Actor, sql: Database, requested = 0, notice = '', standalone = false) =>
+    destinationChannelsPage('yousign', 'Yousign', directory, actor.user, () => store(sql).destinations(), requested, notice, standalone);
 
   async function statusPage(actor: Actor, sql: Database, requested = 0, notice = '', standalone = false, attention = false): Promise<MenuPage> {
     let available;

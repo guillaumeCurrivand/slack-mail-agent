@@ -1,7 +1,7 @@
 export type Channel = { id: string; name: string; private: boolean };
 
-/** Directory and posting eligibility belong to this Module; no channel history is read. */
-export class YousignChannels {
+/** Slack channel discovery and membership checks shared by notification modules. */
+export class SlackChannels {
   constructor(private token: string, private fetcher: typeof fetch = fetch) {}
   private async request(method: string, params: Record<string, string>) {
     const url = new URL(`https://slack.com/api/${method}`);

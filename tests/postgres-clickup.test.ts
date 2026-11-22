@@ -67,16 +67,22 @@ describe.skipIf(!url)('real PostgreSQL ClickUp account ownership', () => {
       const active = messages.slice(-2).find(message => message.text.includes('0 tâches'))!.actor;
       await text(active, 'clickup statuses'); const older = messages.at(-1)!;
       await text(active, 'clickup statuses'); const newer = messages.at(-1)!;
-      const click = (message: typeof older, label: string) => {
-        const button = message.buttons!.find(button => button.label === label)!;
+      const closedControl = (message: typeof older) => {
+        const index = message.table!.rows.findIndex(row => row[0] === 'Closed');
+        expect(index).toBeGreaterThanOrEqual(0);
+        return message.table!.rowButtons![index]!;
+      };
+      const addClosed = (message: typeof older) => {
+        const button = closedControl(message);
+        expect(button.label).toBe('☐ Ajouter');
         const route = modules.action(button.action, button.value);
         return dispatchJob(pool, options, modules, messenger, { ...route, payload: { ...route.payload, timestamp: message.timestamp }, actor: active, id: uid() });
       };
-      await Promise.all([click(older, 'Ajouter Closed'), click(newer, 'Ajouter Closed')]);
+      await Promise.all([addClosed(older), addClosed(newer)]);
       expect(messages.slice(-2).filter(message => message.text.includes('Modification enregistrée'))).toHaveLength(1);
       expect(messages.slice(-2).filter(message => message.text.includes('autre sauvegarde'))).toHaveLength(1);
       await text(active, 'clickup statuses');
-      expect(messages.at(-1)!.buttons!.map(button => button.label)).toContain('Retirer Closed');
+      expect(closedControl(messages.at(-1)!).label).toBe('☑ Retirer');
     } finally { await app.close(); }
   });
 });

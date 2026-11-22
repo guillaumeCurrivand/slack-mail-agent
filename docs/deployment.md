@@ -1,5 +1,7 @@
 # Updating production
 
+To enable the optional HyperDX digest on an existing deployment, follow [HyperDX activation and cutover](hyperdx.md#activation-and-cutover).
+
 Production uses Docker Compose. The confirmed server checkout is `/opt/slack-mail-agent`, running this repository's `compose.yaml` with `app` and `db` services. Keep the same Compose project name, environment file, and any override files used for the original deployment.
 
 For automatic app and VPS worker deployment on pushes to GitHub `main`, use [the GitHub Actions workflow](automatic-updates.md). It runs checks before deploying the exact commit over SSH and creates no backups. Configure its two repository secrets once; the manual deployment script below retains its existing backup behavior.

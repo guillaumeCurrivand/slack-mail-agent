@@ -4,6 +4,8 @@ Status: approved by the user after the design interview. An initial local implem
 
 ## Reading this specification
 
+The optional [HyperDX module](hyperdx.md) delivers daily service error and warning reports to an operator-authorized Slack channel using the existing bot and durable integration queue.
+
 This document owns shared routing, navigation, presentation, access and spending safeguards, plus the Mail Sorter contract. Start with the [module overview](../README.md#modules-and-project-structure) for setup and usage. Module-specific guides/contracts are [Mail Sorter](mail.md), [Documentation](documentation.md), [ClickUp](clickup.md), [Yousign](yousign.md) and [Development](development.md). Their implementation status does not establish successful production deployment.
 
 ## Approved module extension

@@ -1,12 +1,12 @@
 import { SlackDeliveryRejected, type Messenger } from '../../core/slack.js';
 import { notification } from './events.js';
 import type { YousignConfig } from './config.js';
-import type { YousignChannels } from './channels.js';
+import type { SlackChannels } from '../../core/slack-channels.js';
 import { YousignStore } from './store.js';
 
 const backoff = (attempt: number, seconds?: number) => new Date(Date.now() + Math.max(seconds ?? 0, Math.min(3600, 30 * 2 ** Math.min(attempt, 7))) * 1000);
 
-export async function deliverEvent(store: YousignStore, channels: Pick<YousignChannels, 'canPost'>, messenger: Messenger, config: YousignConfig, event: string) {
+export async function deliverEvent(store: YousignStore, channels: Pick<SlackChannels, 'canPost'>, messenger: Messenger, config: YousignConfig, event: string) {
   // A persisted sending marker after a restart cannot establish whether Slack accepted it.
   await store.recoverSending(event);
   let processed = 0;

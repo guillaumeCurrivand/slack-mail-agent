@@ -1,4 +1,5 @@
 import { ModuleRegistry } from '../core/modules.js';
+import { createHyperdxModule, readHyperdxConfig } from '../modules/hyperdx/index.js';
 import type { Sql } from '../core/store.js';
 import { readMailConfig } from '../modules/mail/config.js';
 import { createMailModule } from '../modules/mail/index.js';
@@ -15,6 +16,7 @@ import { createDevelopmentModule } from '../modules/development/index.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
+    hyperdx: () => createHyperdxModule(readHyperdxConfig(env), config.SLACK_TEAM_ID, config.SLACK_BOT_TOKEN),
     mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql, config.SLACK_BOT_TOKEN),
     documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env), config.SLACK_BOT_TOKEN),
     clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
