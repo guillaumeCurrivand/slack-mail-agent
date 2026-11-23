@@ -451,20 +451,12 @@ describe('Run Cards', () => {
     await action(h, 'details', `${run.id}:0`);
     const first = h.messages.at(-1)!;
     expect(first.kind).toBe("Détails");
-    expect(first.text).toMatch(/^1\. /m);
-    expect(first.text).toMatch(/^5\. /m);
-    expect(first.text).not.toMatch(/^6\. /m);
+    expect(first.table!.rows.map(row => row[0])).toEqual(['1', '2', '3', '4', '5']);
+    expect(first.table!.rowButtons).toEqual(first.table!.rows.map((_, i) => [
+      { label: 'Inclure la proposition ' + (i + 1), action: 'accept_item', value: `${run.id}:m${i + 1}:0` },
+      { label: 'Laisser ' + (i + 1) + ' sans modification', action: 'skip_item', value: `${run.id}:m${i + 1}:0` },
+    ]));
     expect(first.buttons).toEqual([
-      { label: 'Inclure la proposition 1', action: 'accept_item', value: `${run.id}:m1:0` },
-      { label: 'Laisser 1 sans modification', action: 'skip_item', value: `${run.id}:m1:0` },
-      { label: 'Inclure la proposition 2', action: 'accept_item', value: `${run.id}:m2:0` },
-      { label: 'Laisser 2 sans modification', action: 'skip_item', value: `${run.id}:m2:0` },
-      { label: 'Inclure la proposition 3', action: 'accept_item', value: `${run.id}:m3:0` },
-      { label: 'Laisser 3 sans modification', action: 'skip_item', value: `${run.id}:m3:0` },
-      { label: 'Inclure la proposition 4', action: 'accept_item', value: `${run.id}:m4:0` },
-      { label: 'Laisser 4 sans modification', action: 'skip_item', value: `${run.id}:m4:0` },
-      { label: 'Inclure la proposition 5', action: 'accept_item', value: `${run.id}:m5:0` },
-      { label: 'Laisser 5 sans modification', action: 'skip_item', value: `${run.id}:m5:0` },
       { label: "Suivant", action: 'details', value: `${run.id}:1` },
       { label: "Confirmer la proposition examinée", action: 'confirm_run', value: run.id, style: 'primary' },
       { label: 'Retour à l’aperçu', action: 'reopen_preview', value: run.id },
@@ -473,11 +465,12 @@ describe('Run Cards', () => {
     await action(h, 'details', `${run.id}:1`);
     const second = h.messages.at(-1)!;
     expect(second.kind).toBe("Détails");
-    expect(second.text).toMatch(/^1\. /m);
-    expect(second.text).not.toMatch(/^2\. /m);
-    expect(second.buttons).toEqual([
+    expect(second.table!.rows).toHaveLength(1);
+    expect(second.table!.rowButtons).toEqual([[
       { label: 'Inclure la proposition 1', action: 'accept_item', value: `${run.id}:m6:1` },
       { label: 'Laisser 1 sans modification', action: 'skip_item', value: `${run.id}:m6:1` },
+    ]]);
+    expect(second.buttons).toEqual([
       { label: "Précédent", action: 'details', value: `${run.id}:0` },
       { label: "Confirmer la proposition examinée", action: 'confirm_run', value: run.id, style: 'primary' },
       { label: 'Retour à l’aperçu', action: 'reopen_preview', value: run.id },
@@ -493,10 +486,8 @@ describe('Run Cards', () => {
     expect(message.kind).toBe("Détails");
     expect(message.text).toContain(escapeCardValue(run.id));
     expect(message.text).toMatch(/page 1\/1/i);
-    expect(message.text).toContain("De :");
-    expect(message.text).toContain('Please act today');
-    expect(message.text).toContain('alex@example\\.com');
-    expect(message.text).toContain('m1');
+    expect(message.table!.columns).toContain('De');
+    expect(message.table!.rows[0]).toEqual(expect.arrayContaining(['Please act today', 'alex@example.com', 'm1']));
   });
 
   it('sends Report as a Card titled Report with status counts and the existing Details and Undo buttons when those actions are valid', async () => {
@@ -570,16 +561,10 @@ describe('Run Cards', () => {
     expect(preview).not.toContain('**Promo**');
 
     await action(h, 'details', `${run.id}:0`);
-    const details = h.messages.at(-1)!.text;
-    expect(details).toMatch(/^1\. /m);
-    expect(details).toContain('\\*\\*FREE\\*\\*');
-    expect(details).not.toContain('**FREE**');
-    expect(details).toContain("De : \\[click\\]\\(http://evil\\)");
-    expect(details).not.toContain('[click](http://evil)');
-    expect(details).toContain('\\*\\*id\\*\\*');
-    expect(details).not.toContain('**id**');
-    expect(details).toContain('\\*\\*Promo\\*\\*');
-    expect(details).toMatch(/^De :/m);
+    const table = h.messages.at(-1)!.table!;
+    expect(table.literalText).toBe(true);
+    expect(table.rows[0]!.slice(0, 4)).toEqual(['1', '**FREE**', '[click](http://evil)', '**id**']);
+    expect(table.rows[0]![4]).toContain('**Promo**');
   });
 });
 

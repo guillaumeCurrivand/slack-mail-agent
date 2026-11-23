@@ -48,13 +48,21 @@ export class DevelopmentRouting {
     const detection = await this.saved.detection(route.ticket);
     const detectionText = detection?.state === 'pending' ? 'Détection automatique en cours. Le worker inspecte chaque dépôt en lecture seule ; aucune correction avant Ready for AI. Vous pouvez aussi choisir manuellement.\n\n' : detection && ['manual', 'selected'].includes(detection.state) ? `${detection.summary}\n\n` : '';
     const blocked = !!selected && await this.saved.changeBlocked(route.ticket);
+    const assigned = selected ?? [];
+    const inChannel = /^[CG]/.test(actor.channel);
+    const tracks = assigned.map(project => candidates.some(candidate => sameDestination(candidate, project))
+      ? { label: 'Suivre ' + project.name, action: inChannel ? 'development:navigate' : 'core:navigate',
+        value: (inChannel ? '' : 'development:') + `history_${project.id}_0`, bound: true } : null);
     return { kind: `Dépôts — ${route.snapshot.name}`, text: detectionText + (selected
-      ? `Dépôts confirmés :\n${selected.map(p => `${p.name} — ${p.repository}`).join('\n')}\n\n${blocked ? 'Modification indisponible : un traitement est en cours, une publication reste à vérifier ou une correction existe. Annulez les corrections encore en attente avant de modifier ; les corrections commencées nécessitent une réconciliation par l’opérateur.' : 'Modifier les dépôts annule les analyses encore en attente des dépôts retirés. Les analyses des dépôts conservés restent inchangées ; les nouveaux dépôts peuvent démarrer après confirmation.'}\nReady for AI autorise une correction dans chaque dépôt choisi ; to build attend la réussite de toutes les corrections.`
+      ? `Dépôts confirmés :\n${blocked ? 'Modification indisponible : un traitement est en cours, une publication reste à vérifier ou une correction existe. Annulez les corrections encore en attente avant de modifier ; les corrections commencées nécessitent une réconciliation par l’opérateur.' : 'Modifier les dépôts annule les analyses encore en attente des dépôts retirés. Les analyses des dépôts conservés restent inchangées ; les nouveaux dépôts peuvent démarrer après confirmation.'}\nReady for AI autorise une correction dans chaque dépôt choisi ; to build attend la réussite de toutes les corrections.`
       : 'Choisissez un ou plusieurs dépôts. Le dossier et la liste ClickUp restent inchangés. Ready for AI reste nécessaire pour corriger le code.'),
       resourceLinks: [{ label: 'Ouvrir le ticket ClickUp', url: route.snapshot.url }],
-      ...(treatments.table ? { table: treatments.table } : {}),
+      ...(assigned.length || treatments.table ? { table: {
+        columns: ['Dépôt', 'Type', 'Mis à jour'], rows: [...assigned.map(p => [[{ text: p.name + ' — ' + p.repository, url: p.repository }], 'Dépôt confirmé', '—']), ...(treatments.table?.rows ?? [])],
+        rowButtons: [...tracks, ...(treatments.table?.rowButtons ?? [])], rowButtonFallback: 'Ouvrez le ticket dans un client Slack récent.',
+      } } : {}),
       buttons: [...(blocked ? [] : [{ label: selected ? 'Modifier les dépôts' : 'Choisir les dépôts', action: 'routing_begin', value: route.ticket, bound: true }]), ...(treatments.buttons ?? [])],
-      links: [{ label: 'Traitements du ticket', page: `route_runs_${route.ticket}_0` }, ...(selected ?? []).filter(p => candidates.some(c => sameDestination(c, p))).map(p => ({ label: `Suivre ${p.name}`, page: `history_${p.id}_0` })), { label: 'Actualiser', page }, ...back] };
+      links: [{ label: 'Traitements du ticket', page: `route_runs_${route.ticket}_0` }, { label: 'Actualiser', page }, ...back] };
   }
   private picker(proposal: RouteProposal, requestedPage = 0): MenuPage {
     const pages = Math.max(1, Math.ceil(proposal.candidates.length / 5));

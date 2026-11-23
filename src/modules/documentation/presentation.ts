@@ -61,13 +61,46 @@ export class InventoryPresentation {
       if (typeof value === 'string' && value.length > 240 && !referenceKinds[field]) paragraphs.push(`*${title(field)}*\n${escapeCardValue(value)}`);
       else short[field] = value;
     }
-    return { text: paragraphs.join('\n\n'), table: await this.values(short) };
+    const table: MessageTable = { columns: ['Champ', 'Valeur'], rows: [] };
+    const buttons: NonNullable<MessageTable['rowButtons']> = [];
+    for (const [field, value] of Object.entries(short)) {
+      const kind = referenceKinds[field];
+      const refs = Array.isArray(value) ? value : value == null ? [] : [value];
+      if (!kind || !refs.length) {
+        table.rows.push([title(field), await this.value(field, value)]);
+        buttons.push(null);
+        continue;
+      }
+      const references = await Promise.all(refs.map(async ref => {
+        const id = String(ref), name = await this.name(kind, id);
+        const button = await this.record(kind, id)
+          ? { label: 'Ouvrir', action: 'core:navigate', value: `documentation:${kind}_${id}`, bound: true } : null;
+        return { name, button };
+      }));
+      for (const { name, button } of references) {
+        table.rows.push([title(field), name]);
+        buttons.push(button);
+      }
+    }
+    if (buttons.some(Boolean)) table.rowButtons = buttons;
+    return { text: paragraphs.join('\n\n'), table };
   }
   async confirmation(saved: Confirmation): Promise<Pick<MenuPage, 'text' | 'table'>> {
     const table = await this.values(saved.fields, saved.operation === 'edit' ? saved.before_values : undefined, true);
     if (saved.operation === 'edit' && saved.before_values === null) table.rows = table.rows.map(row => [row[0]!, "Indisponible (valeurs d’origine non enregistrées)", row[2]!]);
     const text = saved.operation === 'edit' && saved.before_values === null ? "Avant : indisponible pour cette ancienne confirmation ; les valeurs d’origine n’ont pas été enregistrées." : '';
     return tableSize(table) > 18_000 ? { text: `${text}\nLes valeurs enregistrées occupent plusieurs pages. Ouvrez Examiner les valeurs pour les consulter avant de confirmer.`.trim() } : { table, text };
+  }
+  async hosting(entries: Awaited<ReturnType<DocumentationStore['projectHosting']>>['entries']) {
+    const known = entries.flatMap(entry => entry.fields && entry.hosting_id
+      ? [{ id: entry.hosting_id, kind: 'hosting' as const, fields: entry.fields, archived: !!entry.hosting_archived }] : []);
+    const view = await this.list(known);
+    const missing = entries.filter(entry => !entry.hosting_id);
+    if (!missing.length) return view;
+    const table = view.table ?? { columns: ['Environnement', 'Projet / Composant', 'Hébergeur/service', 'URLs'], rows: [] };
+    return { table: { ...table, rows: [...table.rows, ...await Promise.all(missing.map(async entry =>
+      ['Inconnu', await this.name('component', entry.component_id), 'Inconnu', 'Inconnues']))] },
+      recordChoices: [...(view.recordChoices ?? []), ...missing.map(entry => ({ label: entry.component_name, page: 'component_' + entry.component_id }))] };
   }
   async list(records: RecordView[], destinations?: string[], archived = false): Promise<Pick<MenuPage, 'table' | 'recordChoices'>> {
     if (!records.length) return { recordChoices: [] };

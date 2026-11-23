@@ -1,5 +1,5 @@
 import { ownerKey, uid, type Actor } from './identity.js';
-import { buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger, type MessageTable } from './slack.js';
+import { mapRowActions, buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger, type MessageTable } from './slack.js';
 import type { Sql } from './store.js';
 
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
@@ -86,7 +86,7 @@ function tablePages(table: MessageTable, budget: number): MessageTable[] {
   let first = 0, size = table.columns.join('').length;
   for (let index = 0; index < table.rows.length; index++) {
     const rowSize = table.rows[index]!.reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0)
-      + (table.rowButtons ? Math.max(75, table.rowButtonFallback?.length ?? 0) : 0);
+      + (table.rowButtons ? [table.rowButtonColumn ?? 'Actions'].flat().length * Math.max(75, table.rowButtonFallback?.length ?? 0) : 0);
     if (index > first && (size + rowSize > budget || index - first >= 100)) {
       pages.push({ ...table, rows: table.rows.slice(first, index), ...(table.rowButtons ? { rowButtons: table.rowButtons.slice(first, index) } : {}) });
       first = index; size = table.columns.join('').length;
@@ -152,7 +152,7 @@ export class Navigation {
     const bind = (button: Button) => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button;
     const rawMessage: AgentMessage = { ...content,
       ...(content.table ? { table: { ...content.table, ...(rowChoices ? { rowButtons: recordChoices.map(link => ({ label: 'Ouvrir', action: `${this.namespace}:navigate`, value: `${id}|${link.page}` })) }
-        : content.table.rowButtons ? { rowButtons: content.table.rowButtons.map(button => button ? bind(button) : null) } : {}) } } : {}),
+        : content.table.rowButtons ? { rowButtons: content.table.rowButtons.map(row => mapRowActions(row, bind)) } : {}) } } : {}),
       buttons: [...(content.buttons ?? []).map(bind),
       ...(!rowChoices ? recordChoices.map(link => ({ label: link.label, action: `${this.namespace}:navigate`, value: `${id}|${link.page}` })) : []),
       ...links.map(link => ({ label: link.label, action: `${this.namespace}:navigate`, value: `${id}|${link.page}` }))] };

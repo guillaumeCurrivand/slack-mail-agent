@@ -26,8 +26,8 @@ afterAll(async () => db.close());
 
 type Posted = { method: string; body: any; ts: string; controls?: any[] };
 function parts(message: Posted): any[] { return tableBlocks(message.body.blocks).flatMap((block: any) => block.child_blocks ?? [block]); }
-function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^(?:🧭|\?) /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: cellValue(row[0]) } }))) : []); }
-function rowName(columns: string[], row: any[]): string { return cellValue(row[Math.max(0, columns.indexOf('Nom'))]); }
+function buttons(message: Posted): any[] { return message.controls ?? parts(message).flatMap(block => block.type === 'actions' ? block.elements.flatMap((element: any) => element.type === 'static_select' ? element.options.map((option: any) => ({ ...element, text: option.text, selected_option: option, value: option.value })) : [{ ...element, text: { ...element.text, text: element.text.text.replace(/^(?:🧭|\?) /, '') } }]) : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element, text: { ...cell.element.text, text: rowName(block.rows[0].map(cellValue), row) } }))) : []); }
+function rowName(columns: string[], row: any[]): string { return cellValue(row[columns[0] === 'Champ' && columns[1] === 'Valeur' ? 1 : Math.max(0, columns.indexOf('Nom'))]); }
 function findButton(message: Posted, label: string) {
   const direct = buttons(message).find(item => item.text.text.replace(/^(?:🧭|\?) /, '') === label)
     ?? buttons(message).find(item => item.type === 'static_select' && item.text.text.replace(/^\d+\. /, '').split(' / ').includes(label));
@@ -85,7 +85,7 @@ async function harness(enabled = 'documentation', team = 'TTEAM', aiEnv: NodeJS.
     const id = values.filter(value => value.includes('|')).map(value => value.split('|')[0]).find(value => /^[0-9a-f-]{36}$/.test(value));
     const saved = id ? (await sql.query('SELECT content FROM core_navigation_menus WHERE id=$1', [id])).rows[0]?.content as { buttons?: Array<{ label: string; action: string; value: string }>; table?: { columns: string[]; rows: any[][]; rowButtons?: Array<{ label: string; action: string; value: string }> } } | undefined : undefined;
     const controls = saved ? [...(saved.buttons ?? []).map(button => ({ type: 'button', action_id: button.action, value: button.value, text: { text: button.label } })),
-      ...(saved.table?.rowButtons ?? []).map((button, index) => ({ type: 'button', action_id: button.action, value: button.value, text: { text: rowName(saved.table!.columns, saved.table!.rows[index]!) } }))] : undefined;
+      ...(saved.table?.rowButtons ?? []).flatMap((button, index) => button ? [{ type: 'button', action_id: button.action, value: button.value, text: { text: rowName(saved.table!.columns, saved.table!.rows[index]!) } }] : [])] : undefined;
     messages.push({ method, body, ts, controls });
     if (outcome === 'uncertain') throw new Error('Lost response after delivery');
     return Response.json({ ok: true, ts });
@@ -359,7 +359,7 @@ it.each(['technology', 'component'] as const)('guides saved inventory pages when
     const first = await h.dm(`documentation search ${JSON.stringify(query)}`);
     // Reopen the saved query through its owner-bound menu after the reference changes.
     const questionId = (await sql.query('SELECT id FROM documentation_questions ORDER BY created_at DESC LIMIT 1')).rows[0].id;
-    const recordControl = button(first, 'React');
+    const recordControl = button(first, 'Fiches des filtres');
     const next = { ...recordControl, value: `${recordControl.value.split('|')[0]}|documentation:question_${questionId}_0` };
     await h.click(await h.dm(`documentation archive ${referenceKind} ${selector}`, bob), 'Confirmer l’archivage', bob);
     await h.enqueueClick(first, next);
@@ -855,7 +855,8 @@ it('queries every relationship direction and keeps company-wide Outils separate 
     expect(bodyText(await h.dm('documentation search {"target":"technology","includeArchived":true,"filters":[{"kind":"project","selector":"Alpha"}]}'))).toContain("React [Archivé]");
     const archivedReference = await h.dm('documentation search {"target":"project","includeArchived":true,"filters":[{"kind":"technology","selector":"React"}]}');
     expect(bodyText(archivedReference)).toContain("Technologie: React [Archivé]");
-    expect(buttons(archivedReference).map(b => b.text.text)).toContain("React [Archivé]");
+    const filterRecords = await h.click(archivedReference, 'Fiches des filtres');
+    expect(buttons(filterRecords).map(b => b.text.text)).toContain("React [Archivé]");
     expect(bodyText(await h.dm('documentation count {"target":"technology","filters":[{"kind":"project","selector":"Alpha"}]}'))).toContain("Total de fiches correspondantes — Technologie : 0");
     const foreign = await harness('documentation', 'TOTHER');
     try { expect(bodyText(await foreign.dm('documentation count {"target":"project"}', { ...alice, team: 'TOTHER' }))).toContain("Total de fiches correspondantes — Projet : 0"); }
@@ -1729,7 +1730,7 @@ it('maintains Project Components with many shared Technologies and stable naviga
       const component = await h.click(await h.dm(`documentation components ${projectId}`), `${name} UI`);
       componentIds.push(await recordId(component));
       expect(await recordId(await h.click(component, 'React'))).toBe(technologyIds[0]);
-      expect(await recordId(await h.click(component, "Projet"))).toBe(projectId);
+      expect(await recordId(await h.click(component, name))).toBe(projectId);
     }
     const relationships = await h.click(await h.dm(`documentation technology ${technologyIds[0]}`, bob), "Composants", bob);
     expect(bodyText(relationships)).toContain('Alpha UI'); expect(bodyText(relationships)).toContain('Beta UI');

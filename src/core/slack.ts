@@ -3,7 +3,10 @@ import { logicalAction } from './presentation.js';
 
 export type Button = { label: string; action: string; value: string; style?: 'primary' | 'danger'; scope?: 'core'; bound?: boolean };
 export type TableCell = string | Array<{ text: string; url?: string }>;
-export type MessageTable = { columns: string[]; rows: TableCell[][]; rowButtons?: Array<Button | null>; rowButtonColumn?: string; rowButtonFallback?: string };
+type RowActions = Button | Button[] | null;
+export const mapRowActions = (row: RowActions, map: (button: Button) => Button): RowActions =>
+  Array.isArray(row) ? row.map(map) : row && map(row);
+export type MessageTable = { columns: string[]; rows: TableCell[][]; literalText?: boolean; rowButtons?: RowActions[]; rowButtonColumn?: string | string[]; rowButtonFallback?: string };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; selects?: MessageSelect[] };
 export const validResourceUrl = (value: string) => {
@@ -219,13 +222,15 @@ export class Slack implements Messenger {
     }
     if (message.table) {
       const table = message.table;
-      if (!table.columns.length || table.columns.length + (table.rowButtons ? 1 : 0) > 20 || table.rows.length < 1 || table.rows.length > 200 || table.rows.some(row => row.length !== table.columns.length) || (table.rowButtons && table.rowButtons.length !== table.rows.length))
+      const headings = table.rowButtons ? [table.rowButtonColumn ?? 'Actions'].flat() : [];
+      const controlsByRow = table.rowButtons?.map(row => row ? [row].flat() : []);
+      if (!table.columns.length || table.columns.length + headings.length > 20 || table.rows.length < 1 || table.rows.length > 200 || table.rows.some(row => row.length !== table.columns.length) || (controlsByRow && (controlsByRow.length !== table.rows.length || !headings.length || controlsByRow.some(row => row.length > headings.length))))
         throw new SlackDeliveryRejected('Invalid message table.');
       const rows: TableCell[][] = [table.columns, ...table.rows];
-      const rowButtonColumn = table.rowButtonColumn ?? 'Actions';
+
       const rowButtonFallback = table.rowButtonFallback ?? 'Rechercher la fiche dans le DM';
-      const actionSize = table.rowButtons ? rowButtonColumn.length + table.rowButtons.reduce((sum, button) =>
-        sum + (button ? Math.max(buttonDisplayLabel(button).slice(0, 75).length, rowButtonFallback.length) : 1), 0) : 0;
+      const actionSize = headings.join('').length + (controlsByRow ?? []).reduce((sum, row) => sum +
+        row.reduce((n, button) => n + Math.max(buttonDisplayLabel(button).slice(0, 75).length, rowButtonFallback.length), headings.length - row.length), 0);
       const size = rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0)
         + actionSize;
       const totalSize = size + text.length + (message.resourceLinks?.reduce((sum, link) => sum + link.label.length + link.url.length, 0) ?? 0)
@@ -238,21 +243,25 @@ export class Slack implements Messenger {
       blocks.splice(0);
       if (message.kind) blocks.push({ type: 'container', title: { type: 'plain_text', text: message.kind.slice(0, 150) }, width: 'full', has_header_divider: true, child_blocks: body });
       const cellBlock = (cell: TableCell) => {
+        if (table.literalText && typeof cell === 'string') return { type: 'raw_text', text: cell || ' ' };
         const parts = typeof cell === 'string' ? linkedParts(cell) : cell.flatMap(part => part.url && validResourceUrl(part.url)
           ? [{ type: 'link' as const, text: part.text, url: part.url }] : linkedParts(part.text));
         return parts.some(part => part.type === 'link') ? { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: parts }] } : { type: 'raw_text', text: cellText(cell) || ' ' };
       };
       const dataRows = table.rows.map((row, index) => {
-        const cells = row.map(cellBlock), button = table.rowButtons?.[index];
-        if (!table.rowButtons) return cells;
-        return [...cells, button ? { type: 'action_cell', element: {
-          type: 'button', text: { type: 'plain_text', text: buttonDisplayLabel(button).slice(0, 75) },
-          action_id: `${button.action}~button-${index + buttons.length}`, value: button.value,
-          ...(button.style ? { style: button.style } : {}),
-        }, fallback: { type: 'raw_text', text: rowButtonFallback } } : { type: 'raw_text', text: '—' }];
+        const cells = row.map(cellBlock);
+        const actions = headings.map((_, column) => {
+          const button = controlsByRow?.[index]?.[column];
+          return button ? { type: 'action_cell', element: {
+            type: 'button', text: { type: 'plain_text', text: buttonDisplayLabel(button).slice(0, 75) },
+            action_id: `${button.action}~button-${buttons.length + index * headings.length + column}`, value: button.value,
+            ...(button.style ? { style: button.style } : {}),
+          }, fallback: { type: 'raw_text', text: rowButtonFallback } } : { type: 'raw_text', text: '—' };
+        });
+        return [...cells, ...actions];
       });
       const dataTable = { type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
-        rows: [[...table.columns.map(column => ({ type: 'raw_text', text: column || ' ' })), ...(table.rowButtons ? [{ type: 'raw_text', text: rowButtonColumn }] : [])], ...dataRows] };
+        rows: [[...table.columns, ...headings].map(column => ({ type: 'raw_text', text: column || ' ' })), ...dataRows] };
       // A single, unaligned layout item fills the available row, even for short content.
       // Layout fallbacks allow stable blocks only, not data_table or action_cell.
       // Rich text retains all rows/links without the legacy table's smaller limits.

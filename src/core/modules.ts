@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import type { Pool } from 'pg';
 import { budgetReport, type Budget } from './budget.js';
 import type { Actor, IntegrationActor } from './identity.js';
-import type { Button, Messenger } from './slack.js';
+import { mapRowActions, type Button, type Messenger } from './slack.js';
 import { Navigation, type MenuPage } from './navigation.js';
 import type { Sql } from './store.js';
 import { logicalAction } from './presentation.js';
@@ -17,7 +17,7 @@ const namespaceMessage = (message: MenuPage, moduleId: string): MenuPage => {
   });
   return { ...message,
     ...(message.buttons ? { buttons: message.buttons.map(button) } : {}),
-    ...(message.table?.rowButtons ? { table: { ...message.table, rowButtons: message.table.rowButtons.map(control => control ? button(control) : null) } } : {}),
+    ...(message.table?.rowButtons ? { table: { ...message.table, rowButtons: message.table.rowButtons.map(row => mapRowActions(row, button)) } } : {}),
   };
 };
 export interface AssistantModule {

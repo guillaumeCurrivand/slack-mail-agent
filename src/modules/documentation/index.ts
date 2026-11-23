@@ -111,13 +111,13 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       await questions.remember(actor, project.id);
       const hosting = hostingPage ? await store.projectHosting(actor, project.id, Number(hostingPage[2])) : undefined;
       const view = hosting
-        ? await presentation.list(hosting.entries.filter(entry => entry.fields && entry.hosting_id).map(entry => ({ id: entry.hosting_id!, kind: 'hosting' as const, fields: entry.fields!, archived: !!entry.hosting_archived })))
+        ? await presentation.hosting(hosting.entries)
         : await presentation.details(project.fields);
       const missing = hosting?.entries.filter(entry => !entry.hosting_id) ?? [];
-      return { ...view, kind: hosting ? "Hébergements du projet" : "Projet", text: `Projet : ${literal(project.fields.name)}\n${statusText(project)}\n${hosting ? `Hébergements — page ${hosting.page + 1}/${hosting.pages}\n${!hosting.entries.length ? "Composants : inconnus\nHébergements : inconnus" : missing.map(entry => `Composant : ${literal(entry.component_name)}\nHébergements : inconnus`).join('\n')}` : ('text' in view ? view.text : '')}`,
+      return { ...view, kind: hosting ? "Hébergements du projet" : "Projet", text: `Projet : ${literal(project.fields.name)}\n${statusText(project)}\n${hosting ? `Hébergements — page ${hosting.page + 1}/${hosting.pages}\n${!hosting.entries.length ? "Composants : inconnus\nHébergements : inconnus" : missing.length ? 'Hébergements : inconnus pour les composants sans hébergement enregistré.' : ''}` : ('text' in view ? view.text : '')}`,
         buttons: lifecycleButton('project', project),
         links: [...(hosting ? pageLinks(`projecthosting_${project.id}`, hosting.page, hosting.pages) : [{ label: "Hébergements", page: `projecthosting_${project.id}_0` }]),
-          ...missing.map(entry => ({ label: `Composant : ${entry.component_name}`, page: `component_${entry.component_id}` })),
+
           ...(!project.archived ? [{ label: "Modifier", page: `edit_${project.id}` }] : []), { label: "Composants", page: `components_${project.id}_0` }, { label: "Outils", page: `projecttools_${project.id}_0` }, { label: "Historique", page: `history_${project.id}_0` }, { label: "Retour aux projets", page: 'projects_0' }] };
     }
     if (destination.startsWith('edit_')) {

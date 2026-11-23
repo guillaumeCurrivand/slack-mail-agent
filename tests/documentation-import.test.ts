@@ -51,12 +51,20 @@ async function slackRead(command: string, team = 'TTEAM') {
   await dispatchJob(sql, { AI_MONTHLY_LIMIT_USD: 0, AI_USER_MONTHLY_LIMIT_USD: 0, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' }, modules, messenger,
     { ...modules.text(command), actor: { team, user: 'UALICE', channel: 'DALICE' }, id: randomUUID() });
   const message = messages.at(-1)!;
-  const bound = [...(message.buttons ?? []), ...(message.table?.rowButtons ?? [])].map(button => button.value.split('|')[0]).find(value => /^[0-9a-f-]{36}$/.test(value));
+  const bound = [...(message.buttons ?? []), ...(message.table?.rowButtons ?? []).flat()].flatMap(button => button ? [button.value.split('|')[0]!] : []).find(value => /^[0-9a-f-]{36}$/.test(value));
   const saved = bound ? (await sql.query('SELECT content FROM core_navigation_menus WHERE id=$1', [bound])).rows[0]?.content as AgentMessage | undefined : undefined;
   return { ...message, buttons: saved?.buttons ?? message.buttons, table: saved?.table ?? message.table,
     text: [message.text, ...(message.table?.rows.map(row => row.map(cellText).join(': ')) ?? [])].join('\n') };
 }
 const identity = (message: AgentMessage) => message.buttons!.find(button => /request_(archive|restore)$/.test(button.action))!.value.split('|')[1]!.split(':')[1]!;
+function linkedTechnologies(message: AgentMessage) {
+  const table = message.table!;
+  return table.rows.flatMap((row, index) => {
+    if (row[0] !== 'Technologies') return [];
+    expect(table.rowButtons?.[index]).toMatchObject({ label: 'Ouvrir', value: expect.stringContaining('technology_') });
+    return [cellText(row[1]!)];
+  });
+}
 
 it('imports and reconciles a single Component with 26 reviewed Technologies without dropping references', async () => {
   const workbook = JSON.parse(importSnapshot);
@@ -82,8 +90,9 @@ it('imports and reconciles a single Component with 26 reviewed Technologies with
   expect(await importer.apply(expandedSnapshot, review, approval)).toMatchObject({ authoritative: true, reconciled: true, expected: 32, applied: 32, initialHistory: 32, relationships: 30,
     counts: { project: 1, technology: 26, host: 2, component: 1, hosting: 1, tool: 1 }, problems: [] });
   const detail = await slackRead('documentation component Web');
-  expect(detail.buttons?.filter(button => /^(React|Node|Extra technology \d+)$/.test(button.label))).toHaveLength(26);
-  expect(detail.buttons?.some(button => button.label === 'Extra technology 24')).toBe(true);
+  const technologies = linkedTechnologies(detail);
+  expect(new Set(technologies).size).toBe(26);
+  expect(technologies).toContain('Extra technology 24');
   expect(await importer.apply(expandedSnapshot, review, approval)).toMatchObject({ applied: 32, initialHistory: 32, relationships: 30 });
   expect(vi.mocked(fetch)).not.toHaveBeenCalled();
 });
@@ -107,7 +116,7 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     expect(project.text).toContain("Description: Inconnu");
     const hosts = await slackRead('documentation hosts');
     expect(hosts.text).toContain('2 Hébergeurs/services');
-    const hostIds = hosts.table!.rowButtons!.map(button => button.value.split('host_')[1]!);
+    const hostIds = hosts.table!.rowButtons!.flat().flatMap(button => button ? [button.value.split('host_')[1]!] : []);
     expect(hostIds).toHaveLength(2);
     for (const id of hostIds) {
       expect((await slackRead(`documentation host ${id}`)).text).toContain("Nom: Cloud");
@@ -117,11 +126,10 @@ it('applies an explicitly reviewed workbook through operator commands and reconc
     expect((await slackRead('documentation tool Tracker')).text).toContain("Alpha / Unknown project");
     expect((await slackRead('documentation components Alpha')).text).toContain('Web');
     const component = await slackRead('documentation component Web');
-    expect(component.buttons?.some(button => button.label.includes('React'))).toBe(true);
-    expect(component.buttons?.some(button => button.label.includes('Node'))).toBe(true);
+    expect(linkedTechnologies(component).sort()).toEqual(['Node', 'React']);
     const hosting = await slackRead('documentation hosting Web');
     expect(hosting.text).toContain('production');
-    const hostingId = hosting.table!.rowButtons![0]!.value.split('hosting_')[1]!;
+    const hostingId = hosting.table!.rowButtons!.flat()[0]!.value.split('hosting_')[1]!;
     expect((await slackRead(`documentation hosting-entry ${hostingId}`)).text).toContain('Composant: Alpha / Web');
     expect((await slackRead(`documentation history hosting-entry ${hostingId}`)).text).toContain("Import de feuille de calcul");
     for (const command of ['technology React', 'component Web', 'host Cloud', 'tool Tracker']) {

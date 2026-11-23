@@ -369,6 +369,11 @@ it('changes repository selection with confirmation, preserves retained analyses 
   const ticket = await h.click(await h.click(treatment, 'Traitements du ticket'), 'Retour au ticket');
   expect(ticket.ts).toBe(page.ts);
   expect(ticket.text).toContain('Dépôts confirmés');
+  const repositories = tableBlocks(ticket.blocks).find((block: any) => block.type === 'data_table');
+  const assigned = repositories.rows.find((row: any[]) => row[1]?.text === 'Dépôt confirmé');
+  expect(JSON.stringify(assigned[0])).toContain(project.repository);
+  expect(assigned.at(-1).element.text.text).toBe('Suivre Projet pilote');
+  expect((await h.click(ticket, 'Suivre Projet pilote')).ts).toBe(ticket.ts);
   expect(await h.store.history('pilot')).toHaveLength(1);
   let picker = await h.click(page, 'Modifier les dépôts');
   picker = await h.click(picker, 'Ajouter Backend');

@@ -23,7 +23,7 @@ export function mailMenu(state: UserState, page: string): MenuPage {
   if (page.startsWith('rule-')) {
     const rule = state.rules.find(rule => rule.id === page.slice(5));
     if (!rule) return { kind: 'Règle indisponible', text: 'Cette règle n’existe plus.', links: [{ label: 'Retour aux règles', page: 'rules-0' }] };
-    return { kind: `Règle — ${rule.name}`, text: `Condition : ${escapeCardValue(rule.condition)}\nAction : ${stateLabel(rule.action)}\nLibellés : ${escapeCardValue(rule.labels.join(', ')) || 'aucun'}\nExpéditeurs : ${escapeCardValue(rule.senders.join('\n')) || 'analyse du contenu'}\nExemples :\n${rule.examples.map(escapeCardValue).join('\n')}`,
+    return { kind: `Règle — ${rule.name}`, text: `Identifiant : ${escapeCardValue(rule.id)}\nCondition : ${escapeCardValue(rule.condition)}\nAction : ${stateLabel(rule.action)}\nLibellés : ${escapeCardValue(rule.labels.join(', ')) || 'aucun'}\nExpéditeurs : ${escapeCardValue(rule.senders.join('\n')) || 'analyse du contenu'}\nExemples :\n${rule.examples.map(escapeCardValue).join('\n')}`,
       buttons: [{ label: 'Modifier', action: 'form_prepare', value: rule.id, bound: true }, { label: 'Retirer', action: 'menu_remove_rule', value: rule.id }],
       links: [{ label: 'Retour aux règles', page: `rules-${Math.floor(state.rules.indexOf(rule) / PAGE_SIZE)}` }] };
   }

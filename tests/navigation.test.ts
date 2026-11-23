@@ -642,7 +642,10 @@ it('connects through the existing invitation and confirms disconnect without era
     expect(result.body.text).toContain('Gmail est déconnecté');
     expect((await h.click(mail, "Connexion Gmail")).body.text).toContain("n’est pas connecté");
     expect((await h.click(proposal, "Déconnecter Gmail")).body.text).toContain('n’est plus valide');
-    expect((await h.dm("courrier règles")).body.text).toContain('Urgent');
+    const listedRules = (await h.dm("courrier règles")).body;
+    expect(listedRules.text).toContain('Urgent');
+    const ruleTable = tableBlocks(listedRules.blocks).find((block: any) => block.type === 'data_table');
+    expect(ruleTable.rows[1].at(-1).element.text.text).toBe('Ouvrir');
     expect((await h.dm("courrier rapport")).body.text).toContain('annulé');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }

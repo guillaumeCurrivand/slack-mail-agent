@@ -86,20 +86,15 @@ export class Catalog {
         return { kind: `Historique — ${label}`, ...(change ? { table: await presentation.values(change.after_values, change.before_values) } : {}), text: `${label}: ${literal(await presentation.name(kind, id))}\n${statusText(record)}\nHistorique — page ${result.page + 1}/${result.pages}\n${change ? `Auteur : ${literal(change.actor)}\nDate : ${formatDate(change.changed_at)}\nSource : ${literal(sourceLabel(change.source))}\n${change.before_values === null ? "Avant : aucune fiche" : ''}` : "Aucune modification n’a été enregistrée."}`,
           links: [...pages(`history${kind}_${id}`, result.page, result.pages), { label: `Retour à ${label}`, page: `${kind}_${id}` }] };
       }
-      const technologies = kind === 'component' && Array.isArray(record.fields.technologies)
-        ? await Promise.all(record.fields.technologies.map(ref => this.store.record(actor, 'technology', ref))) : [];
-      const service = kind === 'hosting' ? await this.store.record(actor, 'host', String(record.fields.serviceId)) : undefined;
-      const projects = kind === 'tool' && Array.isArray(record.fields.projects)
-        ? await Promise.all(record.fields.projects.map(ref => this.store.project(actor, ref))) : [];
+
       const details = await presentation.details(record.fields);
       return { kind: label, ...details, text: `${label}: ${literal(await presentation.name(kind, id))}\n${statusText(record)}\n${details.text}`,
         buttons: lifecycleButton(kind, record),
         links: [...(!record.archived ? [{ label: "Modifier", page: `edit${kind}_${id}` }] : []), { label: "Historique", page: `history${kind}_${id}_0` },
-        ...(kind === 'tool' ? [...projects.filter(ref => !!ref).map(ref => ({ label: referenceLabel(ref.fields.name, ref), page: `project_${ref.id}` })), { label: "Retour aux outils", page: 'tools_0' }] : kind === 'host' ? [{ label: "Hébergements", page: `hostentries_${id}_0` }, { label: "Retour aux hébergeurs/services", page: 'hosts_0' }] :
-          kind === 'hosting' ? [{ label: "Composant", page: `component_${record.fields.componentId}` }, ...(service ? [{ label: referenceLabel(recordName(service), service), page: `host_${service.id}` }] : []), { label: "Retour aux hébergements", page: `hostingentries_${record.fields.componentId}_0` }] :
+        ...(kind === 'tool' ? [{ label: "Retour aux outils", page: 'tools_0' }] : kind === 'host' ? [{ label: "Hébergements", page: `hostentries_${id}_0` }, { label: "Retour aux hébergeurs/services", page: 'hosts_0' }] :
+          kind === 'hosting' ? [{ label: "Retour aux hébergements", page: `hostingentries_${record.fields.componentId}_0` }] :
           kind === 'technology' ? [{ label: "Composants", page: `techcomponents_${id}_0` }, { label: "Retour aux technologies", page: 'technologies_0' }] : [
           { label: "Hébergements", page: `hostingentries_${id}_0` },
-          { label: "Projet", page: `project_${record.fields.projectId}` }, ...technologies.filter(ref => !!ref).map(ref => ({ label: referenceLabel(String(ref.fields.name), ref), page: `technology_${ref.id}` })),
           { label: "Retour aux composants", page: `components_${record.fields.projectId}_0` },
         ])] };
     }

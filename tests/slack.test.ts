@@ -58,6 +58,25 @@ it('renders labelled table toggles and non-interactive rows with consistent colu
   expect(body.blocks[1].fallback[0].elements[1].elements).toContainEqual({ type: 'text', text: 'Ouvrez clickup statuts dans un client Slack récent' });
 });
 
+it('keeps both decisions beside one literal mail subject and leaves completed rows read-only', async () => {
+  const subject = '[Review](https://example.com/untrusted)';
+  const body = await post({ kind: 'Détails', text: '', table: {
+    columns: ['Objet'], rows: [[subject], ['Terminé']], literalText: true,
+    rowButtonColumn: ['Inclure', 'Laisser'], rowButtons: [[
+      { label: 'Inclure', action: 'mail:accept_item', value: 'proposal-1' },
+      { label: 'Laisser', action: 'mail:skip_item', value: 'proposal-1' },
+    ], null],
+  } });
+  const table = tableBlocks(body.blocks).find((block: any) => block.type === 'data_table');
+  expect(table.rows[0].map((cell: any) => cell.text)).toEqual(['Objet', 'Inclure', 'Laisser']);
+  expect(table.rows[1][0]).toEqual({ type: 'raw_text', text: subject });
+  expect(table.rows[1].slice(1).map((cell: any) => [cell.element.action_id, cell.element.value])).toEqual([
+    ['mail:accept_item~button-0', 'proposal-1'], ['mail:skip_item~button-1', 'proposal-1'],
+  ]);
+  expect(table.rows[2].map((cell: any) => cell.type)).toEqual(['raw_text', 'raw_text', 'raw_text']);
+  expect(validLayoutFallbacks(body.blocks)).toBe(true);
+});
+
 async function post(message: AgentMessage) {
   const posts: any[] = [];
   const slack = new Slack('token', (async (_url, options: any) => {

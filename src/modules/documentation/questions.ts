@@ -142,14 +142,22 @@ export class DocumentationQuestions {
       return typeof selected === 'string' ? this.page(actor, selected) : selected;
     }
     const presentation = new InventoryPresentation(this.store, actor);
-    const match = /^question_([^_]+)_(?:([a-f0-9]{32})_)?(\d{1,6})$/.exec(destination);
+    const match = /^question(?:refs)?_([^_]+)_(?:([a-f0-9]{32})_)?(\d{1,6})$/.exec(destination);
     if (!match) return;
     const saved = await this.saved(actor, match[1]!);
     if (!saved?.plan) return { kind: "Question indisponible", text: fallback };
     const parsed = questionPlan.parse(saved.plan);
     if (parsed.operation === 'inventory' && parsed.query && saved.status === 'validated') {
       const result = await new InventoryQueries(this.sql).page(actor, parsed.query, Number(match[3]), match[2] ?? null);
-      return { ...result.content, links: [...this.pagination(`${saved.id}_${result.fingerprint}`, result.page, result.pages), ...(result.content.links ?? [])] };
+      const references = result.content.links ?? [];
+      const position = `${saved.id}_${result.fingerprint}_${result.page}`;
+      if (destination.startsWith('questionrefs_') && references.length) {
+        return { kind: 'Fiches des filtres', text: 'Ouvrez une fiche utilisée par cette requête.',
+          table: { columns: ['Référence'], rows: references.map(ref => [ref.label]) }, recordChoices: references,
+          links: [{ label: 'Retour aux résultats', page: 'question_' + position }] };
+      }
+      return { ...result.content, links: [...this.pagination(`${saved.id}_${result.fingerprint}`, result.page, result.pages),
+        ...(references.length ? [{ label: 'Fiches des filtres', page: 'questionrefs_' + position }] : [])] };
     }
     if (!saved.project_id) {
       if (new Date(saved.created_at).getTime() <= Date.now() - 30 * 60_000) return { kind: "Choix expiré", text: "Répétez la question documentation pour obtenir de nouveaux choix." };
@@ -166,13 +174,10 @@ export class DocumentationQuestions {
     let text = '', page = 0, pages = 1, table: MessageTable | undefined, recordChoices: MenuPage['recordChoices'];
     if (plan.operation === 'hosting') {
       const result = await this.store.projectHosting(actor, project.id, Number(match[3]));
-      const view = await presentation.list(result.entries.filter(entry => entry.fields && entry.hosting_id).map(entry => ({ id: entry.hosting_id!, kind: 'hosting' as const, fields: entry.fields!, archived: !!entry.hosting_archived })));
+      const view = await presentation.hosting(result.entries);
       table = view.table; recordChoices = view.recordChoices;
       page = result.page; pages = result.pages;
-      text = result.entries.filter(entry => !entry.hosting_id).map(entry => {
-        if (!entry.hosting_id) links.push({ label: `Composant : ${entry.component_name}`, page: `component_${entry.component_id}` });
-        return entry.hosting_id ? '' : `Composant : ${literal(entry.component_name)}\nHébergements : inconnus\nEnvironnement : inconnu\nHébergeur/service : inconnu`;
-      }).join('\n\n');
+      if (result.entries.some(entry => !entry.hosting_id)) text = 'Hébergements : inconnus pour les composants sans hébergement enregistré.';
       if (!result.entries.length) text = "Composants : inconnus\nHébergements : inconnus";
     } else if (plan.operation === 'technologies') {
       const result = await this.sql.query(`SELECT id,fields,archived FROM documentation_records WHERE team=$1 AND kind='component' AND parent_id=$2 ORDER BY lower(fields->>'name'),id`, [actor.team, project.id]);

@@ -88,7 +88,9 @@ export class Engine {
         await this.propose(actor, state, { kind: 'rules', rules: starterRules() });
         return this.send(actor, "Modèle de projet : lorsque l’expéditeur correspond à une association approuvée, appliquez un libellé de projet et conservez le message dans la boîte de réception. Commencez votre réponse par courrier, puis indiquez le nom du projet et les adresses e-mail des expéditeurs.");
       }
-      case 'rules': return this.sendCard(actor, "Vos règles", state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nExpéditeurs : ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : "analyse du contenu"}\nLibellés : ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'aucun'}; action : ${stateLabel(r.action)}`).join('\n\n') : "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou décrivez votre première règle après le préfixe courrier.");
+      case 'rules':
+        if (this.d.showMenu) return this.d.showMenu(actor, state, 'rules-0');
+        return this.sendCard(actor, "Vos règles", state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nExpéditeurs : ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : "analyse du contenu"}\nLibellés : ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'aucun'}; action : ${stateLabel(r.action)}`).join('\n\n') : "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou décrivez votre première règle après le préfixe courrier.");
       case 'budget': return this.send(actor, await budgetReport(this.d.budget));
       case 'sort': {
         const original = event.activeOperation ?? (this.d.admitSort ? await this.d.admitSort(actor, eventId) : eventId);
@@ -240,14 +242,31 @@ export class Engine {
     if (!run) return this.send(actor, "Traitement introuvable dans votre compte.");
     page = Number.isFinite(page) ? Math.max(0, Math.min(Math.floor(page), Math.max(0, Math.ceil(run.items.length / 5) - 1))) : 0;
     const items = run.items.slice(page * 5, page * 5 + 5), buttons: Button[] = [];
-    const text = items.map((i, n) => {
-      if (run.status === 'preview' && i.plan.needsDecision && i.status === 'pending') buttons.push({ label: `Inclure la proposition ${n + 1}`, action: 'accept_item', value: `${id}:${i.id}:${page}` }, { label: `Laisser ${n + 1} sans modification`, action: 'skip_item', value: `${id}:${i.id}:${page}` });
-      return `${n + 1}. ${escapeCardValue(i.subject) || "(sans objet)"}\nDe : ${escapeCardValue(i.from)}\nMessage : ${escapeCardValue(i.id)}\n${i.plan.needsDecision ? "VOTRE DÉCISION EST NÉCESSAIRE — " : ''}${escapeCardValue(stateLabel(i.plan.disposition))} ; ajouter les libellés : ${i.plan.labels.length ? i.plan.labels.map(escapeCardValue).join(', ') : 'aucun'} ; retirer : ${i.plan.removeLabels?.length ? i.plan.removeLabels.map(escapeCardValue).join(', ') : 'aucun'}\n${i.plan.reasons.map(escapeCardValue).join('\n')}\nÉtat : ${escapeCardValue(stateLabel(i.status))}${i.note ? ` — ${escapeCardValue(i.note)}` : ''}`;
-    }).join('\n\n');
+    const columns = ['N°', 'Objet', 'De', 'Message', 'Proposition', 'État'];
+    const overflow: string[] = [];
+    const rows = items.map((item, index) => {
+      const plan = item.plan;
+      const proposal = [stateLabel(plan.disposition), 'Ajouter les libellés : ' + (plan.labels.join(', ') || 'aucun'),
+        'Retirer : ' + (plan.removeLabels?.join(', ') || 'aucun'), ...plan.reasons].join('\n');
+      const status = [stateLabel(item.status), item.note, item.status === 'pending' && plan.needsDecision ? 'Votre décision est nécessaire' : ''].filter(Boolean).join('\n');
+      return [String(index + 1), item.subject || '(sans objet)', item.from, item.id, proposal, status].map((value, column) => {
+        if (value.length <= 1000) return value;
+        overflow.push(`Message ${index + 1} · ${columns[column]}\n${escapeCardValue(value)}`);
+        return 'Voir le détail du message ' + (index + 1);
+      });
+    });
+    const rowButtons = items.map((item, index) => run.status === 'preview' && item.plan.needsDecision && item.status === 'pending'
+      ? [{ label: `Inclure la proposition ${index + 1}`, action: 'accept_item', value: `${id}:${item.id}:${page}` },
+        { label: `Laisser ${index + 1} sans modification`, action: 'skip_item', value: `${id}:${item.id}:${page}` }] : null);
+
     if (page > 0) buttons.push({ label: "Précédent", action: 'details', value: `${id}:${page - 1}` });
     if ((page + 1) * 5 < run.items.length) buttons.push({ label: "Suivant", action: 'details', value: `${id}:${page + 1}` });
     if (run.status === 'preview') buttons.push({ label: "Confirmer la proposition examinée", action: 'confirm_run', value: id, style: 'primary' }, { label: 'Retour à l’aperçu', action: 'reopen_preview', value: id });
-    return this.sendCard(actor, "Détails", `Traitement ${escapeCardValue(id)} — page ${page + 1}/${Math.max(1, Math.ceil(run.items.length / 5))}\n\n${run.language === 'fr' ? '' : `${retainedTextNotice}\n\n`}${text || "Aucun message."}`, buttons);
+    return this.d.messenger.send(actor, { kind: 'Détails',
+      text: [`Traitement ${escapeCardValue(id)} — page ${page + 1}/${Math.max(1, Math.ceil(run.items.length / 5))}`, run.language === 'fr' ? '' : retainedTextNotice,
+        ...overflow, rows.length ? '' : 'Aucun message.'].filter(Boolean).join('\n\n'), buttons,
+      ...(rows.length ? { table: { columns, rows, literalText: true, ...(rowButtons.some(Boolean) ? { rowButtons, rowButtonColumn: ['Inclure', 'Laisser'],
+        rowButtonFallback: 'Ouvrez les détails du tri dans un client Slack récent.' } : {}) } } : {}) });
   }
   private async apply(actor: Actor, state: UserState, run: Run) {
     if (!['preview', 'applying'].includes(run.status)) return this.report(actor, state, run.id);
