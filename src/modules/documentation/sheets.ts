@@ -21,6 +21,8 @@ export type Sheet = { id: number; headers: string[]; rows: SheetRow[] };
 export type Workbook = {
   identity: string; team: string;
   read(tab: Tab): Promise<Sheet>;
+  readAll?(): Promise<Array<{ tab: Tab; sheet: Sheet }>>;
+  sourceUrl?(sheetId: number, range: string): string;
   append(sheetId: number, cells: Cell[]): Promise<void>;
   remove(sheetId: number, row: number): Promise<void>;
   write(sheetId: number, row: number, column: number, cell: Cell, fields: string): Promise<void>;
@@ -90,18 +92,22 @@ export function configuredWorkbook(env: NodeJS.ProcessEnv, team: string, request
     if (!response.ok) throw new Error('Google Sheets indisponible (' + response.status + ').');
     return response;
   }
+  async function readTabs(selected: Tab[]) {
+    const fields = 'formattedValue,userEnteredValue,hyperlink,textFormatRuns,userEnteredFormat(textFormat,numberFormat),chipRuns,dataSourceFormula,note,pivotTable,dataSourceTable';
+    const params = new URLSearchParams({ fields: 'sheets(properties(sheetId,title),data(rowData(values(' + fields + '))))' });
+    for (const tab of selected) params.append('ranges', "'" + tabs[tab].title + "'");
+    const data = await (await call(base + '?' + params)).json() as { sheets?: Array<Parameters<typeof parseSheet>[1]> };
+    return selected.map(tab => {
+      const source = data.sheets?.find(s => s.properties.title === tabs[tab].title);
+      if (!source) throw new Error('Onglet introuvable.');
+      return { tab, sheet: parseSheet(tab, source) };
+    });
+  }
   return {
     identity: digest(id), team,
-    async read(tab) {
-      const def = tabs[tab];
-      const range = "'" + def.title + "'";
-      const fields = 'formattedValue,userEnteredValue,hyperlink,textFormatRuns,userEnteredFormat(textFormat,numberFormat),chipRuns,dataSourceFormula,note,pivotTable,dataSourceTable';
-      const params = new URLSearchParams({ ranges: range,
-        fields: 'sheets(properties(sheetId,title),data(rowData(values(' + fields + '))))' });
-      const data = await (await call(base + '?' + params)).json();
-      if (!data.sheets?.[0]) throw new Error('Onglet introuvable.');
-      return parseSheet(tab, data.sheets[0]);
-    },
+    async read(tab) { return (await readTabs([tab]))[0]!.sheet; },
+    readAll: () => readTabs(Object.keys(tabs) as Tab[]),
+    sourceUrl: (sheetId, range) => 'https://docs.google.com/spreadsheets/d/' + id + '/edit#gid=' + sheetId + '&range=' + encodeURIComponent(range),
     async append(sheetId, cells) {
       await call(base + ':batchUpdate', { requests: [{ appendCells: { sheetId, rows: [{ values: cells }], fields: 'userEnteredValue,textFormatRuns' } }] });
     },

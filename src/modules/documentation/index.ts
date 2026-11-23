@@ -21,6 +21,7 @@ import { InventoryForms, inventoryFormDestination } from './forms.js';
 import type { SavedForm } from '../../core/forms.js';
 import type { Workbook } from './sheets.js';
 import { LiveWorkbook, workbookHelp, type SheetMutation } from './workbook.js';
+import { answerWorkbook } from './workbook-questions.js';
 
 const literal = (value: string) => escapeCardValue(value);
 const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
@@ -208,8 +209,9 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       if (payload.type === 'text' && /^inventaire\s/i.test(String(payload.text))) {
         payload = { ...payload, text: String(payload.text).slice('inventaire '.length), inventory: true };
       }
-      if (workbook?.allowed(actor) && payload.type === 'text' && !payload.inventory) {
-        return show(await workbook.command(actor, String(payload.text)));
+      if (provider && workbook?.allowed(actor) && payload.type === 'text' && !payload.inventory) {
+        return show(await workbook.command(actor, String(payload.text),
+          question => answerWorkbook(provider, sql, aiConfig, actor, question, eventId, context.budget)));
       }
       if (payload.type === 'action' && payload.action === 'open_confirmation_values') {
         const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;

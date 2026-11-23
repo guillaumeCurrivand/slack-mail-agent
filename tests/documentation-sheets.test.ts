@@ -2,6 +2,8 @@ import { describe, expect, it, vi } from 'vitest';
 import { parseSheet, tabs, type Cell } from '../src/modules/documentation/sheets.js';
 import { LiveWorkbook, sheetDefinition, validateSheet, type SheetMutation } from '../src/modules/documentation/workbook.js';
 import type { FormDefinition, SavedForm } from '../src/core/forms.js';
+import { Budget } from '../src/core/budget.js';
+import { answerWorkbook } from '../src/modules/documentation/workbook-questions.js';
 
 function edit(original: Cell, changes: Record<string, string>) {
   const definition = sheetDefinition({ book: 'example', tab: 'projects', sheetId: 0, key: 'row', col: 5, name: 'Example', original });
@@ -24,6 +26,17 @@ function liveTab(headings: string[], values: string[]) {
   const live = new LiveWorkbook(provider, { query: async () => ({ rows: [{ acquired: true }], rowCount: 1 }) });
   return { state, provider, live };
 }
+it('shows matching cells without AI and refuses a foreign actor before reading Sheets', async () => {
+  const { provider } = liveTab(['Projet', 'Responsable'], ['Alpha', 'Camille']);
+  const readAll = vi.fn(async () => [{ tab: 'projects' as const, sheet: await provider.read() }]);
+  const sql = { query: vi.fn(() => { throw new Error('Unexpected database or budget use'); }) };
+  const ask = (user = actor) => answerWorkbook({ ...provider, readAll }, sql, { key: '', model: '' }, user,
+    'Qui est responsable du projet Alpha ?', 'test', new Budget(sql));
+  expect((await ask()).table?.rows[0]).toEqual(['Alpha', 'Responsable', 'Camille', 'projet!B2']);
+  expect((await ask({ ...actor, team: 'TOTHER' })).table).toBeUndefined();
+  expect(readAll).toHaveBeenCalledTimes(1);
+  expect(sql.query).not.toHaveBeenCalled();
+});
 function submitted(definition: FormDefinition, workbook: SheetMutation): SavedForm<{ workbook: SheetMutation }> {
   return { id: 'synthetic', channel: actor.channel, timestamp: '1', state: 'submitted', definition, result: { workbook } };
 }

@@ -2267,6 +2267,55 @@ it('scopes shared Projects/history to the configured workspace even with the sam
   } finally { await h.app.close(); await foreign.app.close(); }
 });
 
+it('answers ordinary Documentation questions from current cells with sources and sends only headings and the question for interpretation', async () => {
+  const project = [['Projet', 'Responsable'], ['Alpha', 'Camille'], ['Beta', '']];
+  const sources: Record<string, string[][]> = { projet: project, Technologies: [['Technologie']], hébergement: [['Hébergeur']], Outils: [['Outil', 'Référent'], ['Tracker', 'Alex']] };
+  let q = { tab: 'projects', mode: 'values', fields: ['Responsable'], filters: [{ field: 'Projet', match: 'equals', value: 'Alpha' }] };
+  let calls = 0;
+  vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
+    const url = new URL(input);
+    if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic', expires_in: 3600 });
+    if (url.hostname === 'sheets.googleapis.com') {
+      expect(init?.method).toBe('GET');
+      const titles = url.searchParams.getAll('ranges').map(s => s.slice(1, -1));
+      return Response.json({ sheets: titles.reverse().map(title => ({ properties: { title, sheetId: Object.keys(sources).indexOf(title) + 3 }, data: [
+        { rowData: sources[title]!.map(row => ({ values: row.map(s => ({ formattedValue: s, userEnteredValue: { stringValue: s } })) })) },
+      ] })) });
+    }
+    expect(url.hostname).toBe('api.openai.com');
+    const body = JSON.parse(String(init?.body));
+    expect(JSON.parse(body.input)).toMatchObject({ schema: expect.arrayContaining([{ tab: 'projects', headings: project[0] }]) });
+    for (const privateValue of ['Camille', 'Marine', 'Tracker', 'Alex']) expect(body.input).not.toContain(privateValue);
+    if (url.pathname.endsWith('input_tokens')) return Response.json({ input_tokens: 80 });
+    calls++;
+    return Response.json({ status: 'completed', usage: { input_tokens: 80, output_tokens: 35 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify({ queries: [q] }) }] }] });
+  }));
+  const privateKey = generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey;
+  const h = await harness('documentation', 'TTEAM', { OPENAI_API_KEY: 'synthetic', DOCUMENTATION_SPREADSHEET_ID: 'qa-book',
+    DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'test@example.invalid', private_key: privateKey.export({ format: 'pem', type: 'pkcs8' }) }) });
+  try {
+    const ask = () => h.dm('documentation Qui est responsable du projet Alpha ?');
+    const first = await ask();
+    expect(bodyText(first)).toContain('Camille');
+    expect(visibleLinks(first)).toContain('https://docs.google.com/spreadsheets/d/qa-book/edit#gid=3&range=B2');
+    project[0]!.splice(1, 0, 'Fonction'); project[1] = ['Alpha', 'Design', 'Marine']; project[2] = ['Beta', '', ''];
+    const updated = await ask();
+    expect(bodyText(updated)).toContain('Marine');
+    expect(visibleLinks(updated)).toContain('https://docs.google.com/spreadsheets/d/qa-book/edit#gid=3&range=C2');
+    q = { tab: 'projects', mode: 'count', fields: [], filters: [{ field: 'Responsable', match: 'empty', value: '' }] };
+    const counted = await h.dm('documentation Combien de projets sans responsable ?');
+    expect(tableRows(counted)[0]).toMatchObject({ Nombre: '1', Filtre: 'Responsable vide' });
+    q = { tab: 'projects', mode: 'values', fields: ['Invented'], filters: [] };
+    expect(bodyText(await ask())).toContain('Précisez');
+    q = { ...q, fields: ['Responsable'], filters: [{ field: 'Projet', match: 'equals', value: 'Beta' }] };
+    expect(bodyText(await ask())).toContain('Précisez');
+    const searched = await h.dm('documentation chercher Tracker');
+    expect(bodyText(searched)).toContain('Outils!A2');
+    expect(calls).toBe(5);
+    expect((await sql.query("SELECT count(*)::int AS n FROM documentation_questions WHERE status='workbook_ready' AND reservation_id IS NOT NULL")).rows[0].n).toBeGreaterThanOrEqual(5);
+  } finally { await h.app.close(); }
+});
+
 it('discovers a new Google column through Slack navigation and prepares its row action', async () => {
   const headers = ['Projet', 'Équipe'], data = ['Alpha', 'Design'];
   const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });

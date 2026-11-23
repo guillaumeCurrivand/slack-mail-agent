@@ -115,12 +115,12 @@ function rowPage(tab: Tab, sheet: Sheet, row: SheetRow): MenuPage {
     buttons: [{ label: 'Supprimer la ligne', action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_delete` }],
     links: [tabLink(tab), home] };
 }
-export const workbookHelp = 'Envoyez documentation classeur, choisissez un onglet puis une ligne. Ajouter une ligne crée une proposition. Sur une ligne, Supprimer la ligne affiche les valeurs avant confirmation. Modifier ouvre un champ avec son texte et ses liens. Vérifiez la proposition, puis confirmez pour mettre à jour Google Sheets. Actualisez l’onglet pour voir les changements faits dans Sheets. Pour l’inventaire PostgreSQL et ses questions IA, ajoutez inventaire après documentation, par exemple documentation inventaire projets.';
+export const workbookHelp = 'Posez une question, par exemple « documentation qui est responsable du projet Alpha ? », ou envoyez documentation chercher Alpha pour une recherche de texte. Envoyez documentation classeur, choisissez un onglet puis une ligne. Ajouter une ligne crée une proposition. Sur une ligne, Supprimer la ligne affiche les valeurs avant confirmation. Modifier ouvre un champ avec son texte et ses liens. Vérifiez la proposition, puis confirmez pour mettre à jour Google Sheets. Actualisez l’onglet pour voir les changements faits dans Sheets. Pour l’inventaire PostgreSQL et ses questions IA, ajoutez inventaire après documentation, par exemple documentation inventaire projets.';
 
 export class LiveWorkbook {
   constructor(private provider: Workbook, private sql: Sql) {}
   allowed(actor: Actor) { return actor.team === this.provider.team && actor.channel.startsWith('D'); }
-  async command(actor: Actor, text: string): Promise<string | MenuPage> {
+  async command(actor: Actor, text: string, ask?: (question: string) => Promise<MenuPage>): Promise<string | MenuPage> {
     const term = text.trim().toLowerCase();
     const sections: Record<string, Tab> = { projects: 'projects', technologies: 'technologies', tools: 'tools', hosts: 'hosts', hosting: 'hosts', 'hosting-entry': 'hosts' };
     if (Object.hasOwn(sections, term)) return tabLink(sections[term]!).page;
@@ -138,6 +138,7 @@ export class LiveWorkbook {
       if (rows.length === 1) return rowPage(tab, sheet, rows[0]!);
       return { kind: tabs[tab].title, text: rows.length ? 'Plusieurs lignes portent ce nom. Choisissez la ligne dans l’onglet.' : 'Aucune ligne ne porte ce nom dans l’onglet.', links: [tabLink(tab), home] };
     }
+    if (ask && this.allowed(actor) && term && !['help', 'aide', 'menu', 'bonjour', 'hello', 'hi'].includes(term)) return ask(text);
     return { kind: 'Documentation · Classeur', text: workbookHelp, links: [home, { label: 'Inventaire structuré', page: 'inventory' }] };
   }
   async page(actor: Actor, destination: string): Promise<MenuPage | undefined> {
