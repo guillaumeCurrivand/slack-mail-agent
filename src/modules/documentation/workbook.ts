@@ -83,9 +83,11 @@ export function validateSheet(form: SavedForm, values: FormValues): { data: { wo
 }
 function rowPage(tab: Tab, sheet: Sheet, row: SheetRow): MenuPage {
   return { kind: tabs[tab].title, text: 'Choisissez le champ à modifier. Les champs calculés complexes s’éditent dans Sheets.',
-    table: { columns: ['Champ', 'Valeur'], rows: sheet.headers.map((h, i) => [h, cellView(row.cells[i]!)]) },
-    buttons: [...sheet.headers.flatMap((h, i) => editable(row.cells[i]!) ? [{ label: 'Modifier · ' + h, action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_${i}` }] : []),
-      { label: 'Supprimer la ligne', action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_delete` }],
+    table: { columns: ['Champ', 'Valeur'], rows: sheet.headers.map((h, i) => [h, cellView(row.cells[i]!)]),
+      rowButtons: sheet.headers.map((h, i) => editable(row.cells[i]!)
+        ? { label: 'Modifier · ' + h, action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_${i}` } : null),
+      rowButtonFallback: 'Modifier le champ dans Sheets ou ouvrir cette fiche dans un client Slack à jour.' },
+    buttons: [{ label: 'Supprimer la ligne', action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_delete` }],
     links: [tabLink(tab), home] };
 }
 export const workbookHelp = 'Envoyez documentation classeur, choisissez un onglet puis une ligne. Ajouter une ligne crée une proposition. Sur une ligne, Supprimer la ligne affiche les valeurs avant confirmation. Modifier ouvre un champ avec son texte et ses liens. Vérifiez la proposition, puis confirmez pour mettre à jour Google Sheets. Actualisez l’onglet pour voir les changements faits dans Sheets. Pour l’inventaire PostgreSQL et ses questions IA, ajoutez inventaire après documentation, par exemple documentation inventaire projets.';
