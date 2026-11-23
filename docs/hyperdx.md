@@ -1,13 +1,13 @@
 # HyperDX daily digest
 
-The optional `hyperdx` module posts one French report per configured service in each Slack channel selected in the module. The existing bot queries HyperDX at 06:00 UTC each day and groups warning and error events by exact message and severity. It displays the top 20 by occurrence count, with up to 180 characters per message. An empty successful query produces an all-clear. The reporting window matches the previous digest: yesterday at 00:00 UTC through today at 06:00 UTC. Retries use that same cutoff.
+The optional `hyperdx` module posts one French report per service with errors or warnings in each Slack channel selected in the module. The existing bot queries HyperDX at 06:00 UTC each day and groups warning and error events by exact message and severity. It displays the top 20 by occurrence count, with up to 180 characters per message. Services with zero matching occurrences are omitted. If all services are quiet, the digest sends no Slack messages. The reporting window matches the previous digest: yesterday at 00:00 UTC through today at 06:00 UTC. Retries use that same cutoff.
 
 ## Activation and cutover
 
 1. In the private server environment file, set `HYPERDX_API_KEY` to the existing HyperDX query credential and `HYPERDX_SERVICES` to a JSON array of exact service names. Keep real names and credentials out of source control. Invite the agent to each intended destination.
 2. Append `hyperdx` to the existing `ENABLED_MODULES` after the new code is available. The bot uses its existing scopes for channel info and posting. Startup creates the module’s delivery table and a recurring integration job automatically.
 3. From `/opt/slack-mail-agent`, run `docker compose up -d --build --no-deps app`, check `curl --fail http://127.0.0.1:3001/ready`, then send `hyperdx aide` in a DM. Open **Menu → Bilan HyperDX → Choisir les canaux** or send `hyperdx canaux` in a DM. Select **Activer** on each intended channel. Selections are shared across this workspace. Channel members will see excerpts from every configured service.
-4. Verify one report per service from the existing agent in the intended channel. Then disable the previous scheduled job. To avoid duplicate posts during validation, use a restricted pilot channel first. To roll back, remove `hyperdx` from `ENABLED_MODULES`, recreate the app, and restore the previous schedule if needed.
+4. Verify a report for a service with errors or warnings from the existing agent in the intended channel. Then disable the previous scheduled job. To avoid duplicate posts during validation, use a restricted pilot channel first. To roll back, remove `hyperdx` from `ENABLED_MODULES`, recreate the app, and restore the previous schedule if needed.
 
 ## Timing and recovery
 

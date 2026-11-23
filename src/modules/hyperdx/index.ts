@@ -9,7 +9,7 @@ import { channelMenu, destinations } from './channels.js';
 import { readReport } from './report.js';
 
 const day = 86_400_000;
-const guide = 'Chaque jour à 06 h UTC, le bot publie dans chaque canal sélectionné un bilan par service. La période commence la veille à minuit UTC. Les vingt erreurs et avertissements les plus fréquents sont classés par nombre d’occurrences. La commande hyperdx aide ouvre ce guide. Envoyez hyperdx canaux ou ouvrez Choisir les canaux dans le menu. Activer partage les extraits de tous les services avec les membres du canal. L’opérateur configure les services sur le serveur. Aucun appel d’IA.';
+const guide = 'Chaque jour à 06 h UTC, le bot publie dans chaque canal sélectionné un bilan pour chaque service ayant au moins une erreur ou un avertissement. La période commence la veille à minuit UTC. Les vingt erreurs et avertissements les plus fréquents sont classés par nombre d’occurrences. La commande hyperdx aide ouvre ce guide. Envoyez hyperdx canaux ou ouvrez Choisir les canaux dans le menu. Activer partage les extraits de tous les services avec les membres du canal. L’opérateur configure les services sur le serveur. Aucun appel d’IA.';
 
 export function readHyperdxConfig(env: NodeJS.ProcessEnv) {
   const names = z.string().min(1).parse(env.HYPERDX_SERVICES);
@@ -61,6 +61,7 @@ export function createHyperdxModule(config: ReturnType<typeof readHyperdxConfig>
       const target = [team, channel, activation];
       if (!(await sql.query('SELECT 1 FROM hyperdx_channels WHERE team=$1 AND channel_id=$2 AND id=$3', target)).rows.length) return;
       const message = await readReport(config.apiKey, service, cutoff, fetcher);
+      if (!message) return;
       if (!messenger.postChannel || !await directory.canPost(channel)) return new Date(time + 300_000);
       const claim = await sql.query(`INSERT INTO hyperdx_deliveries(job_id,state)
         SELECT $4,'sending' FROM (SELECT id FROM hyperdx_channels WHERE team=$1 AND channel_id=$2 AND id=$3 FOR UPDATE) active

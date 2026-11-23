@@ -30,9 +30,10 @@ it('schedules once, resumes a partial run and never repeats an uncertain Slack s
     const query = JSON.parse(String(init?.body));
     expect(query.startTime).toBe(Date.UTC(2026, 3, 30));
     expect(query.endTime).toBe(cutoff);
+    if (query.series[0].where.includes('service:"quiet"')) return Response.json({ data: [] });
     return Response.json({ data: [{ group: ['a::b', 'error'], 'series_0.data': '5' }, { group: ['a::b', 'error'], 'series_0.data': 2 }] });
   });
-  const module = createHyperdxModule({ apiKey: 'fake', services: ['one', 'two'] }, 'TTEAM', 'fake', fetcher, () => time);
+  const module = createHyperdxModule({ apiKey: 'fake', services: ['one', 'two', 'quiet'] }, 'TTEAM', 'fake', fetcher, () => time);
   const registry = new ModuleRegistry([module]), postChannel = vi.fn().mockResolvedValue('1.2');
   const run = (job: any) => dispatchJob(sql, readConfig(env), registry, { send: vi.fn(), postChannel }, job);
   await module.initialize!(sql);
@@ -45,12 +46,15 @@ it('schedules once, resumes a partial run and never repeats an uncertain Slack s
   expect(await run(schedule[0])).toEqual(new Date(cutoff + 86_400_000));
   await run(schedule[0]);
   const reports = (await sql.query("SELECT * FROM jobs WHERE payload->>'type'='report'")).rows;
-  expect(reports).toHaveLength(4);
+  expect(reports).toHaveLength(6);
   await sql.query("DELETE FROM hyperdx_channels WHERE channel_id='COTHER'");
   await sql.query("INSERT INTO hyperdx_channels(team,channel_id) VALUES('TTEAM','COTHER')");
   for (const report of reports.filter(job => job.payload.channel === 'COTHER')) await run(report);
   expect(fetcher).not.toHaveBeenCalled();
-  const selected = reports.filter(job => job.payload.channel === 'CTEST');
+  const activeChannel = reports.filter(job => job.payload.channel === 'CTEST');
+  await run(activeChannel.find(job => job.payload.service === 'quiet'));
+  expect(postChannel).not.toHaveBeenCalled();
+  const selected = activeChannel.filter(job => job.payload.service !== 'quiet');
   postChannel.mockRejectedValueOnce(new SlackDeliveryRejected('rate limited', 'ratelimited', 120));
   expect(await run(selected[0])).toEqual(new Date(time + 120_000));
   await run(selected[0]);
@@ -63,9 +67,10 @@ it('schedules once, resumes a partial run and never repeats an uncertain Slack s
   expect((await sql.query('SELECT state FROM hyperdx_deliveries ORDER BY state')).rows).toEqual([{ state: 'sent' }, { state: 'uncertain' }]);
 });
 
-it('only reports all-clear after a successful query with an empty data array', async () => {
+it('omits services with no occurrences and propagates query failures', async () => {
   const report = (response: Response) => readReport('fake', 'svc', Date.UTC(2026, 0, 1, 6), async () => response);
-  await expect(report(Response.json({ data: [] }))).resolves.toMatchObject({ text: expect.stringContaining('Aucune erreur') });
+  await expect(report(Response.json({ data: [] }))).resolves.toBeUndefined();
+  await expect(report(Response.json({ data: [{ group: ['example', 'warn'], 'series_0.data': '0' }] }))).resolves.toBeUndefined();
   await expect(report(Response.json({ error: 'bad key' }, { status: 401 }))).rejects.toThrow();
   await expect(report(Response.json({}))).rejects.toThrow();
 });

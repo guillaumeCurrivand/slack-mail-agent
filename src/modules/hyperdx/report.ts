@@ -22,16 +22,18 @@ export async function readReport(apiKey: string, service: string, cutoff: number
   const { data } = responseSchema.parse(await response.json());
   const groups = new Map<string, { message: string; level: string; count: number }>();
   for (const row of data) {
+    if (row['series_0.data'] === 0) continue;
     const [message, level] = row.group, key = JSON.stringify(row.group);
     const group = groups.get(key) ?? { message: message ?? '[Message inconnu]', level, count: 0 };
     group.count += row['series_0.data'];
     groups.set(key, group);
   }
+  if (!groups.size) return;
   const lines = [...groups.values()].sort((a, b) => b.count - a.count || a.message.localeCompare(b.message))
     .slice(0, 20).map(({ message, level, count }) =>
       `${level === 'error' ? '🔴' : '🟠'} ${count} × ${escapeCardValue(message.replace(/\s+/g, ' ').slice(0, 180))}`);
   const date = (value: Date) => value.toLocaleDateString('fr-FR', { timeZone: 'UTC' });
   return { kind: 'Bilan HyperDX', text: [escapeCardValue(service),
     `Du ${date(start)} à 00 h au ${date(new Date(cutoff))} à 06 h UTC.`,
-    lines.join('\n') || 'Aucune erreur ni aucun avertissement détecté.'].join('\n\n') };
+    lines.join('\n')].join('\n\n') };
 }
