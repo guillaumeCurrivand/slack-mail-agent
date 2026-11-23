@@ -125,16 +125,22 @@ it('leaves disabled jobs untouched, processes other work for that user, and resu
   await jobs.enqueue('disabled-mail', alice, { type: 'text', text: 'starters' }, 'mail');
   await sql.query("UPDATE jobs SET status='running',attempts=2 WHERE id='disabled-mail'");
   await jobs.enqueue('available-help', alice, { type: 'text', text: 'help' });
-  const runUntilReply = async (modules: ModuleRegistry) => {
+  await jobs.enqueue('second-help', alice, { type: 'text', text: 'help' });
+  const runUntilReply = async (modules: ModuleRegistry, expectedReplies = 1) => {
     let reply!: () => void;
     const replied = new Promise<void>(resolve => { reply = resolve; });
-    const stop = worker(pool, { ...options, WORKER_CONCURRENCY: 1 }, modules, { async send() { reply(); } });
+    let replies = 0;
+    const timers = vi.spyOn(globalThis, 'setTimeout');
+    const stop = worker(pool, { ...options, WORKER_CONCURRENCY: 1 }, modules, { async send() {
+      if (++replies === expectedReplies) reply();
+    } });
     let timeout: ReturnType<typeof setTimeout> | undefined;
     try {
       await Promise.race([replied, new Promise<never>((_resolve, reject) => { timeout = setTimeout(() => reject(new Error('Worker did not deliver a reply')), 3000); })]);
-    } finally { clearTimeout(timeout); await stop(); }
+      expect(timers.mock.calls.filter(([, delay]) => delay === 500)).toHaveLength(0);
+    } finally { clearTimeout(timeout); await stop(); timers.mockRestore(); }
   };
-  await runUntilReply(new ModuleRegistry([]));
+  await runUntilReply(new ModuleRegistry([]), 2);
   expect((await sql.query("SELECT status,attempts,payload FROM jobs WHERE id='disabled-mail'")).rows[0]).toEqual({ status: 'running', attempts: 2, payload: { type: 'text', text: 'starters' } });
   expect((await sql.query("SELECT status FROM jobs WHERE id='available-help'")).rows[0]!.status).toBe('done');
   expect((await new Store(sql).load(alice)).drafts).toHaveLength(0);

@@ -16,11 +16,13 @@ export type Cell = {
   hyperlink?: string; textFormatRuns?: { startIndex?: number; format?: Format }[];
   userEnteredFormat?: { textFormat?: Format; numberFormat?: { type?: string } }; chipRuns?: unknown[]; dataSourceFormula?: unknown;
 };
-export type SheetRow = { index: number; key: string; cells: Cell[] };
+export type SheetRow = { index: number; key: string; cells: Cell[]; extraData?: boolean };
 export type Sheet = { id: number; headers: string[]; rows: SheetRow[] };
 export type Workbook = {
   identity: string; team: string;
-  read(tab: Tab): Promise<Sheet>;
+  read(tab: Tab, inspectWholeRows?: boolean): Promise<Sheet>;
+  append(sheetId: number, cells: Cell[]): Promise<void>;
+  remove(sheetId: number, row: number): Promise<void>;
   write(sheetId: number, row: number, column: number, cell: Cell, fields: string): Promise<void>;
 };
 export const digest = (input: string) => createHash('sha256').update(input).digest('hex');
@@ -41,13 +43,14 @@ export const cellView = (cell: Cell): TableCell => segments(cell).map(({ text, u
 export function parseSheet(tab: Tab, source: { properties: { sheetId: number; title: string }; data?: { rowData?: { values?: Cell[] }[] }[] }): Sheet {
   const template = tabs[tab];
   const [head, ...data] = source.data?.[0]?.rowData ?? [];
-  const headers = head?.values?.map(display) ?? [];
+  const headers = head?.values?.slice(0, template.headers.length).map(display) ?? [];
   if (source.properties.title !== template.title || template.headers.length !== headers.length || template.headers.some((label, i) => label !== headers[i]?.trim())) throw new Error('Les colonnes du classeur ont changé. Vérifiez les en-têtes.');
   const rows = data.flatMap((row, i) => {
     const cells = headers.map((_, j) => row.values?.[j] ?? {});
     if (!cells.some(cell => cell.userEnteredValue || display(cell))) return [];
     const key = digest(JSON.stringify([source.properties.sheetId, headers, cells]));
-    return [{ index: i + 1, key, cells }];
+    const extraData = row.values?.slice(headers.length).some(cell => cell.userEnteredValue || cell.formattedValue || cell.hyperlink || cell.chipRuns?.length || cell.dataSourceFormula || 'note' in cell || 'pivotTable' in cell || 'dataSourceTable' in cell);
+    return [{ index: i + 1, key, cells, extraData }];
   });
   return { id: source.properties.sheetId, headers, rows };
 }
@@ -88,13 +91,22 @@ export function configuredWorkbook(env: NodeJS.ProcessEnv, team: string, request
   }
   return {
     identity: digest(id), team,
-    async read(tab) {
+    async read(tab, inspectWholeRows = false) {
       const def = tabs[tab];
-      const params = new URLSearchParams({ ranges: "'" + def.title + "'!A:" + String.fromCharCode(64 + def.headers.length),
-        fields: 'sheets(properties(sheetId,title),data(rowData(values(formattedValue,userEnteredValue,hyperlink,textFormatRuns,userEnteredFormat(textFormat,numberFormat),chipRuns,dataSourceFormula))))' });
+      const range = "'" + def.title + "'";
+      const fields = 'formattedValue,userEnteredValue,hyperlink,textFormatRuns,userEnteredFormat(textFormat,numberFormat),chipRuns,dataSourceFormula,note,pivotTable,dataSourceTable';
+      const params = new URLSearchParams({ ranges: inspectWholeRows ? range : range + '!A:' + String.fromCharCode(64 + def.headers.length),
+        fields: 'sheets(properties(sheetId,title),data(rowData(values(' + fields + '))))' });
       const data = await (await call(base + '?' + params)).json();
       if (!data.sheets?.[0]) throw new Error('Onglet introuvable.');
       return parseSheet(tab, data.sheets[0]);
+    },
+    async append(sheetId, cells) {
+      await call(base + ':batchUpdate', { requests: [{ appendCells: { sheetId, rows: [{ values: cells }], fields: 'userEnteredValue,textFormatRuns' } }] });
+    },
+    async remove(sheetId, row) {
+      if (!Number.isInteger(row) || row < 1) throw new Error('Ligne invalide.');
+      await call(base + ':batchUpdate', { requests: [{ deleteDimension: { range: { sheetId, dimension: 'ROWS', startIndex: row, endIndex: row + 1 } } }] });
     },
     async write(sheetId, rowIndex, columnIndex, cell, fields) {
       await call(base + ':batchUpdate', { requests: [{ updateCells: {

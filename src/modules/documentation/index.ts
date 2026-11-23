@@ -20,7 +20,7 @@ import { documentationHelp } from './guide.js';
 import { InventoryForms, inventoryFormDestination } from './forms.js';
 import type { SavedForm } from '../../core/forms.js';
 import type { Workbook } from './sheets.js';
-import { LiveWorkbook, workbookHelp, type SheetEdit } from './workbook.js';
+import { LiveWorkbook, workbookHelp, type SheetMutation } from './workbook.js';
 
 const literal = (value: string) => escapeCardValue(value);
 const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
@@ -139,7 +139,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       links: [{ label: "Projets", page: 'projects_0' }, { label: "Ajouter un projet", page: 'add' }, { label: "Technologies", page: 'technologies_0' }, { label: "Hébergeurs/services", page: 'hosts_0' }, { label: "Outils", page: 'tools_0' }, { label: "Archivé", page: 'archived_0' }, { label: "Historique", page: 'sharedhistory_0' }, { label: "Aide", page: 'help' }] };
   }
   return {
-    menuActions: ['request_archive', 'request_restore', 'form_prepare', 'form_open', 'sheet_apply'],
+    menuActions: ['request_archive', 'request_restore', 'form_prepare', 'form_open', 'sheet_apply', 'sheet_cancel'],
     forms: forms.forms,
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
     help: workbook ? {
@@ -155,12 +155,13 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     cleanup: async () => { await store.cleanup(); await questions.cleanup(); await forms.cleanup(); },
     menu: (actor, destination) => page(actor, destination),
     async handle(actor, payload, eventId, context) {
-      if (payload.type === 'menu_action' && payload.action === 'sheet_apply') {
+      if (payload.type === 'menu_action' && (payload.action === 'sheet_apply' || payload.action === 'sheet_cancel')) {
         const nav = new Navigation(context.sql, context.messenger);
         const bound = await nav.boundTarget(actor, payload.value, payload.timestamp);
         const form = bound && await forms.get(actor, bound.value);
         const text = workbook && form?.result?.workbook
-          ? await workbook.apply(actor, form as SavedForm<{ workbook: SheetEdit }>) : 'Proposition inaccessible ou expirée.';
+          ? payload.action === 'sheet_cancel' ? await workbook.cancel(actor, form.id) : await workbook.apply(actor, form as SavedForm<{ workbook: SheetMutation }>)
+          : 'Proposition inaccessible ou expirée.';
         return nav.show(actor, eventId, { kind: 'Classeur', text, links: [{ label: 'Retour au classeur', page: 'documentation:main' }] });
       }
       if (payload.type === 'guided_form') {
@@ -168,8 +169,8 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         if (form?.channel === actor.channel && form.state === 'submitted' && form.result) {
           if (form.result.workbook) {
             if (workbook?.allowed(actor) && form.definition.context.book === provider?.identity) {
-              const preview = workbook.preview(form as SavedForm<{ workbook: SheetEdit }>);
-              return new Navigation(context.sql, context.messenger).show(actor, eventId, { ...preview, links: [{ label: 'Annuler', page: 'documentation:main' }] });
+              const preview = workbook.preview(form as SavedForm<{ workbook: SheetMutation }>);
+              return new Navigation(context.sql, context.messenger).show(actor, eventId, preview);
             }
           } else return this.handle(actor, { type: 'text', text: form.result.command, inventory: true }, eventId, context);
         }
@@ -181,16 +182,22 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
           const bound = await new Navigation(context.sql, context.messenger).boundTarget(actor, payload.value, payload.timestamp);
           sheetField = !!bound?.value.startsWith('sheet_');
           const definition = bound && (sheetField ? await workbook?.definition(actor, bound.value) : await forms.definition(actor, bound.value));
-          if (bound && definition) form = await forms.prepare(actor, eventId, bound.target.timestamp, definition);
+          if (bound && definition) {
+            form = await forms.prepare(actor, eventId, bound.target.timestamp, definition);
+            if (workbook && definition.context.operation === 'delete' && definition.context.book) {
+              const proposal = await workbook.reviewDeletion(actor, form);
+              if (proposal) return new Navigation(context.sql, context.messenger).show(actor, eventId, workbook.preview(proposal));
+              form = undefined;
+            }
+          }
         } else form = await forms.get(actor, String(payload.form));
         return new Navigation(context.sql, context.messenger).show(actor, eventId, { kind: 'Formulaire Documentation',
           text: form?.channel === actor.channel && form.state === 'editing' ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire est visible, utilisez-le ; sinon, réessayez. ' : ''}Le formulaire est prêt. Vérifier prépare une proposition ; rien ne change avant votre confirmation.` : sheetField ? 'Le classeur ou la ligne a changé ou est inaccessible. Actualisez l’onglet.' : 'Fiche archivée, formulaire expiré ou inaccessible. Rouvrez une fiche active depuis Documentation.',
           buttons: [...(form?.channel === actor.channel && form.state === 'editing' ? [{ label: 'Remplir le formulaire', action: 'form_open', value: form.id, bound: true }] : []), menuButton] });
       }
-      const source = await questions.source(actor, eventId);
       const navigation = new Navigation(context.sql, context.messenger);
-      const show = async (destination: string) => {
-        const content = await page(actor, destination);
+      const show = async (destination: string | MenuPage) => {
+        const content = typeof destination === 'string' ? await page(actor, destination) : destination;
         await navigation.show(actor, eventId, { ...content, recordChoices: content.recordChoices?.map(link => ({ ...link, page: `documentation:${link.page}` })), links: [...(content.links ?? []).map(link => ({ ...link, page: `documentation:${link.page}` })), { label: "Retour au menu", page: 'main' }] });
       };
       const interpret = async (text: string) => {
@@ -202,9 +209,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         payload = { ...payload, text: String(payload.text).slice('inventaire '.length), inventory: true };
       }
       if (workbook?.allowed(actor) && payload.type === 'text' && !payload.inventory) {
-        const content = await workbook.command(actor, String(payload.text));
-        if (typeof content === 'string') return show(content);
-        return navigation.show(actor, eventId, { ...content, links: content.links?.map(link => ({ ...link, page: 'documentation:' + link.page })) });
+        return show(await workbook.command(actor, String(payload.text)));
       }
       if (payload.type === 'action' && payload.action === 'open_confirmation_values') {
         const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;
@@ -232,6 +237,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         || conversationalLifecycle)) {
         return interpret(String(payload.text));
       }
+      const source = await questions.source(actor, eventId);
       if (await lifecycle.handle(actor, payload, eventId, navigation, message => deliver(actor, eventId, message, context), show, source)) return;
       const change = await changes.handle(actor, payload, eventId, source);
       if (change) return deliver(actor, eventId, change, context);

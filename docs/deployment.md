@@ -15,7 +15,7 @@ docker compose up -d --build app &&
 curl -fsS --retry 10 --retry-all-errors http://127.0.0.1:3001/ready
 ```
 
-Startup creates the module's write-coordination index. In a private DM, send `documentation classeur` and open each tab. Verify write access using an agreed test row. Change a cell in Sheets and refresh Slack, then edit that field in Slack, confirm, and verify the cell in Sheets. Remove the test row in Sheets after verification. To disable workbook access, remove both private values and recreate the app container. The structured inventory remains available.
+Startup creates the module's write-coordination index. The full CRUD update uses the same Editor share, credentials and schema. In a private DM, send `documentation classeur` and open each tab. For a live check, append an agreed test row with **Ajouter une ligne** and confirm it appears in Sheets. Edit its field in Sheets and refresh Slack, then edit it in Slack and verify the cell in Sheets. Finally, review and confirm **Supprimer la ligne** for that same test row. To disable workbook access, remove both private values and recreate the app container. The structured inventory remains available.
 
 To enable the optional HyperDX digest on an existing deployment, follow [HyperDX activation and cutover](hyperdx.md#activation-and-cutover).
 

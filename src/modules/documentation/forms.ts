@@ -6,9 +6,9 @@ import { projectFields, projectEdit, recordSchemas, recordTitle, type InventoryV
 import type { DocumentationStore } from './store.js';
 
 type Kind = 'project' | RecordKind;
-import { validateSheet, type SheetEdit } from './workbook.js';
+import { validateSheet, type SheetMutation } from './workbook.js';
 
-export type InventoryFormResult = { command: string; workbook?: never } | { workbook: SheetEdit; command?: never };
+export type InventoryFormResult = { command: string; workbook?: never } | { workbook: SheetMutation; command?: never };
 const labels: Record<string, string> = { name: 'Nom', aliases: 'Autres noms — un par ligne', description: 'Description', repositories: 'Dépôts', documentationLinks: 'Documentation', notes: 'Notes', category: 'Catégorie', type: 'Type', technologies: 'Technologies', projectId: 'Projet', role: 'Rôle', monthlyCost: 'Coût mensuel', currency: 'Devise (EUR, USD…)', environment: 'Environnement', componentId: 'Composant', serviceId: 'Hébergeur/service', accountReference: 'Référence du compte', urls: 'Adresses', accessInstructions: 'Instructions d’accès', usage: 'Utilisation', referent: 'Référent', companyWide: 'Utilisé dans toute l’entreprise', projects: 'Projets utilisateurs' };
 const keys: Record<Kind, string[]> = {
   project: ['name', 'aliases', 'description', 'repositories', 'documentationLinks', 'notes'],

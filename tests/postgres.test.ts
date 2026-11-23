@@ -5,6 +5,9 @@ import { schema } from '../src/app/schema.js';
 import { JobStore, withOwner, type Sql } from '../src/core/store.js';
 import { uid } from '../src/modules/mail/domain.js';
 import { createDocumentationModule } from '../src/modules/documentation/index.js';
+import { LiveWorkbook, type SheetMutation } from '../src/modules/documentation/workbook.js';
+import { type Workbook } from '../src/modules/documentation/sheets.js';
+import type { SavedForm } from '../src/core/forms.js';
 import { ModuleRegistry } from '../src/core/modules.js';
 import { dispatchJob } from '../src/core/dispatch.js';
 import type { Actor } from '../src/core/identity.js';
@@ -42,6 +45,35 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     pool = new pg.Pool({ connectionString: url, options: `-c search_path=${namespace}`, application_name: namespace }); await pool.query(schema);
   });
   afterAll(async () => { await pool?.end(); if (admin) { await admin.query(`DROP SCHEMA IF EXISTS ${namespace} CASCADE`); await admin.end(); } });
+  it('coordinates a structural deletion with a different user editing a later workbook row', async () => {
+    const alice = { team: 'TSHEETS', user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
+    const names = ['First', 'Second'];
+    const entered = Promise.withResolvers<void>(), release = Promise.withResolvers<void>();
+    const provider: Workbook = {
+      identity: 'fake-book', team: alice.team, async append() { throw Error('Unexpected append'); },
+      async read() { return { id: 7, headers: ['Name'], rows: names.map((key, i) => ({ index: i + 1, key, cells: [] })) }; },
+      async remove(_id, row) { entered.resolve(); await release.promise; names.splice(row - 1, 1); },
+      async write(_id, row, _col, cell) { names[row - 1] = cell.userEnteredValue!.stringValue!; },
+    };
+    await createDocumentationModule(pool, undefined, '', provider).initialize!(pool);
+    const workbook = new LiveWorkbook(provider, pool);
+    async function submitted(actor: Actor, key: string, mutation: SheetMutation) {
+      const id = uid(), definition = { context: { book: provider.identity, tab: 'tools', sheetId: 7, key, col: 0 } };
+      const row = await pool.query(`INSERT INTO documentation_guided_forms(id,owner,channel,timestamp,source,definition,state,result)
+        VALUES($1,$2,$3,'1',$1,$4,'submitted',$5) RETURNING *`, [id, actor.team + ':' + actor.user, actor.channel, definition, { workbook: mutation }]);
+      return row.rows[0] as SavedForm<{ workbook: SheetMutation }>;
+    }
+    const del = await submitted(alice, 'First', { operation: 'delete' });
+    const edit = await submitted(bob, 'Second', { fields: 'userEnteredValue', cell: { userEnteredValue: { stringValue: 'Updated' } } });
+    const deleting = workbook.apply(alice, del);
+    try {
+      await entered.promise;
+      expect(await workbook.apply(bob, edit)).toContain('en cours');
+      expect(names).toEqual(['First', 'Second']);
+    } finally { release.resolve(); await deleting; }
+    expect(await workbook.apply(bob, edit)).toContain('enregistrée');
+    expect(names).toEqual(['Updated']);
+  });
   it.each(['project', 'technology', 'component', 'host', 'hosting', 'tool'] as const)('serializes %s lifecycle changes against edits and opposite transitions', async kind => {
     const alice = { team: `TLIFECYCLE${kind}`, user: 'UALICE', channel: 'DALICE' }, bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
     const { module, options, messenger, text, confirm, recordId } = documentationDispatch(pool, alice);

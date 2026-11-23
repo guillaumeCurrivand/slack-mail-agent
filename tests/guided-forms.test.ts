@@ -82,10 +82,90 @@ async function harness(google?: { env: Record<string, string>; request: typeof f
   return { app, views, messages, provider, dm, click, submit, signed, drain, seed, buttons, rejectOpen: () => { rejectOpen = true; }, rejectUpdate: () => { rejectUpdate = true; } };
 }
 
+it.each(Object.keys(tabs) as (keyof typeof tabs)[])('creates and deletes a %s workbook row through confirmed signed Slack controls', async tab => {
+  const def = tabs[tab], sheetId = 3;
+  const rows: Cell[][] = [];
+  const name = '=Literal example';
+  let loseDeleteResponse = false;
+  const headers = def.headers.map(formattedValue => ({ formattedValue }));
+  const h = await harness({
+    env: { DOCUMENTATION_SPREADSHEET_ID: 'example', DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({
+      client_email: 'bot@example.invalid', private_key: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    }) },
+    request: async (url, init) => {
+      if (String(url) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'example', expires_in: 3600 });
+      if (init?.method === 'POST') {
+        const request = JSON.parse(String(init.body)).requests[0];
+        if (request.appendCells) {
+          expect(request.appendCells.sheetId).toBe(sheetId);
+          rows.push(request.appendCells.rows[0].values.map((cell: Cell) => cell.userEnteredValue
+            ? { ...cell, formattedValue: cell.userEnteredValue.stringValue } : cell));
+        } else {
+          const range = request.deleteDimension.range;
+          expect(range).toEqual({ sheetId, dimension: 'ROWS', startIndex: 2, endIndex: 3 });
+          rows.splice(range.startIndex - 1, 1);
+          if (loseDeleteResponse) throw new Error('Response lost after write');
+        }
+        return Response.json({});
+      }
+      const range = new URL(String(url)).searchParams.get('ranges');
+      expect(range).toContain("'" + def.title + "'");
+      return Response.json({ sheets: [{ properties: { sheetId, title: def.title }, data: [{ rowData: [
+        { values: headers }, ...rows.map(values => ({ values: range?.includes('!') ? values.slice(0, headers.length) : values })),
+      ] }] }] });
+    },
+  });
+  try {
+    const list = () => h.dm('documentation ' + tab);
+    const deletion = async () => h.click(await h.click(await list(), 'Ouvrir'), 'Supprimer la ligne');
+    const form = await h.click(await list(), 'Ajouter une ligne');
+    await h.click(form, 'Remplir le formulaire');
+    const view = h.views.at(-1);
+    expect(view.blocks.filter((b: any) => /^v\d+$/.test(b.block_id)).map((b: any) => b.label.text)).toEqual([...def.headers]);
+    await h.submit(view, { ['v' + def.name]: name, ['u' + def.name]: 'https://example.test/resource' });
+    const review = await h.drain();
+    expect(rows).toHaveLength(0);
+    await h.click(review, 'Confirmer la création', bob);
+    expect(rows).toHaveLength(0);
+    await h.click(review, 'Confirmer la création');
+    await h.click(review, 'Confirmer la création');
+    expect(rows).toHaveLength(1);
+    expect(rows[0]![def.name]).toMatchObject({ userEnteredValue: { stringValue: name }, textFormatRuns: [{ format: { link: { uri: 'https://example.test/resource' } } }] });
+    const cancelled = await deletion();
+    await h.click(cancelled, 'Annuler');
+    await h.click(cancelled, 'Confirmer la suppression');
+    expect(rows).toHaveLength(1);
+    const ambiguous = await deletion();
+    rows.push(structuredClone(rows[0]!));
+    await h.click(ambiguous, 'Confirmer la suppression');
+    expect(rows).toHaveLength(2);
+    rows.pop();
+    const changed = await deletion();
+    rows[0]![def.name] = { formattedValue: 'New name', userEnteredValue: { stringValue: 'New name' } };
+    await h.click(changed, 'Confirmer la suppression');
+    expect(rows).toHaveLength(1);
+    const extra = await deletion();
+    rows[0]!.push({ userEnteredValue: { stringValue: 'Unreviewed data' } });
+    expect(JSON.stringify(await h.click(extra, 'Confirmer la suppression'))).toContain('hors des colonnes');
+    rows[0]!.pop();
+    const ready = await deletion();
+    await h.click(ready, 'Confirmer la suppression', bob);
+    expect(rows).toHaveLength(1);
+    const other = [{ formattedValue: 'Other', userEnteredValue: { stringValue: 'Other' } }];
+    rows.unshift(other);
+    loseDeleteResponse = tab === 'hosts';
+    const result = await h.click(ready, 'Confirmer la suppression');
+    expect(JSON.stringify(result)).toContain(loseDeleteResponse ? 'non confirmée' : 'Ligne supprimée');
+    await h.click(ready, 'Confirmer la suppression');
+    expect(rows).toEqual([other]);
+  } finally { await h.app.close(); }
+});
+
 it('reads the live workbook and writes a reviewed edit from a signed Slack DM to the matching row after a sort', async () => {
   const cell = (s: string): Cell => ({ formattedValue: s, userEnteredValue: { stringValue: s } });
   const rows = [['Demo', 'One'], ['Demo', 'Two']].map(values => ({ values: values.map(cell) }));
   const writes: any[] = [];
+  let sheetReads = 0;
   const fake = {
     env: { DOCUMENTATION_SPREADSHEET_ID: 'demo-workbook', DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({
       client_email: 'bot@example.invalid', private_key: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
@@ -100,6 +180,7 @@ it('reads the live workbook and writes a reviewed edit from a signed Slack DM to
         rows[patch.start.rowIndex - 1]!.values[patch.start.columnIndex] = cell(value);
         return Response.json({});
       }
+      sheetReads++;
       return Response.json({ sheets: [{ properties: { sheetId: 12, title: 'hébergement' }, data: [{ rowData: [
         { values: tabs.hosts.headers.map(cell) }, ...rows,
       ] }] }] });
@@ -137,6 +218,14 @@ it('reads the live workbook and writes a reviewed edit from a signed Slack DM to
     expect(JSON.stringify(stale)).toContain('La ligne a changé');
     expect(writes).toHaveLength(1);
     expect((await prepare()).blocks.find((b: any) => b.block_id === 'v0').element.initial_value).toBe('Changed in Sheets');
+    rows[0]!.values[0] = cell('Distinct');
+    const beforeLookup = sheetReads;
+    const detail = await h.dm('documentation hébergeur Distinct');
+    expect(JSON.stringify(detail)).toContain('Changed in Sheets');
+    expect(sheetReads - beforeLookup).toBe(1);
+    const prepared = await h.click(detail, 'Modifier · Rôle');
+    await h.click(prepared, 'Remplir le formulaire');
+    expect(h.views.at(-1).blocks.find((b: any) => b.block_id === 'v0').element.initial_value).toBe('Changed in Sheets');
   } finally { await h.app.close(); }
 });
 

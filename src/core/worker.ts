@@ -49,7 +49,7 @@ export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY
         }
         return true;
       }, candidate.module);
-      if (worked) return;
+      if (worked) return true;
     }
   };
   const cleanup = async () => {
@@ -61,7 +61,8 @@ export function worker(pool: Pool, config: RuntimeOptions & { WORKER_CONCURRENCY
   };
   const loops = Array.from({ length: config.WORKER_CONCURRENCY }, async () => {
     while (!stopping) {
-      try { await tick(); } catch (error) { console.error(JSON.stringify({ event: 'worker_error', ...failureDetails(error) })); }
+      try { if (await tick()) continue; }
+      catch (error) { console.error(JSON.stringify({ event: 'worker_error', ...failureDetails(error) })); }
       if (!stopping) await new Promise(resolve => setTimeout(resolve, 500));
     }
   });
