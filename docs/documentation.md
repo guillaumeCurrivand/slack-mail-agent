@@ -1,5 +1,17 @@
 # Documentation module
 
+## Live Google Sheets workbook
+
+When configured, the Documentation menu opens four workbook tabs. Send `documentation classeur` in a private DM. Choose **projet**, **Technologies**, **hébergement** or **Outils**, then open a row. Fields retain the spreadsheet headings, multiline text, hyperlinks, access instructions and Vault references. Everyone with Documentation access in the configured workspace can see and edit those fields. Store credentials in the Vault and put references in the workbook.
+
+Choose **Modifier** beside a field, open the form, review the text and link destinations, then choose **Confirmer dans Sheets**. Only this last step writes to Google. Opening or refreshing a tab reads Google Sheets again, including rows that were added, removed or reordered there. Create or delete workbook rows in Sheets. Slack supports text, numeric and Boolean values, rich text and literal HYPERLINK formulas. Use Sheets for complex formulas, dates, smart chips or values above the Slack form limits.
+
+The bot checks the tab, its expected header order and the original row before applying a change. It follows a unique unchanged row across a sort and refuses a missing, changed or ambiguous row. Google applies the cell update atomically but provides no revision condition on this API. A simultaneous human edit or sort between the final read and Google's write can still conflict. Check Sheets version history if that happens. An unknown delivery outcome requires checking Sheets before preparing another edit.
+
+The **Inventaire structuré** menu opens the separate PostgreSQL inventory. Prefix typed commands for those records with `documentation inventaire`, for example `documentation inventaire projets`. Historical records, relationships, AI questions and the offline importer continue to use that inventory. Workbook records are read directly from Sheets. The bot stores transient form and navigation state in its private database.
+
+See [production configuration](deployment.md#documentation-workbook) for setup and verification.
+
 Create/Edit controls now prepare their forms directly from record/list screens, skipping the instruction-only intermediate screen. Modal opening and separate approval retain the existing owner/message binding. See the [shared presentation contract](product-spec.md#list-first-screens-and-direct-forms--05112026).
 
 Documentation maintains the company's shared inventory through private Slack DMs. It records Projects, their Components and Technologies, hosting information, shared Hosts/services and Tools. You can browse records, ask inventory questions and propose individual-record changes. It shows saved links without reading the linked documents.

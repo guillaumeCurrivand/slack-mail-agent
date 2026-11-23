@@ -18,6 +18,9 @@ import { inventoryQueryHelp } from './inventory-query.js';
 import { InventoryPresentation, tableSize, valuePages } from './presentation.js';
 import { documentationHelp } from './guide.js';
 import { InventoryForms, inventoryFormDestination } from './forms.js';
+import type { SavedForm } from '../../core/forms.js';
+import type { Workbook } from './sheets.js';
+import { LiveWorkbook, workbookHelp, type SheetEdit } from './workbook.js';
 
 const literal = (value: string) => escapeCardValue(value);
 const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
@@ -27,7 +30,8 @@ const pageLinks = (prefix: string, page: number, pages: number) => [
   ...(page + 1 < pages ? [{ label: "Suivant", page: `${prefix}_${page + 1}` }] : []),
 ];
 
-export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig = readDocumentationAIConfig({}), slackToken = ''): AssistantModule {
+export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig = readDocumentationAIConfig({}), slackToken = '', provider?: Workbook): AssistantModule {
+  const workbook = provider && new LiveWorkbook(provider, sql);
   const store = new DocumentationStore(sql);
   const forms = new InventoryForms(sql, store, slackToken);
   const catalog = new Catalog(store);
@@ -45,6 +49,8 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     catch (error) { if (error instanceof SlackDeliveryRejected) await store.releaseDelivery(actor, eventId); throw error; }
   }
   async function page(actor: Actor, destination: string): Promise<MenuPage> {
+    const sheetPage = await workbook?.page(actor, destination);
+    if (sheetPage) return sheetPage;
     const part = /^content_(\d{1,6})_(.+)$/.exec(destination);
     const target = part?.[2] ?? destination;
     let content = await recordContent(actor, target);
@@ -133,28 +139,52 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       links: [{ label: "Projets", page: 'projects_0' }, { label: "Ajouter un projet", page: 'add' }, { label: "Technologies", page: 'technologies_0' }, { label: "Hébergeurs/services", page: 'hosts_0' }, { label: "Outils", page: 'tools_0' }, { label: "Archivé", page: 'archived_0' }, { label: "Historique", page: 'sharedhistory_0' }, { label: "Aide", page: 'help' }] };
   }
   return {
-    menuActions: ['request_archive', 'request_restore', 'form_prepare', 'form_open'],
+    menuActions: ['request_archive', 'request_restore', 'form_prepare', 'form_open', 'sheet_apply'],
     forms: forms.forms,
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
-    help: documentationHelp,
-    initialize: async database => { await database.query(documentationSchema + questionSchema + documentationImportSchema); await forms.initialize(); },
+    help: workbook ? {
+      text: workbookHelp + '\n\nInventaire structuré (PostgreSQL)\n' + documentationHelp.text,
+      topics: [{ label: 'Classeur Google Sheets', text: workbookHelp }, ...documentationHelp.topics],
+    } : documentationHelp,
+    initialize: async database => {
+      await database.query(documentationSchema + questionSchema + documentationImportSchema);
+      await forms.initialize();
+      if (workbook) await database.query(`CREATE UNIQUE INDEX IF NOT EXISTS documentation_sheet_active_write
+        ON documentation_guided_forms ((definition->'context'->>'book'), (definition->'context'->>'key')) WHERE state='sheet_writing'`);
+    },
     cleanup: async () => { await store.cleanup(); await questions.cleanup(); await forms.cleanup(); },
     menu: (actor, destination) => page(actor, destination),
     async handle(actor, payload, eventId, context) {
+      if (payload.type === 'menu_action' && payload.action === 'sheet_apply') {
+        const nav = new Navigation(context.sql, context.messenger);
+        const bound = await nav.boundTarget(actor, payload.value, payload.timestamp);
+        const form = bound && await forms.get(actor, bound.value);
+        const text = workbook && form?.result?.workbook
+          ? await workbook.apply(actor, form as SavedForm<{ workbook: SheetEdit }>) : 'Proposition inaccessible ou expirée.';
+        return nav.show(actor, eventId, { kind: 'Classeur', text, links: [{ label: 'Retour au classeur', page: 'documentation:main' }] });
+      }
       if (payload.type === 'guided_form') {
         const form = await forms.get(actor, String(payload.form));
-        if (form?.channel === actor.channel && form.state === 'submitted' && form.result) return this.handle(actor, { type: 'text', text: form.result.command }, eventId, context);
+        if (form?.channel === actor.channel && form.state === 'submitted' && form.result) {
+          if (form.result.workbook) {
+            if (workbook?.allowed(actor) && form.definition.context.book === provider?.identity) {
+              const preview = workbook.preview(form as SavedForm<{ workbook: SheetEdit }>);
+              return new Navigation(context.sql, context.messenger).show(actor, eventId, { ...preview, links: [{ label: 'Annuler', page: 'documentation:main' }] });
+            }
+          } else return this.handle(actor, { type: 'text', text: form.result.command, inventory: true }, eventId, context);
+        }
         return deliver(actor, eventId, { text: 'Ce formulaire est indisponible ou expiré. Rouvrez-le depuis Documentation.' }, context);
       }
       if (payload.type === 'guided_form_notice' || (payload.type === 'menu_action' && payload.action === 'form_prepare')) {
-        let form;
+        let form, sheetField = false;
         if (payload.type === 'menu_action') {
           const bound = await new Navigation(context.sql, context.messenger).boundTarget(actor, payload.value, payload.timestamp);
-          const definition = bound && await forms.definition(actor, bound.value);
+          sheetField = !!bound?.value.startsWith('sheet_');
+          const definition = bound && (sheetField ? await workbook?.definition(actor, bound.value) : await forms.definition(actor, bound.value));
           if (bound && definition) form = await forms.prepare(actor, eventId, bound.target.timestamp, definition);
         } else form = await forms.get(actor, String(payload.form));
         return new Navigation(context.sql, context.messenger).show(actor, eventId, { kind: 'Formulaire Documentation',
-          text: form?.channel === actor.channel && form.state === 'editing' ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire est visible, utilisez-le ; sinon, réessayez. ' : ''}Le formulaire est prêt. Vérifier prépare une proposition ; rien ne change avant votre confirmation.` : 'Fiche archivée, formulaire expiré ou inaccessible. Rouvrez une fiche active depuis Documentation.',
+          text: form?.channel === actor.channel && form.state === 'editing' ? `${payload.type === 'guided_form_notice' ? 'Ouverture non confirmée. Si le formulaire est visible, utilisez-le ; sinon, réessayez. ' : ''}Le formulaire est prêt. Vérifier prépare une proposition ; rien ne change avant votre confirmation.` : sheetField ? 'Le classeur ou la ligne a changé ou est inaccessible. Actualisez l’onglet.' : 'Fiche archivée, formulaire expiré ou inaccessible. Rouvrez une fiche active depuis Documentation.',
           buttons: [...(form?.channel === actor.channel && form.state === 'editing' ? [{ label: 'Remplir le formulaire', action: 'form_open', value: form.id, bound: true }] : []), menuButton] });
       }
       const source = await questions.source(actor, eventId);
@@ -165,9 +195,17 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       };
       const interpret = async (text: string) => {
         const result = await questions.ask(actor, text, eventId, context);
-        if (typeof result !== 'string' && 'command' in result) return this.handle(actor, { type: 'text', text: result.command }, eventId, context);
+        if (typeof result !== 'string' && 'command' in result) return this.handle(actor, { type: 'text', text: result.command, inventory: true }, eventId, context);
         return typeof result === 'string' ? show(result) : deliver(actor, eventId, result, context);
       };
+      if (payload.type === 'text' && /^inventaire\s/i.test(String(payload.text))) {
+        payload = { ...payload, text: String(payload.text).slice('inventaire '.length), inventory: true };
+      }
+      if (workbook?.allowed(actor) && payload.type === 'text' && !payload.inventory) {
+        const content = await workbook.command(actor, String(payload.text));
+        if (typeof content === 'string') return show(content);
+        return navigation.show(actor, eventId, { ...content, links: content.links?.map(link => ({ ...link, page: 'documentation:' + link.page })) });
+      }
       if (payload.type === 'action' && payload.action === 'open_confirmation_values') {
         const saved = typeof payload.value === 'string' ? await store.confirmation(actor, payload.value) : undefined;
         if (!saved) return deliver(actor, eventId, { kind: "Confirmation indisponible", text: "Cette confirmation est indisponible ou n’appartient pas à cet utilisateur et à cette conversation privée." }, context);

@@ -1,5 +1,7 @@
 # Private Slack assistant — current product specification
 
+Documentation can use the team's shared Google Sheets workbook directly in private Slack DMs. The four tabs retain their fields and access references. Opening a tab reads current Google data. A change to a workbook cell requires an owner-bound form, a preview and a separate confirmation before the bot writes to the sheet. The existing PostgreSQL inventory remains available separately. See the [workbook contract](documentation.md#live-google-sheets-workbook).
+
 Status: approved by the user after the design interview. An initial local implementation and automated tests are available; live integration and model-quality validation remain release requirements. Deployment and purchasing services are not authorized by this document.
 
 ## Reading this specification

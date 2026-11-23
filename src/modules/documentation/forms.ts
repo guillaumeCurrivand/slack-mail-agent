@@ -6,7 +6,9 @@ import { projectFields, projectEdit, recordSchemas, recordTitle, type InventoryV
 import type { DocumentationStore } from './store.js';
 
 type Kind = 'project' | RecordKind;
-export type InventoryFormResult = { command: string };
+import { validateSheet, type SheetEdit } from './workbook.js';
+
+export type InventoryFormResult = { command: string; workbook?: never } | { workbook: SheetEdit; command?: never };
 const labels: Record<string, string> = { name: 'Nom', aliases: 'Autres noms — un par ligne', description: 'Description', repositories: 'Dépôts', documentationLinks: 'Documentation', notes: 'Notes', category: 'Catégorie', type: 'Type', technologies: 'Technologies', projectId: 'Projet', role: 'Rôle', monthlyCost: 'Coût mensuel', currency: 'Devise (EUR, USD…)', environment: 'Environnement', componentId: 'Composant', serviceId: 'Hébergeur/service', accountReference: 'Référence du compte', urls: 'Adresses', accessInstructions: 'Instructions d’accès', usage: 'Utilisation', referent: 'Référent', companyWide: 'Utilisé dans toute l’entreprise', projects: 'Projets utilisateurs' };
 const keys: Record<Kind, string[]> = {
   project: ['name', 'aliases', 'description', 'repositories', 'documentationLinks', 'notes'],
@@ -76,6 +78,7 @@ export class InventoryForms extends GuidedForms<InventoryFormResult> {
 }
 
 function validate(form: SavedForm<InventoryFormResult>, values: FormValues) {
+  if (form.definition.context.book) return validateSheet(form, values);
   const { kind, operation, target, base } = form.definition.context as { kind: Kind; operation: 'create' | 'edit'; target?: string; base: InventoryValues };
   const fields: InventoryValues = {};
   for (const key of keys[kind]) {

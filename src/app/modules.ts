@@ -4,6 +4,7 @@ import type { Sql } from '../core/store.js';
 import { readMailConfig } from '../modules/mail/config.js';
 import { createMailModule } from '../modules/mail/index.js';
 import { createDocumentationModule } from '../modules/documentation/index.js';
+import { configuredWorkbook } from '../modules/documentation/sheets.js';
 import { readDocumentationAIConfig } from '../modules/documentation/ai.js';
 import type { Config } from './config.js';
 import { frenchCommand } from './commands.js';
@@ -18,7 +19,7 @@ export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv =
   const factories = {
     hyperdx: () => createHyperdxModule(readHyperdxConfig(env), config.SLACK_TEAM_ID, config.SLACK_BOT_TOKEN),
     mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql, config.SLACK_BOT_TOKEN),
-    documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env), config.SLACK_BOT_TOKEN),
+    documentation: () => createDocumentationModule(sql, readDocumentationAIConfig(env), config.SLACK_BOT_TOKEN, configuredWorkbook(env, config.SLACK_TEAM_ID)),
     clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),
     yousign: () => createYousignModule({ ...readYousignConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),
     development: () => createDevelopmentModule({ ...readDevelopmentConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),

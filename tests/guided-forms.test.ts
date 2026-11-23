@@ -1,4 +1,5 @@
-import { createHmac, randomBytes, randomUUID } from 'node:crypto';
+import { createHmac, generateKeyPairSync, randomBytes, randomUUID } from 'node:crypto';
+import { tabs, type Cell } from '../src/modules/documentation/sheets.js';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { createModules } from '../src/app/modules.js';
@@ -19,17 +20,18 @@ beforeEach(async () => { for (const row of (await db.query<{ tablename: string }
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
-async function harness() {
+async function harness(google?: { env: Record<string, string>; request: typeof fetch }) {
   const views: any[] = [], messages: any[] = [];
   let rejectOpen = false, rejectUpdate = false;
   const provider = vi.fn(async (url: string | URL | Request, init?: RequestInit) => {
+    if (google && !String(url).startsWith('https://slack.com/')) return google.request(url, init);
     expect(String(url)).toBe('https://slack.com/api/views.open');
     views.push(JSON.parse(String(init?.body)).view);
     if (rejectOpen) { rejectOpen = false; throw new Error('Uncertain modal delivery'); }
     return Response.json({ ok: true });
   });
   vi.stubGlobal('fetch', provider);
-  const config = readConfig(env), modules = createModules(config, sql, env), jobs = new JobStore(sql);
+  const config = readConfig(env), modules = createModules(config, sql, { ...env, ...google?.env }), jobs = new JobStore(sql);
   for (const module of modules.all()) await module.initialize?.({ query: async text => (await db.exec(text)).at(-1)! });
   const app = createServer(config, jobs, modules);
   const messenger = new Slack('fake', (async (url, init) => {
@@ -79,6 +81,64 @@ async function harness() {
   };
   return { app, views, messages, provider, dm, click, submit, signed, drain, seed, buttons, rejectOpen: () => { rejectOpen = true; }, rejectUpdate: () => { rejectUpdate = true; } };
 }
+
+it('reads the live workbook and writes a reviewed edit from a signed Slack DM to the matching row after a sort', async () => {
+  const cell = (s: string): Cell => ({ formattedValue: s, userEnteredValue: { stringValue: s } });
+  const rows = [['Demo', 'One'], ['Demo', 'Two']].map(values => ({ values: values.map(cell) }));
+  const writes: any[] = [];
+  const fake = {
+    env: { DOCUMENTATION_SPREADSHEET_ID: 'demo-workbook', DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({
+      client_email: 'bot@example.invalid', private_key: generateKeyPairSync('rsa', { modulusLength: 2048 }).privateKey.export({ type: 'pkcs8', format: 'pem' }),
+    }) },
+    request: (async (url, init) => {
+      if (String(url) === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'demo', expires_in: 3600 });
+      expect(String(url)).toContain('https://sheets.googleapis.com/v4/spreadsheets/demo-workbook');
+      if (init?.method === 'POST') {
+        const patch = JSON.parse(String(init.body)).requests[0].updateCells;
+        writes.push(patch);
+        const value = patch.rows[0].values[0].userEnteredValue.stringValue;
+        rows[patch.start.rowIndex - 1]!.values[patch.start.columnIndex] = cell(value);
+        return Response.json({});
+      }
+      return Response.json({ sheets: [{ properties: { sheetId: 12, title: 'hébergement' }, data: [{ rowData: [
+        { values: tabs.hosts.headers.map(cell) }, ...rows,
+      ] }] }] });
+    }) as typeof fetch,
+  };
+  const h = await harness(fake);
+  try {
+    const prepare = async () => {
+      const list = await h.dm('documentation hébergements');
+      const record = await h.click(list, 'Ouvrir');
+      const prepared = await h.click(record, 'Modifier · Rôle');
+      await h.click(prepared, 'Remplir le formulaire');
+      return h.views.at(-1);
+    };
+    const first = await prepare();
+    expect(first.blocks.find((b: any) => b.block_id === 'v0').element.initial_value).toBe('One');
+    expect((await h.submit(first, { v0: '=literal' })).statusCode).toBe(200);
+    const review = await h.drain();
+    expect(writes).toHaveLength(0);
+    rows.reverse();
+    await h.click(review, 'Confirmer dans Sheets', bob);
+    expect(writes).toHaveLength(0);
+    await h.click(review, 'Confirmer dans Sheets');
+    expect(writes).toHaveLength(1);
+    expect(writes[0].start).toEqual({ sheetId: 12, rowIndex: 2, columnIndex: 1 });
+    expect(writes[0].rows[0].values[0].userEnteredValue).toEqual({ stringValue: '=literal' });
+    await h.click(review, 'Confirmer dans Sheets');
+    expect(writes).toHaveLength(1);
+    const second = await prepare();
+    expect(second.blocks.find((b: any) => b.block_id === 'v0').element.initial_value).toBe('Two');
+    await h.submit(second, { v0: 'Slack edit' });
+    const pending = await h.drain();
+    rows[0]!.values[1] = cell('Changed in Sheets');
+    const stale = await h.click(pending, 'Confirmer dans Sheets');
+    expect(JSON.stringify(stale)).toContain('La ligne a changé');
+    expect(writes).toHaveLength(1);
+    expect((await prepare()).blocks.find((b: any) => b.block_id === 'v0').element.initial_value).toBe('Changed in Sheets');
+  } finally { await h.app.close(); }
+});
 
 it.each(['project', 'technology', 'host', 'tool', 'component', 'hosting'])('creates %s through a signed guided form and a separate in-place confirmation without AI', async kind => {
   const h = await harness();

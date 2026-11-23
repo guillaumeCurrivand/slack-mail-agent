@@ -1,5 +1,22 @@
 # Updating production
 
+## Documentation workbook
+
+Deploying the code leaves the workbook disabled until you configure both values. Enable the Google Sheets API in the service account’s Google Cloud project and share the specific workbook with its `client_email` as **Editor**. Keep general access restricted. Use a dedicated service account and ensure the workbook contains only data intended for Documentation users.
+
+In the private `/opt/slack-mail-agent/.env`, set `DOCUMENTATION_SPREADSHEET_ID` to the part between `/d/` and `/edit` in the workbook URL. Set `DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON` to the account’s complete single-line JSON enclosed in single quotes. Preserve JSON’s literal `\n` escapes in `private_key`. Keep the identifier and credentials off GitHub and out of Slack. The four tab names and the headers in their first row must match the [workbook contract](documentation.md#live-google-sheets-workbook). Keep `documentation` in `ENABLED_MODULES`.
+
+From the server, deploy the reviewed `main` release or reload the private environment after the automatic deployment:
+
+```sh
+cd /opt/slack-mail-agent
+git pull --ff-only origin main &&
+docker compose up -d --build app &&
+curl -fsS --retry 10 --retry-all-errors http://127.0.0.1:3001/ready
+```
+
+Startup creates the module's write-coordination index. In a private DM, send `documentation classeur` and open each tab. Verify write access using an agreed test row. Change a cell in Sheets and refresh Slack, then edit that field in Slack, confirm, and verify the cell in Sheets. Remove the test row in Sheets after verification. To disable workbook access, remove both private values and recreate the app container. The structured inventory remains available.
+
 To enable the optional HyperDX digest on an existing deployment, follow [HyperDX activation and cutover](hyperdx.md#activation-and-cutover).
 
 Production uses Docker Compose. The confirmed server checkout is `/opt/slack-mail-agent`, running this repository's `compose.yaml` with `app` and `db` services. Keep the same Compose project name, environment file, and any override files used for the original deployment.
