@@ -58,7 +58,7 @@ describe.skipIf(!url)('real PostgreSQL concurrency', () => {
     await createDocumentationModule(pool, undefined, '', provider).initialize!(pool);
     const workbook = new LiveWorkbook(provider, pool);
     async function submitted(actor: Actor, key: string, mutation: SheetMutation) {
-      const id = uid(), definition = { context: { book: provider.identity, tab: 'tools', sheetId: 7, key, col: 0 } };
+      const id = uid(), definition = { context: { book: provider.identity, tab: 'tools', sheetId: 7, key, col: 0, headers: ['Name'] } };
       const row = await pool.query(`INSERT INTO documentation_guided_forms(id,owner,channel,timestamp,source,definition,state,result)
         VALUES($1,$2,$3,'1',$1,$4,'submitted',$5) RETURNING *`, [id, actor.team + ':' + actor.user, actor.channel, definition, { workbook: mutation }]);
       return row.rows[0] as SavedForm<{ workbook: SheetMutation }>;

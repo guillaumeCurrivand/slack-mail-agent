@@ -4,7 +4,7 @@
 
 Deploying the code leaves the workbook disabled until you configure both values. Enable the Google Sheets API in the service account’s Google Cloud project and share the specific workbook with its `client_email` as **Editor**. Keep general access restricted. Use a dedicated service account and ensure the workbook contains only data intended for Documentation users.
 
-In the private `/opt/slack-mail-agent/.env`, set `DOCUMENTATION_SPREADSHEET_ID` to the part between `/d/` and `/edit` in the workbook URL. Set `DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON` to the account’s complete single-line JSON enclosed in single quotes. Preserve JSON’s literal `\n` escapes in `private_key`. Keep the identifier and credentials off GitHub and out of Slack. The four tab names and the headers in their first row must match the [workbook contract](documentation.md#live-google-sheets-workbook). Keep `documentation` in `ENABLED_MODULES`.
+In the private `/opt/slack-mail-agent/.env`, set `DOCUMENTATION_SPREADSHEET_ID` to the part between `/d/` and `/edit` in the workbook URL. Set `DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON` to the account’s complete single-line JSON enclosed in single quotes. Preserve JSON’s literal `\n` escapes in `private_key`. Keep the identifier and credentials off GitHub and out of Slack. Keep the four connected tab names and put column headings in row 1. The module discovers named columns when it reads the tab. See the [workbook contract](documentation.md#live-google-sheets-workbook). Keep `documentation` in `ENABLED_MODULES`.
 
 From the server, deploy the reviewed `main` release or reload the private environment after the automatic deployment:
 

@@ -7,8 +7,30 @@ import { transaction } from '../../core/transactions.js';
 import { cellView, isTab, literalHyperlink, segments, tabs, type Cell, type Sheet, type SheetRow, type Tab, type Workbook } from './sheets.js';
 
 export type SheetMutation = { operation?: 'edit'; cell: Cell; fields: string } | { operation: 'create'; cells: Cell[] } | { operation: 'delete' };
-type RowContext = { operation: 'create' | 'delete'; book: string; tab: Tab; sheetId: number; key: string; cells?: Cell[] };
-type EditContext = { book: string; tab: Tab; sheetId: number; key: string; col: number; name: string; original: Cell };
+type SheetContext = { book: string; tab: Tab; sheetId: number; key: string; headers?: string[] };
+type RowContext = SheetContext & { operation: 'create' | 'delete'; cells?: Cell[] };
+type EditContext = SheetContext & { col: number; name: string; original: Cell };
+// Forms saved before live header discovery have no header snapshot.
+const legacyHeaders: Record<Tab, string[]> = {
+  projects: ['Projet', 'Technologie front', 'Technologie back', 'Hébergement front', 'Hébergement back', 'Accès', 'Repos GitHub', 'Repos GitLab', 'Identifiants sur le Vault ?'],
+  technologies: ['Catégorie', 'Technologie', 'Utilisé sur'],
+  hosts: ['Hébergeur', 'Rôle', 'Projets', 'Coût Mensuel'],
+  tools: ['Catégorie', 'Outil', 'Usage', 'Référent', 'Utilisé sur'],
+};
+const savedHeaders = (context: SheetContext) => context.headers ?? legacyHeaders[context.tab];
+function columns(headers: string[]) {
+  const names = headers.map(h => h.trim());
+  const seen = new Set<string>(), duplicates = new Set<string>();
+  for (const name of names) {
+    if (seen.has(name)) duplicates.add(name);
+    seen.add(name);
+  }
+  return names.flatMap((name, index) => name ? [{ index, name, label: duplicates.has(name) ? name + ' (col. ' + (index + 1) + ')' : name }] : []);
+}
+function nameColumn(headers: string[], tab: Tab) {
+  const index = headers.findIndex(h => h.trim() === tabs[tab].name);
+  return index >= 0 ? index : headers.findIndex(h => h.trim());
+}
 const home = { label: 'Retour au classeur', page: 'main' };
 const unavailable = 'La ligne a changé, a été supprimée ou existe en double. Ouvrez à nouveau l’onglet.';
 const tabLink = (tab: Tab) => ({ label: tabs[tab].title, page: 'sheet_' + tab + '_0' });
@@ -16,7 +38,7 @@ const exact = (sheet: Sheet, key: string) => {
   const rows = sheet.rows.filter(row => row.key === key);
   return rows.length === 1 ? rows[0] : undefined;
 };
-const rowName = (row: SheetRow, tab: Tab) => row.cells[tabs[tab].name]?.formattedValue || 'Ligne ' + (row.index + 1);
+const rowName = (row: SheetRow, index: number) => row.cells[index]?.formattedValue || row.cells[index]?.userEnteredValue?.stringValue || 'Ligne ' + (row.index + 1);
 
 const quoted = (value: string) => '"' + value.replaceAll('"', '""') + '"';
 function editable(cell: Cell) {
@@ -28,10 +50,11 @@ function editable(cell: Cell) {
 }
 export function sheetDefinition(context: EditContext): FormDefinition {
   const parts = segments(context.original);
+  const label = columns(savedHeaders(context)).find(c => c.index === context.col)!.label;
   const fields: FormField[] = [];
   parts.forEach((part, i) => {
     const suffix = parts.length > 1 ? ' (' + (i + 1) + '/' + parts.length + ')' : '';
-    fields.push({ key: 'v' + i, label: tabs[context.tab].headers[context.col] + suffix, kind: 'lines', max: 3000, initial: context.original.userEnteredValue?.numberValue?.toString() ?? context.original.userEnteredValue?.boolValue?.toString() ?? part.text });
+    fields.push({ key: 'v' + i, label: (label + suffix).slice(0, 2000), kind: 'lines', max: 3000, initial: context.original.userEnteredValue?.numberValue?.toString() ?? context.original.userEnteredValue?.boolValue?.toString() ?? part.text });
     if (!context.original.userEnteredValue || context.original.userEnteredValue.numberValue === undefined && context.original.userEnteredValue.boolValue === undefined)
       fields.push({ key: 'u' + i, label: 'Lien' + suffix, max: 3000, initial: part.url ?? '', hint: 'Adresse HTTP(S) facultative pour ce texte.' });
   });
@@ -39,13 +62,14 @@ export function sheetDefinition(context: EditContext): FormDefinition {
 }
 export function validateSheet(form: SavedForm, values: FormValues): { data: { workbook: SheetMutation } } | { errors: Record<string, string> } {
   if (form.definition.context.operation === 'create') {
-    const { tab } = form.definition.context as RowContext;
-    const cells: Cell[] = [];
-    for (const [i] of tabs[tab].headers.entries()) {
+    const ctx = form.definition.context as RowContext;
+    const headers = savedHeaders(ctx), name = nameColumn(headers, ctx.tab);
+    const cells: Cell[] = headers.map(() => ({}));
+    for (const { index: i } of columns(headers)) {
       const text = String(values['v' + i] ?? ''), url = String(values['u' + i] ?? '').trim();
-      if (i === tabs[tab].name && !text.trim()) return { errors: { ['v' + i]: 'Le nom est requis.' } };
+      if (i === name && !text.trim()) return { errors: { ['v' + i]: 'Le nom est requis.' } };
       if (url && (!text || !validResourceUrl(url))) return { errors: { ['u' + i]: 'Un lien nécessite un texte et une URL HTTP(S) valide.' } };
-      cells.push(text ? { userEnteredValue: { stringValue: text }, ...(url ? { textFormatRuns: [{ startIndex: 0, format: { link: { uri: url } } }] } : {}) } : {});
+      if (text) cells[i] = { userEnteredValue: { stringValue: text }, ...(url ? { textFormatRuns: [{ startIndex: 0, format: { link: { uri: url } } }] } : {}) };
     }
     return { data: { workbook: { operation: 'create', cells } } };
   }
@@ -82,10 +106,11 @@ export function validateSheet(form: SavedForm, values: FormValues): { data: { wo
   return { data: { workbook: { cell, fields } } };
 }
 function rowPage(tab: Tab, sheet: Sheet, row: SheetRow): MenuPage {
+  const fields = columns(sheet.headers);
   return { kind: tabs[tab].title, text: 'Choisissez le champ à modifier. Les champs calculés complexes s’éditent dans Sheets.',
-    table: { columns: ['Champ', 'Valeur'], rows: sheet.headers.map((h, i) => [h, cellView(row.cells[i]!)]),
-      rowButtons: sheet.headers.map((h, i) => editable(row.cells[i]!)
-        ? { label: 'Modifier · ' + h, action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_${i}` } : null),
+    table: { columns: ['Champ', 'Valeur'], rows: fields.map(({ index, label }) => [label, cellView(row.cells[index]!)]),
+      rowButtons: fields.map(({ index, label }) => editable(row.cells[index]!)
+        ? { label: 'Modifier · ' + label, action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_${index}` } : null),
       rowButtonFallback: 'Modifier le champ dans Sheets ou ouvrir cette fiche dans un client Slack à jour.' },
     buttons: [{ label: 'Supprimer la ligne', action: 'form_prepare', bound: true, value: `sheet_${tab}_${row.key}_delete` }],
     links: [tabLink(tab), home] };
@@ -108,7 +133,8 @@ export class LiveWorkbook {
       let sheet;
       try { sheet = await this.provider.read(tab); } catch { return { kind: 'Classeur indisponible', text: 'Réessayez depuis l’onglet.', links: [tabLink(tab)] }; }
       const name = match[2]!.trim();
-      const rows = sheet.rows.filter(row => rowName(row, tab).localeCompare(name, 'fr', { sensitivity: 'accent' }) === 0);
+      const primary = nameColumn(sheet.headers, tab);
+      const rows = sheet.rows.filter(row => rowName(row, primary).localeCompare(name, 'fr', { sensitivity: 'accent' }) === 0);
       if (rows.length === 1) return rowPage(tab, sheet, rows[0]!);
       return { kind: tabs[tab].title, text: rows.length ? 'Plusieurs lignes portent ce nom. Choisissez la ligne dans l’onglet.' : 'Aucune ligne ne porte ce nom dans l’onglet.', links: [tabLink(tab), home] };
     }
@@ -132,37 +158,43 @@ export class LiveWorkbook {
     }
     const p = Math.min(Number(selector), Math.max(0, Math.ceil(sheet.rows.length / 6) - 1));
     const rows = sheet.rows.slice(p * 6, p * 6 + 6);
-    const secondary = def.name === 1 ? 0 : 1;
-    return { kind: def.title, text: sheet.rows.length + ' lignes · page ' + (p + 1),
-      ...(rows.length ? { table: { columns: ['Ligne', sheet.headers[def.name]!, sheet.headers[secondary]!], rows: rows.map(row => [String(row.index + 1), cellView(row.cells[def.name]!), cellView(row.cells[secondary]!)]) },
-        recordChoices: rows.map(row => ({ label: rowName(row, tab), page: 'sheet_' + tab + '_' + row.key })) } : {}),
+    const fields = columns(sheet.headers), primary = nameColumn(sheet.headers, tab);
+    const others = fields.filter(c => c.index !== primary);
+    const secondary = others.find(c => c.name === def.secondary) ?? others[0];
+    const summary = [fields.find(c => c.index === primary)!, ...(secondary ? [secondary] : [])];
+    return { kind: def.title, text: sheet.rows.length + ' lignes · page ' + (p + 1) + (fields.length > 49 ? '\nCréez la ligne avec son nom, puis complétez les champs depuis sa fiche.' : ''),
+      ...(rows.length ? { table: { columns: ['Ligne', ...summary.map(c => c.label)], rows: rows.map(row => [String(row.index + 1), ...summary.map(c => cellView(row.cells[c.index]!))]) },
+        recordChoices: rows.map(row => ({ label: rowName(row, primary), page: 'sheet_' + tab + '_' + row.key })) } : {}),
       buttons: [{ label: 'Ajouter une ligne', action: 'form_prepare', bound: true, value: 'sheet_' + tab + '_create' }],
       links: [...(p ? [{ label: 'Précédent', page: 'sheet_' + tab + '_' + (p - 1) }] : []),
         ...((p + 1) * 6 < sheet.rows.length ? [{ label: 'Suivant', page: 'sheet_' + tab + '_' + (p + 1) }] : []),
         { label: 'Actualiser', page: 'sheet_' + tab + '_' + p }, home] };
   }
   async definition(actor: Actor, value: string) {
-    const match = /^sheet_([a-z]+)_(?:create|([a-f0-9]{64})_(delete|\d))$/.exec(value);
+    const match = /^sheet_([a-z]+)_(?:create|([a-f0-9]{64})_(delete|\d{1,5}))$/.exec(value);
     if (!this.allowed(actor) || !match || !isTab(match[1]!)) return;
     const tab = match[1], col = Number(match[3]);
     let sheet: Sheet;
     try { sheet = await this.provider.read(tab); } catch { return; }
     if (!match[2]) {
-      const context: RowContext = { operation: 'create', book: this.provider.identity, tab, sheetId: sheet.id, key: 'create_' + tab };
-      const fields = sheet.headers.flatMap((label, i): FormField[] => [
-        { key: 'v' + i, label, kind: 'lines', max: 1500, required: i === tabs[tab].name },
-        { key: 'u' + i, label: 'Lien · ' + label, max: 1000, hint: 'Adresse HTTP(S) facultative.' },
+      const context: RowContext = { operation: 'create', book: this.provider.identity, tab, sheetId: sheet.id, key: 'create_' + tab, headers: sheet.headers };
+      const visible = columns(sheet.headers), primary = nameColumn(sheet.headers, tab);
+      // Slack allows 100 modal blocks. One introduction plus two inputs per column fit 49 columns.
+      const inputs = visible.length <= 49 ? visible : visible.filter(c => c.index === primary);
+      const fields = inputs.flatMap(({ index: i, label }): FormField[] => [
+        { key: 'v' + i, label: label.slice(0, 2000), kind: 'lines', max: 1500, required: i === primary },
+        { key: 'u' + i, label: ('Lien · ' + label).slice(0, 2000), max: 1000, hint: 'Adresse HTTP(S) facultative.' },
       ]);
       return { title: 'Ajouter une ligne', fields, context };
     }
     const row = exact(sheet, match[2]);
     if (!row) return;
     if (match[3] === 'delete') {
-      const context: RowContext = { operation: 'delete', book: this.provider.identity, tab, sheetId: sheet.id, key: row.key, cells: row.cells };
+      const context: RowContext = { operation: 'delete', book: this.provider.identity, tab, sheetId: sheet.id, key: row.key, cells: row.cells, headers: sheet.headers };
       return { title: 'Supprimer la ligne', fields: [], context };
     }
-    if (!row.cells[col] || !editable(row.cells[col])) return;
-    return sheetDefinition({ book: this.provider.identity, tab, sheetId: sheet.id, key: row.key, col, name: rowName(row, tab), original: row.cells[col] });
+    if (!sheet.headers[col]?.trim() || !row.cells[col] || !editable(row.cells[col])) return;
+    return sheetDefinition({ book: this.provider.identity, tab, sheetId: sheet.id, key: row.key, col, name: rowName(row, nameColumn(sheet.headers, tab)), original: row.cells[col], headers: sheet.headers });
   }
   async reviewDeletion(actor: Actor, form: SavedForm): Promise<SavedForm<{ workbook: SheetMutation }> | undefined> {
     if (!this.allowed(actor) || form.channel !== actor.channel || form.definition.context.book !== this.provider.identity || form.definition.context.operation !== 'delete') return;
@@ -184,7 +216,7 @@ export class LiveWorkbook {
       const cells = creating ? mutation.cells : ctx.cells!;
       return { kind: creating ? 'Confirmer la création' : 'Confirmer la suppression',
         text: (creating ? 'Nouvelle ligne' : 'La ligne entière sera supprimée') + ' · ' + tabs[ctx.tab].title,
-        table: { columns: ['Champ', 'Valeur'], rows: tabs[ctx.tab].headers.map((label, i) => [label, cellView(cells[i]!)]) },
+        table: { columns: ['Champ', 'Valeur'], rows: columns(savedHeaders(ctx)).map(({ label, index }) => [label, cellView(cells[index]!)]) },
         buttons: [{ label: creating ? 'Confirmer la création' : 'Confirmer la suppression', action: 'sheet_apply', value: form.id, bound: true }, cancel] };
     }
     const ctx = form.definition.context as EditContext, change = mutation.cell;
@@ -196,7 +228,7 @@ export class LiveWorkbook {
     } else if (value?.numberValue !== undefined || value?.boolValue !== undefined) after = String(value.numberValue ?? value.boolValue);
     const describe = (v: TableCell) => typeof v === 'string' ? v : v.map(part => part.text + (part.url ? ' (' + part.url + ')' : '')).join('');
     return { kind: 'Confirmer la modification dans Sheets', text: 'Vérifiez la valeur et les destinations des liens.',
-      table: { columns: ['Onglet', 'Ligne', 'Champ', 'Avant', 'Après'], rows: [[tabs[ctx.tab].title, ctx.name, tabs[ctx.tab].headers[ctx.col]!, describe(cellView(ctx.original)), describe(after)]] },
+      table: { columns: ['Onglet', 'Ligne', 'Champ', 'Avant', 'Après'], rows: [[tabs[ctx.tab].title, ctx.name, columns(savedHeaders(ctx)).find(c => c.index === ctx.col)!.label, describe(cellView(ctx.original)), describe(after)]] },
       buttons: [{ label: 'Confirmer dans Sheets', action: 'sheet_apply', value: form.id, bound: true }, cancel] };
   }
   async apply(actor: Actor, form: SavedForm<{ workbook: SheetMutation }>): Promise<string> {
@@ -221,9 +253,12 @@ export class LiveWorkbook {
       const lock = await db.query('SELECT pg_try_advisory_xact_lock(hashtext($1), $2::integer) AS acquired', ['documentation:sheet:' + ctx.book, ctx.sheetId]);
       if (!lock.rows[0].acquired) return finish('submitted', 'Une écriture est en cours dans cet onglet. Rouvrez la proposition.');
       let sheet: Sheet;
-      try { sheet = await this.provider.read(ctx.tab, mutation.operation === 'delete'); }
+      try { sheet = await this.provider.read(ctx.tab); }
       catch { return finish('submitted', 'Lecture Google impossible. Rouvrez la proposition.'); }
       if (sheet.id !== ctx.sheetId) return finish('stale', 'Cet onglet a été remplacé. Rouvrez le classeur.');
+      const headers = savedHeaders(ctx);
+      if (headers.length !== sheet.headers.length || headers.some((h, i) => h !== sheet.headers[i]))
+        return finish('stale', 'Les colonnes ont changé. Actualisez l’onglet et préparez une nouvelle proposition.');
       try {
         if (mutation.operation === 'create') {
           const signature = (cells: Cell[]) => JSON.stringify(cells.map(cellView));

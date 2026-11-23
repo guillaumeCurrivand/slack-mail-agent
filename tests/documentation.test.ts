@@ -1,5 +1,5 @@
 import { tableBlocks } from './slack-blocks.js';
-import { createHmac, randomUUID } from 'node:crypto';
+import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
 import { readConfig } from '../src/app/config.js';
@@ -2265,6 +2265,32 @@ it('scopes shared Projects/history to the configured workspace even with the sam
     expect(kind(await foreign.click(details, "Historique", otherAlice))).toBe("Menu indisponible");
     expect(bodyText(await h.dm('documentation projects'))).toContain("1 projets");
   } finally { await h.app.close(); await foreign.app.close(); }
+});
+
+it('discovers a new Google column through Slack navigation and prepares its row action', async () => {
+  const headers = ['Projet', 'Équipe'], data = ['Alpha', 'Design'];
+  const { privateKey } = generateKeyPairSync('rsa', { modulusLength: 2048 });
+  vi.stubGlobal('fetch', vi.fn(async (url: string) => {
+    if (url === 'https://oauth2.googleapis.com/token') return Response.json({ access_token: 'synthetic', expires_in: 3600 });
+    expect(new URL(url).searchParams.get('ranges')).toBe("'projet'");
+    return Response.json({ sheets: [{ properties: { title: 'projet', sheetId: 3 }, data: [{ rowData:
+      [headers, data].map(row => ({ values: row.map(s => ({ formattedValue: s, userEnteredValue: { stringValue: s } })) })) }] }] });
+  }));
+  const h = await harness('documentation', 'TTEAM', { DOCUMENTATION_SPREADSHEET_ID: 'synthetic',
+    DOCUMENTATION_GOOGLE_SERVICE_ACCOUNT_JSON: JSON.stringify({ client_email: 'test@example.invalid', private_key: privateKey.export({ format: 'pem', type: 'pkcs8' }) }) });
+  try {
+    const tab = await h.click(await h.dm('documentation classeur'), 'projet');
+    headers.splice(1, 0, 'Responsable'); data.splice(1, 0, 'Camille');
+    const refreshed = await h.click(tab, 'Actualiser');
+    const open = parts(refreshed).find(b => b.type === 'data_table').rows[1].at(-1).element;
+    await h.enqueueClick(refreshed, open);
+    const detail = await h.drain();
+    const row = parts(detail).find(b => b.type === 'data_table').rows.find((r: any[]) => cellValue(r[0]) === 'Responsable');
+    expect(cellValue(row[1])).toBe('Camille');
+    expect(row[2].element.text.text).toBe('Modifier · Responsable');
+    await h.enqueueClick(detail, row[2].element);
+    button(await h.drain(), 'Remplir le formulaire');
+  } finally { await h.app.close(); }
 });
 
 it('keeps signed ingress and workspace validation and pauses disabled Documentation with private navigation intact', async () => {

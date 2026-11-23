@@ -1,6 +1,6 @@
 # Private Slack assistant — current product specification
 
-Documentation can use the team's shared Google Sheets workbook directly in private Slack DMs. The four tabs retain their fields and access references. Opening a tab reads current Google data. Workspace Documentation users can create, read, update and delete workbook records in each tab. Writes require an owner-bound preview and separate confirmation. Deleting removes the complete reviewed sheet row. The existing PostgreSQL inventory remains available separately. See the [workbook contract](documentation.md#live-google-sheets-workbook).
+Documentation can use the team's shared Google Sheets workbook directly in private Slack DMs. The four connected tabs use the current named columns in row 1, including access references. Adding, renaming or moving a column in Sheets takes effect the next time the tab is opened or refreshed in Slack. Opening a tab reads current Google data. Workspace Documentation users can create, read, update and delete workbook records in each tab. Writes require an owner-bound preview and separate confirmation. Deleting removes the complete reviewed sheet row. The existing PostgreSQL inventory remains available separately. See the [workbook contract](documentation.md#live-google-sheets-workbook).
 
 Status: approved by the user after the design interview. An initial local implementation and automated tests are available; live integration and model-quality validation remain release requirements. Deployment and purchasing services are not authorized by this document.
 

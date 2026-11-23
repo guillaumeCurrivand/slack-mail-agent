@@ -83,7 +83,7 @@ async function harness(google?: { env: Record<string, string>; request: typeof f
 }
 
 it.each(Object.keys(tabs) as (keyof typeof tabs)[])('creates and deletes a %s workbook row through confirmed signed Slack controls', async tab => {
-  const def = tabs[tab], sheetId = 3;
+  const def = { title: tabs[tab].title, name: 1, headers: ['Référence', tabs[tab].name, 'Notes'] }, sheetId = 3;
   const rows: Cell[][] = [];
   const name = '=Literal example';
   let loseDeleteResponse = false;
@@ -163,6 +163,7 @@ it.each(Object.keys(tabs) as (keyof typeof tabs)[])('creates and deletes a %s wo
 
 it('reads the live workbook and writes a reviewed edit from a signed Slack DM to the matching row after a sort', async () => {
   const cell = (s: string): Cell => ({ formattedValue: s, userEnteredValue: { stringValue: s } });
+  const headers = ['Hébergeur', 'Rôle', 'Projets', 'Coût Mensuel'];
   const computedCost: Cell = { formattedValue: '3', userEnteredValue: { formulaValue: '=1+2' } };
   const rows = [['Demo', 'One'], ['Demo', 'Two']].map(values => ({ values: [...values.map(cell), {}, computedCost] }));
   const writes: any[] = [];
@@ -183,7 +184,7 @@ it('reads the live workbook and writes a reviewed edit from a signed Slack DM to
       }
       sheetReads++;
       return Response.json({ sheets: [{ properties: { sheetId: 12, title: 'hébergement' }, data: [{ rowData: [
-        { values: tabs.hosts.headers.map(cell) }, ...rows,
+        { values: headers.map(cell) }, ...rows,
       ] }] }] });
     }) as typeof fetch,
   };
@@ -193,7 +194,7 @@ it('reads the live workbook and writes a reviewed edit from a signed Slack DM to
       const list = await h.dm('documentation hébergements');
       const record = await h.click(list, 'Ouvrir');
       const table = record.blocks.find((block: any) => block.type === 'layout').rows[0].items[0].block;
-      for (const [i, header] of tabs.hosts.headers.entries()) {
+      for (const [i, header] of headers.entries()) {
         const row = table.rows[i + 1];
         expect(row[0].text).toBe(header);
         if (header === 'Coût Mensuel') expect(row[2]).toEqual({ type: 'raw_text', text: '—' });

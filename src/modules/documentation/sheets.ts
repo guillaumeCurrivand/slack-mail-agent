@@ -3,10 +3,10 @@ import { SignJWT, importPKCS8 } from 'jose';
 import { validResourceUrl, type TableCell } from '../../core/slack.js';
 
 export const tabs = {
-  projects: { title: 'projet', name: 0, headers: ['Projet', 'Technologie front', 'Technologie back', 'Hébergement front', 'Hébergement back', 'Accès', 'Repos GitHub', 'Repos GitLab', 'Identifiants sur le Vault ?'] },
-  technologies: { title: 'Technologies', name: 1, headers: ['Catégorie', 'Technologie', 'Utilisé sur'] },
-  hosts: { title: 'hébergement', name: 0, headers: ['Hébergeur', 'Rôle', 'Projets', 'Coût Mensuel'] },
-  tools: { title: 'Outils', name: 1, headers: ['Catégorie', 'Outil', 'Usage', 'Référent', 'Utilisé sur'] },
+  projects: { title: 'projet', name: 'Projet', secondary: 'Technologie front' },
+  technologies: { title: 'Technologies', name: 'Technologie', secondary: 'Catégorie' },
+  hosts: { title: 'hébergement', name: 'Hébergeur', secondary: 'Rôle' },
+  tools: { title: 'Outils', name: 'Outil', secondary: 'Catégorie' },
 } as const;
 export type Tab = keyof typeof tabs;
 export const isTab = (key: string): key is Tab => Object.hasOwn(tabs, key);
@@ -20,7 +20,7 @@ export type SheetRow = { index: number; key: string; cells: Cell[]; extraData?: 
 export type Sheet = { id: number; headers: string[]; rows: SheetRow[] };
 export type Workbook = {
   identity: string; team: string;
-  read(tab: Tab, inspectWholeRows?: boolean): Promise<Sheet>;
+  read(tab: Tab): Promise<Sheet>;
   append(sheetId: number, cells: Cell[]): Promise<void>;
   remove(sheetId: number, row: number): Promise<void>;
   write(sheetId: number, row: number, column: number, cell: Cell, fields: string): Promise<void>;
@@ -43,13 +43,14 @@ export const cellView = (cell: Cell): TableCell => segments(cell).map(({ text, u
 export function parseSheet(tab: Tab, source: { properties: { sheetId: number; title: string }; data?: { rowData?: { values?: Cell[] }[] }[] }): Sheet {
   const template = tabs[tab];
   const [head, ...data] = source.data?.[0]?.rowData ?? [];
-  const headers = head?.values?.slice(0, template.headers.length).map(display) ?? [];
-  if (source.properties.title !== template.title || template.headers.length !== headers.length || template.headers.some((label, i) => label !== headers[i]?.trim())) throw new Error('Les colonnes du classeur ont changé. Vérifiez les en-têtes.');
+  const headers = head?.values?.map(display) ?? [];
+  while (headers.length && !headers.at(-1)!.trim()) headers.pop();
+  if (source.properties.title !== template.title || !headers.length) throw new Error('Vérifiez les colonnes de la première ligne.');
   const rows = data.flatMap((row, i) => {
     const cells = headers.map((_, j) => row.values?.[j] ?? {});
-    if (!cells.some(cell => cell.userEnteredValue || display(cell))) return [];
+    if (!cells.some((cell, j) => headers[j]!.trim() && (cell.userEnteredValue || display(cell)))) return [];
     const key = digest(JSON.stringify([source.properties.sheetId, headers, cells]));
-    const extraData = row.values?.slice(headers.length).some(cell => cell.userEnteredValue || cell.formattedValue || cell.hyperlink || cell.chipRuns?.length || cell.dataSourceFormula || 'note' in cell || 'pivotTable' in cell || 'dataSourceTable' in cell);
+    const extraData = row.values?.some((cell, j) => !headers[j]?.trim() && (cell.userEnteredValue || cell.formattedValue || cell.hyperlink || cell.chipRuns?.length || cell.dataSourceFormula || 'note' in cell || 'pivotTable' in cell || 'dataSourceTable' in cell));
     return [{ index: i + 1, key, cells, extraData }];
   });
   return { id: source.properties.sheetId, headers, rows };
@@ -91,11 +92,11 @@ export function configuredWorkbook(env: NodeJS.ProcessEnv, team: string, request
   }
   return {
     identity: digest(id), team,
-    async read(tab, inspectWholeRows = false) {
+    async read(tab) {
       const def = tabs[tab];
       const range = "'" + def.title + "'";
       const fields = 'formattedValue,userEnteredValue,hyperlink,textFormatRuns,userEnteredFormat(textFormat,numberFormat),chipRuns,dataSourceFormula,note,pivotTable,dataSourceTable';
-      const params = new URLSearchParams({ ranges: inspectWholeRows ? range : range + '!A:' + String.fromCharCode(64 + def.headers.length),
+      const params = new URLSearchParams({ ranges: range,
         fields: 'sheets(properties(sheetId,title),data(rowData(values(' + fields + '))))' });
       const data = await (await call(base + '?' + params)).json();
       if (!data.sheets?.[0]) throw new Error('Onglet introuvable.');
