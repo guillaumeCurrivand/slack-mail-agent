@@ -1,5 +1,4 @@
 import { formatDate } from '../../core/presentation.js';
-import { sourceLabel } from './presentation.js';
 import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type AgentMessage } from '../../core/slack.js';
@@ -7,16 +6,12 @@ import { recordTitle, recordName, type RecordKind } from './domain.js';
 import { catalogHelp, componentHelp, hostHelp, hostingHelp, toolHelp, helpFor } from './help.js';
 import { lifecycleButton, statusText, referenceLabel } from './lifecycle.js';
 import type { DocumentationStore } from './store.js';
-import { InventoryPresentation } from './presentation.js';
+import { InventoryPresentation, pageLinks, sourceLabel } from './presentation.js';
 
 const literal = escapeCardValue;
 const title = recordTitle;
 const pluralFor = (kind: RecordKind) => ({ technology: "Technologies", component: "Composants", host: "Hébergeurs/services", hosting: "Hébergements", tool: "Outils" })[kind];
 const exampleFor = (kind: RecordKind) => ({ technology: '{"notes":"Replacement"}', component: '{"type":"API","technologies":[]}', host: '{"role":"Compute"}', hosting: '{"environment":"staging","notes":null}', tool: '{"usage":"Replacement","referent":null}' })[kind];
-const pages = (prefix: string, page: number, count: number) => [
-  ...(page > 0 ? [{ label: "Précédent", page: `${prefix}_${page - 1}` }] : []),
-  ...(page + 1 < count ? [{ label: "Suivant", page: `${prefix}_${page + 1}` }] : []),
-];
 async function pagedLookup<T extends { total: number }>(input: string, lookup: (selector: string) => Promise<T>) {
   let selector = input.trim(), result = await lookup(selector), page = '0';
   // A name ending in digits takes precedence over a trailing page number.
@@ -68,7 +63,7 @@ export class Catalog {
       return { kind: saved ? `Choisir une fiche : ${label}` : plural, text: `${saved ? "Ce nom est ambigu. Choisissez une fiche.\n" : ''}${parent ? `Projet : ${literal(referenceLabel(parent.fields.name, parent))}\n` : technology ? `Technologie : ${literal(referenceLabel(String(technology.fields.name), technology))}\n` : ''}page ${result.page + 1}/${result.pages} · ${result.total} ${plural}\n${result.records.length ? '' : `Aucune fiche : ${plural} enregistrée.`}`,
         ...await presentation.list(result.records, result.records.map(record => saved?.destination.startsWith('history') ? `history${kind}_${record.id}_0` : `${kind}_${record.id}`)),
         links: [
-          ...pages(prefix, result.page, result.pages), ...(kind === 'technology' ? [{ label: "Ajouter une technologie", page: 'addtechnology' }] : kind === 'tool' ? [{ label: "Ajouter un outil", page: 'addtool' }] : kind === 'host' ? [{ label: "Ajouter un hébergeur/service", page: 'addhost' }] : parent ? [{ label: "Ajouter un composant", page: `addcomponent_${parent.id}` }] : component ? [{ label: "Ajouter un hébergement", page: `addhosting_${component.id}` }] : []),
+          ...pageLinks(prefix, result.page, result.pages), ...(kind === 'technology' ? [{ label: "Ajouter une technologie", page: 'addtechnology' }] : kind === 'tool' ? [{ label: "Ajouter un outil", page: 'addtool' }] : kind === 'host' ? [{ label: "Ajouter un hébergeur/service", page: 'addhost' }] : parent ? [{ label: "Ajouter un composant", page: `addcomponent_${parent.id}` }] : component ? [{ label: "Ajouter un hébergement", page: `addhosting_${component.id}` }] : []),
           { label: "Retour", page: parent ? `project_${parent.id}` : technology ? `technology_${technology.id}` : component ? `component_${component.id}` : service ? `host_${service.id}` : 'main' }] };
     }
     const detail = /^(technology|component|host|hosting|tool|edittechnology|editcomponent|edithost|edithosting|edittool)_([^_]+)$/.exec(destination);
@@ -84,7 +79,7 @@ export class Catalog {
         const result = await this.store.recordHistory(actor, kind, id, Number(history[3]));
         const change = result.changes[0];
         return { kind: `Historique — ${label}`, ...(change ? { table: await presentation.values(change.after_values, change.before_values) } : {}), text: `${label}: ${literal(await presentation.name(kind, id))}\n${statusText(record)}\nHistorique — page ${result.page + 1}/${result.pages}\n${change ? `Auteur : ${literal(change.actor)}\nDate : ${formatDate(change.changed_at)}\nSource : ${literal(sourceLabel(change.source))}\n${change.before_values === null ? "Avant : aucune fiche" : ''}` : "Aucune modification n’a été enregistrée."}`,
-          links: [...pages(`history${kind}_${id}`, result.page, result.pages), { label: `Retour à ${label}`, page: `${kind}_${id}` }] };
+          links: [...pageLinks(`history${kind}_${id}`, result.page, result.pages), { label: `Retour à ${label}`, page: `${kind}_${id}` }] };
       }
 
       const details = await presentation.details(record.fields);

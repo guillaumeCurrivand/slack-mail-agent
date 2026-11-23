@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../../core/crypto.js';
 import type { Actor } from '../../core/identity.js';
 import { Navigation, type MenuPage, type MenuTarget } from '../../core/navigation.js';
 import { menuButton, type Button } from '../../core/slack.js';
@@ -9,7 +9,6 @@ import { ClickupStatusStore } from './status-store.js';
 import { discoverStatuses } from './statuses.js';
 import { filterNames, filterSummary, matchesStatus } from './status-filter.js';
 
-const choiceKey = (name: string) => createHash('sha256').update(name).digest('hex');
 const editorChoices = (editor: StatusEditor) => {
   const { catalogue, filter } = editor.data;
   return [...catalogue.choices.map(choice => ({ ...choice, available: true })), ...filterNames(filter).filter(name => !catalogue.choices.some(choice => choice.name === name)).map(name => ({ name, unfinished: false, available: false }))];
@@ -23,7 +22,7 @@ export function statusPage(editor: StatusEditor, requestedPage = 0, notice = '')
   const selected = new Set(names), visible = choices.slice(page * 10, (page + 1) * 10);
   const rowButtons = visible.map(choice => choice.available || selected.has(choice.name) ? {
     label: selected.has(choice.name) ? '☑ Retirer' : '☐ Ajouter',
-    action: selected.has(choice.name) ? 'status_remove' : 'status_add', value: `${editor.id}|${page}|${choiceKey(choice.name)}`,
+    action: selected.has(choice.name) ? 'status_remove' : 'status_add', value: `${editor.id}|${page}|${sha256Hex(choice.name)}`,
   } : null);
   const buttons: Button[] = [{ label: 'Voir mes tâches', action: 'tasks', value: 'tasks', style: 'primary' }];
   if (page > 0) buttons.push({ label: 'Précédent', action: 'status_page', value: `${editor.id}|${page - 1}` });
@@ -80,7 +79,7 @@ export async function handleStatusMenu(actor: Actor, command: string, value: str
   if (!editor || !parsed) return unavailable();
   if (await context.store.handled(actor, eventId, editor.id)) return show(statusPage(editor, page, 'Cette action a déjà été traitée. Aucune modification n’a été répétée.'));
   if (command === 'status_reset' || command === 'status_add' || command === 'status_remove') {
-    const choice = command === 'status_reset' ? undefined : editorChoices(editor).find(choice => choiceKey(choice.name) === parsed[3]);
+    const choice = command === 'status_reset' ? undefined : editorChoices(editor).find(choice => sha256Hex(choice.name) === parsed[3]);
     if (command !== 'status_reset' && !choice) return unavailable();
     const result = await context.store.change(actor, editor.id, context.connectionId, eventId, command === 'status_reset'
       ? { type: 'reset' } : { type: command === 'status_add' ? 'add' : 'remove', name: choice!.name });

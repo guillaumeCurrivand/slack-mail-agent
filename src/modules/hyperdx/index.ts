@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../../core/crypto.js';
 import { z } from 'zod';
 import type { IntegrationActor } from '../../core/identity.js';
 import type { AssistantModule } from '../../core/modules.js';
@@ -46,7 +46,7 @@ export function createHyperdxModule(config: ReturnType<typeof readHyperdxConfig>
         const jobs = new JobStore(sql);
         for (const target of await destinations(sql, team)) {
           for (const service of config.services) {
-            const key = createHash('sha256').update(service).digest('hex');
+            const key = sha256Hex(service);
             await jobs.enqueueIntegration(`hyperdx:${team}:${cutoff}:${target.channel_id}:${key}`, identity,
               { type: 'report', cutoff, service, channel: target.channel_id, activation: target.id }, 'hyperdx');
           }

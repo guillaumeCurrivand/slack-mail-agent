@@ -1,5 +1,4 @@
 import { formatDate } from '../../core/presentation.js';
-import { sourceLabel } from './presentation.js';
 import type { Actor } from '../../core/identity.js';
 import type { AssistantModule, ModuleContext } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
@@ -15,7 +14,7 @@ import { InventoryChanges } from './changes.js';
 import { readDocumentationAIConfig, type QuestionAIConfig } from './ai.js';
 import { DocumentationQuestions, questionSchema } from './questions.js';
 import { inventoryQueryHelp } from './inventory-query.js';
-import { InventoryPresentation, tableSize, valuePages } from './presentation.js';
+import { InventoryPresentation, pageLinks, sourceLabel, tableSize, valuePages } from './presentation.js';
 import { documentationHelp } from './guide.js';
 import { InventoryForms, inventoryFormDestination } from './forms.js';
 import type { SavedForm } from '../../core/forms.js';
@@ -26,10 +25,6 @@ import { answerWorkbook } from './workbook-questions.js';
 const literal = (value: string) => escapeCardValue(value);
 const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
 const recordPage = (destination: string, id: string) => `${destination}_${id}${['history', 'components'].includes(destination) ? '_0' : ''}`;
-const pageLinks = (prefix: string, page: number, pages: number) => [
-  ...(page > 0 ? [{ label: "Précédent", page: `${prefix}_${page - 1}` }] : []),
-  ...(page + 1 < pages ? [{ label: "Suivant", page: `${prefix}_${page + 1}` }] : []),
-];
 
 export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig = readDocumentationAIConfig({}), slackToken = '', provider?: Workbook): AssistantModule {
   const workbook = provider && new LiveWorkbook(provider, sql);

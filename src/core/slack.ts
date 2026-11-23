@@ -13,6 +13,7 @@ export const validResourceUrl = (value: string) => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>\\]/.test(value); }
   catch { return false; }
 };
+export const cellSize = (cell: TableCell) => typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0);
 export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
 export const navigationCue = '🧭';
 export const helpCue = '?';
@@ -231,7 +232,7 @@ export class Slack implements Messenger {
       const rowButtonFallback = table.rowButtonFallback ?? 'Rechercher la fiche dans le DM';
       const actionSize = headings.join('').length + (controlsByRow ?? []).reduce((sum, row) => sum +
         row.reduce((n, button) => n + Math.max(buttonDisplayLabel(button).slice(0, 75).length, rowButtonFallback.length), headings.length - row.length), 0);
-      const size = rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0)
+      const size = rows.flat().reduce((sum, cell) => sum + cellSize(cell), 0)
         + actionSize;
       const totalSize = size + text.length + (message.resourceLinks?.reduce((sum, link) => sum + link.label.length + link.url.length, 0) ?? 0)
         + buttons.reduce((sum, button) => sum + button.label.length, 0);

@@ -4,7 +4,7 @@ import type { MenuPage } from '../../core/navigation.js';
 import { validResourceUrl, type TableCell } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
 import { transaction } from '../../core/transactions.js';
-import { cellView, isTab, literalHyperlink, segments, tabs, type Cell, type Sheet, type SheetRow, type Tab, type Workbook } from './sheets.js';
+import { cellView, isTab, nameColumn, literalHyperlink, segments, tabs, type Cell, type Sheet, type SheetRow, type Tab, type Workbook } from './sheets.js';
 
 export type SheetMutation = { operation?: 'edit'; cell: Cell; fields: string } | { operation: 'create'; cells: Cell[] } | { operation: 'delete' };
 type SheetContext = { book: string; tab: Tab; sheetId: number; key: string; headers?: string[] };
@@ -26,10 +26,6 @@ function columns(headers: string[]) {
     seen.add(name);
   }
   return names.flatMap((name, index) => name ? [{ index, name, label: duplicates.has(name) ? name + ' (col. ' + (index + 1) + ')' : name }] : []);
-}
-function nameColumn(headers: string[], tab: Tab) {
-  const index = headers.findIndex(h => h.trim() === tabs[tab].name);
-  return index >= 0 ? index : headers.findIndex(h => h.trim());
 }
 const home = { label: 'Retour au classeur', page: 'main' };
 const unavailable = 'La ligne a changé, a été supprimée ou existe en double. Ouvrez à nouveau l’onglet.';

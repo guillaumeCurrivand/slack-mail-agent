@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex as digest } from '../../core/crypto.js';
 import { z } from 'zod';
 import { projectFields, recordSchemas, validSavedFields, type InventoryValues, type RecordKind } from './domain.js';
 
@@ -25,7 +25,7 @@ export type ImportReview = z.infer<typeof reviewSchema>;
 export type ImportRecord = ImportReview['records'][number];
 export type ApprovedRecord = { key: string; kind: 'project' | RecordKind; id: string; existing: boolean; fields: InventoryValues };
 export type ImportApproval = { version: 1; workspace: string; sourceDigest: string; reviewDigest: string; batch: string; confirmedBy: string };
-export const digest = (text: string) => createHash('sha256').update(text).digest('hex');
+export { digest };
 export function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;
   if (value !== null && typeof value === 'object') return `{${Object.entries(value).sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, entry]) => `${JSON.stringify(key)}:${canonical(entry)}`).join(',')}}`;

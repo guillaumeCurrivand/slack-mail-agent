@@ -5,7 +5,7 @@ import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type TableCell } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
 import { requestPlan, type QuestionAIConfig } from './ai.js';
-import { cellView, tabs, type Cell, type Sheet, type SheetRow, type Tab, type Workbook } from './sheets.js';
+import { cellView, nameColumn, tabs, type Cell, type Sheet, type SheetRow, type Tab, type Workbook } from './sheets.js';
 
 type Source = { tab: Tab; sheet: Sheet };
 const query = z.strictObject({
@@ -34,10 +34,6 @@ function letters(index: number) {
   for (let n = index + 1; n; n = Math.floor((n - 1) / 26)) name = String.fromCharCode(65 + (n - 1) % 26) + name;
   return name;
 }
-function primary({ sheet, tab }: Source) {
-  const named = sheet.headers.findIndex(h => h.trim() === tabs[tab].name);
-  return named < 0 ? sheet.headers.findIndex(h => h.trim()) : named;
-}
 function sourceCell(provider: Workbook, { sheet, tab }: Source, range: string): TableCell {
   const text = tabs[tab].title + '!' + range, url = provider.sourceUrl?.(sheet.id, range);
   return url ? [{ text, url }] : text;
@@ -49,7 +45,7 @@ function results(provider: Workbook) {
   return {
     add(source: Source, row: SheetRow, column: number) {
       if (++total > maxRows) return;
-      const name = display(row.cells[primary(source)]) || 'Ligne ' + (row.index + 1);
+      const name = display(row.cells[nameColumn(source.sheet.headers, source.tab)]) || 'Ligne ' + (row.index + 1);
       const value = display(row.cells[column]);
       const rich = cellView(row.cells[column]!);
       const excerpt = value.length > 1200 ? value.slice(0, 1200) + '… (voir la cellule)'
@@ -78,7 +74,7 @@ function search(provider: Workbook, sources: Source[], term: string): MenuPage {
 function localLookup(provider: Workbook, sources: Source[], question: string, reason: string) {
   const result = results(provider), text = words(question);
   for (const source of sources) {
-    const key = primary(source);
+    const key = nameColumn(source.sheet.headers, source.tab);
     for (const row of source.sheet.rows) {
       const name = words(display(row.cells[key]));
       if (!name.trim() || !text.includes(name)) continue;

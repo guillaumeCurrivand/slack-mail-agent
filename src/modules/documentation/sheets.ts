@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex as digest } from '../../core/crypto.js';
 import { SignJWT, importPKCS8 } from 'jose';
 import { validResourceUrl, type TableCell } from '../../core/slack.js';
 
@@ -9,6 +9,10 @@ export const tabs = {
   tools: { title: 'Outils', name: 'Outil', secondary: 'Catégorie' },
 } as const;
 export type Tab = keyof typeof tabs;
+export function nameColumn(headers: string[], tab: Tab) {
+  const index = headers.findIndex(h => h.trim() === tabs[tab].name);
+  return index >= 0 ? index : headers.findIndex(h => h.trim());
+}
 export const isTab = (key: string): key is Tab => Object.hasOwn(tabs, key);
 type Format = { link?: { uri: string }; [key: string]: unknown };
 export type Cell = {
@@ -27,7 +31,7 @@ export type Workbook = {
   remove(sheetId: number, row: number): Promise<void>;
   write(sheetId: number, row: number, column: number, cell: Cell, fields: string): Promise<void>;
 };
-export const digest = (input: string) => createHash('sha256').update(input).digest('hex');
+export { digest };
 const display = (cell: Cell) => cell.formattedValue ?? cell.userEnteredValue?.stringValue ?? '';
 export const literalHyperlink = /^=HYPERLINK\s*\(\s*"((?:[^"]|"")*)"\s*([;,])\s*"((?:[^"]|"")*)"\s*\)$/i;
 export function segments(cell: Cell) {

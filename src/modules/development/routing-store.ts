@@ -1,4 +1,5 @@
-import { createHash, randomUUID } from 'node:crypto';
+import { randomUUID } from 'node:crypto';
+import { sha256Hex } from '../../core/crypto.js';
 import { isDeepStrictEqual } from 'node:util';
 import { ownerKey, type Actor } from '../../core/identity.js';
 import { transaction, type Database } from '../../core/transactions.js';
@@ -33,7 +34,7 @@ ALTER TABLE development_route_proposals ADD COLUMN IF NOT EXISTS base_revision i
 export type TicketRoute = { ticket: string; folder: string; channel: string; snapshot: Ticket; thread: string | null; selected: Project[] | null; armed: boolean; revision: number };
 export type RouteProposal = { id: string; ticket: string; candidates: Project[]; selected: string[]; state: string; base_selection: Project[] | null; base_revision: number };
 // ':' cannot occur in a project ID, keeping new keys disjoint from legacy choices.
-export const destinationKey = (p: Project) => `${p.id}:${createHash('sha256').update(repositoryKey(p.repository)).digest('hex')}`;
+export const destinationKey = (p: Project) => `${p.id}:${sha256Hex(repositoryKey(p.repository))}`;
 export const selectedDestination = (selected: string[], p: Project) => selected.includes(destinationKey(p)) || selected.includes(p.id);
 const identity = (p: Project) => [p.id, p.channel, p.folder, p.repository, p.skill];
 export const sameDestination = (a: Project, b: Project) => isDeepStrictEqual(identity(a), identity(b));
@@ -191,7 +192,7 @@ export class RoutingStore {
     const entry = (await this.db.query('SELECT cycle FROM development_route_runs WHERE team=$1 AND run=$2', [this.team, run])).rows[0];
     if (!entry) return;
     const rows = (await this.db.query('SELECT r.id,r.result,r.kind FROM development_route_runs m JOIN development_runs r ON r.id=m.run WHERE m.team=$1 AND m.cycle=$2 ORDER BY m.project', [this.team, entry.cycle])).rows;
-    const revision = createHash('sha256').update(JSON.stringify(rows.map(r => r.id))).digest('hex');
+    const revision = sha256Hex(JSON.stringify(rows.map(r => r.id)));
     return { cycle: `${entry.cycle}:${revision}`, complete: rows.length > 0 && rows.every(r => r.kind === 'build' && r.result?.outcome === 'pushed' && r.result.commit) };
   }
 }

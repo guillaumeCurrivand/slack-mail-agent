@@ -9,7 +9,7 @@ import { statusText } from './lifecycle.js';
 import { DocumentationStore } from './store.js';
 import { InventoryQueries, inventoryQuery, inventoryQueryHelp, type InventoryQuery } from './inventory-query.js';
 import { resolveMutation, type ResolvedMutation } from './mutations.js';
-import { InventoryPresentation } from './presentation.js';
+import { InventoryPresentation, pageLinks } from './presentation.js';
 
 export const questionSchema = `
 CREATE TABLE IF NOT EXISTS documentation_project_context (
@@ -156,7 +156,7 @@ export class DocumentationQuestions {
           table: { columns: ['Référence'], rows: references.map(ref => [ref.label]) }, recordChoices: references,
           links: [{ label: 'Retour aux résultats', page: 'question_' + position }] };
       }
-      return { ...result.content, links: [...this.pagination(`${saved.id}_${result.fingerprint}`, result.page, result.pages),
+      return { ...result.content, links: [...pageLinks(`question_${saved.id}_${result.fingerprint}`, result.page, result.pages),
         ...(references.length ? [{ label: 'Fiches des filtres', page: 'questionrefs_' + position }] : [])] };
     }
     if (!saved.project_id) {
@@ -164,7 +164,7 @@ export class DocumentationQuestions {
       const ids = saved.candidates ?? [], pages = Math.max(1, Math.ceil(ids.length / 40)), page = Math.min(Number(match[3]), pages - 1);
       const projects = (await Promise.all(ids.slice(page * 40, page * 40 + 40).map(id => this.store.project(actor, id)))).filter(p => p !== undefined);
       return { kind: "Choisir un projet", text: `Projet ambigu. Choisissez une fiche. Aucun contexte de projet n’a été établi.\nChoix — page ${page + 1}/${pages}`,
-        ...await presentation.list(projects.map(project => ({ ...project, kind: 'project' as const })), projects.map(project => `questionchoice_${saved.id}_${project.id}`)), links: this.pagination(saved.id, page, pages) };
+        ...await presentation.list(projects.map(project => ({ ...project, kind: 'project' as const })), projects.map(project => `questionchoice_${saved.id}_${project.id}`)), links: pageLinks(`question_${saved.id}`, page, pages) };
     }
     const project = await this.store.project(actor, saved.project_id);
     if (!project) return { kind: "Projet indisponible", text: "Ce projet est introuvable. Utilisez documentation projets." };
@@ -186,10 +186,7 @@ export class DocumentationQuestions {
       table = view.table; recordChoices = view.recordChoices;
       text = result.rows.length ? '' : "Composants : inconnus\nTechnologies : inconnues";
     }
-    return { kind: "Réponse sur le projet", table, recordChoices, text: `Projet : ${literal(project.fields.name)}\n${statusText(project)}\nSources : fiches actuelles de l’inventaire. Les liens enregistrés n’ont pas été lus.\nRéponse — page ${page + 1}/${pages} (cette page uniquement)\n${text}\nChaque demande de suivi écrite doit commencer par documentation.`, resourceLinks: resources, links: [...this.pagination(saved.id, page, pages), ...links] };
-  }
-  private pagination(id: string, page: number, pages: number) {
-    return [...(page > 0 ? [{ label: "Précédent", page: `question_${id}_${page - 1}` }] : []), ...(page + 1 < pages ? [{ label: "Suivant", page: `question_${id}_${page + 1}` }] : [])];
+    return { kind: "Réponse sur le projet", table, recordChoices, text: `Projet : ${literal(project.fields.name)}\n${statusText(project)}\nSources : fiches actuelles de l’inventaire. Les liens enregistrés n’ont pas été lus.\nRéponse — page ${page + 1}/${pages} (cette page uniquement)\n${text}\nChaque demande de suivi écrite doit commencer par documentation.`, resourceLinks: resources, links: [...pageLinks(`question_${saved.id}`, page, pages), ...links] };
   }
   async cleanup() {
     await this.sql.query(`DELETE FROM documentation_project_context WHERE selected_at<now()-interval '30 days'`);

@@ -1,4 +1,4 @@
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../../core/crypto.js';
 import type { Actor } from '../../core/identity.js';
 import type { JobPayload, ModuleContext } from '../../core/modules.js';
 import { Navigation, type MenuPage } from '../../core/navigation.js';
@@ -13,7 +13,7 @@ const pageSize = 8;
 const labels: Record<string, string> = { queued: 'En attente du worker', running: 'En cours', reporting: 'Publication en cours', reporting_error: 'Publication à vérifier', blocked: 'Bloqué', completed: 'Terminé', cancelled: 'Annulé' };
 export const projectPage = (id: string) => `project_${id}`;
 // Fixed-size selectors keep long legacy run identifiers below Slack's control limit.
-const runPage = (id: string) => `run_${createHash('sha256').update(id).digest('hex')}`;
+const runPage = (id: string) => `run_${sha256Hex(id)}`;
 const back = [{ label: 'Retour aux projets', page: 'projects_0' }];
 const unavailable: MenuPage = { kind: 'Développement indisponible', text: 'Ce projet ou traitement est inaccessible. Revenez aux projets ou envoyez menu.', links: back };
 const configureButton = { label: 'Configurer un projet', action: 'configuration_prepare', value: 'new', bound: true };

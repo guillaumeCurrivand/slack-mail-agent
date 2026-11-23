@@ -1,5 +1,5 @@
 import { spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { sha256Hex } from '../../core/crypto.js';
 import { appendFile, lstat, mkdir, readFile, rename, writeFile } from 'node:fs/promises';
 import path from 'node:path';
 import { z } from 'zod';
@@ -87,7 +87,7 @@ export class LocalRunner {
     const baseBranch = project.baseBranch ?? 'test', remoteBase = `origin/${baseBranch}`;
     let stopPreview: (() => Promise<void>) | undefined;
     let stopServices: (() => Promise<void>) | undefined;
-    const directory = path.join(this.root, 'runs', createHash('sha256').update(work.id).digest('hex'));
+    const directory = path.join(this.root, 'runs', sha256Hex(work.id));
     const checkout = path.join(directory, 'checkout'), journalPath = path.join(directory, 'journal.json');
     await mkdir(directory, { recursive: true });
     let journal: Journal;
@@ -228,7 +228,7 @@ export class LocalRunner {
         const commitTitle = commitTitleSchema.parse(journal.report?.commitTitle);
         // Recovery detects an already-created controller commit instead of creating another one.
         const head = await git('rev-parse', 'HEAD');
-        const marker = `Mayassistant-Run: ${createHash('sha256').update(work.id).digest('hex')}`;
+        const marker = `Mayassistant-Run: ${sha256Hex(work.id)}`;
         if (head === journal.baseline) {
           await git('add', '--all');
           await git('commit', '-m', `fix(clickup:${work.ticket.id}): ${commitTitle}`, '-m', marker);

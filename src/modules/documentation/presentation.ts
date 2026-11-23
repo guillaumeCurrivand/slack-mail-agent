@@ -1,6 +1,6 @@
 import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
-import { cellText, escapeCardValue, validResourceUrl, type MessageTable, type TableCell } from '../../core/slack.js';
+import { cellSize, cellText, escapeCardValue, validResourceUrl, type MessageTable, type TableCell } from '../../core/slack.js';
 import { recordTitle, type InventoryValues, type RecordKind } from './domain.js';
 import type { Confirmation, DocumentationStore } from './store.js';
 import { formatNumber } from '../../core/presentation.js';
@@ -11,7 +11,11 @@ const labels: Record<string, string> = { name: "Nom", aliases: "Alias", descript
 const referenceKinds: Record<string, Kind> = { projectId: 'project', projects: 'project', componentId: 'component', serviceId: 'host', technologies: 'technology' };
 const urlFields = new Set(['repositories', 'documentationLinks', 'urls']);
 const title = (field: string) => labels[field] ?? field;
-export const tableSize = (table: MessageTable) => table.columns.join('').length + table.rows.flat().reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0);
+export const pageLinks = (prefix: string, page: number, pages: number) => [
+  ...(page > 0 ? [{ label: "Précédent", page: `${prefix}_${page - 1}` }] : []),
+  ...(page + 1 < pages ? [{ label: "Suivant", page: `${prefix}_${page + 1}` }] : []),
+];
+export const tableSize = (table: MessageTable) => table.columns.join('').length + table.rows.flat().reduce((sum, cell) => sum + cellSize(cell), 0);
 
 /** Module-owned names, relationships and values. The transport only receives literal cells. */
 export class InventoryPresentation {
@@ -145,7 +149,7 @@ export function valuePages(content: MenuPage): MenuPage[] {
       if (typeof cell !== 'string') {
         const pieces: Array<Exclude<TableCell, string>> = [[]];
         for (const part of cell) {
-          if (pieces.at(-1)!.reduce((sum, item) => sum + item.text.length + (item.url?.length ?? 0), 0) + part.text.length + (part.url?.length ?? 0) > 2800) pieces.push([]);
+          if (cellSize(pieces.at(-1)!) + part.text.length + (part.url?.length ?? 0) > 2800) pieces.push([]);
           pieces.at(-1)!.push(part);
         }
         return pieces;

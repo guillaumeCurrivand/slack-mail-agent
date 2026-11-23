@@ -1,5 +1,5 @@
 import { ownerKey, uid, type Actor } from './identity.js';
-import { mapRowActions, buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger, type MessageTable } from './slack.js';
+import { cellSize, mapRowActions, buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, type AgentMessage, type Button, type Messenger, type MessageTable } from './slack.js';
 import type { Sql } from './store.js';
 
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
@@ -85,7 +85,7 @@ function tablePages(table: MessageTable, budget: number): MessageTable[] {
   const pages: MessageTable[] = [];
   let first = 0, size = table.columns.join('').length;
   for (let index = 0; index < table.rows.length; index++) {
-    const rowSize = table.rows[index]!.reduce((sum, cell) => sum + (typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0)), 0)
+    const rowSize = table.rows[index]!.reduce((sum, cell) => sum + cellSize(cell), 0)
       + (table.rowButtons ? [table.rowButtonColumn ?? 'Actions'].flat().length * Math.max(75, table.rowButtonFallback?.length ?? 0) : 0);
     if (index > first && (size + rowSize > budget || index - first >= 100)) {
       pages.push({ ...table, rows: table.rows.slice(first, index), ...(table.rowButtons ? { rowButtons: table.rowButtons.slice(first, index) } : {}) });

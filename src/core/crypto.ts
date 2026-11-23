@@ -17,6 +17,7 @@ export class Vault {
     return JSON.parse(Buffer.concat([decipher.update(data), decipher.final()]).toString('utf8')) as T;
   }
 }
+export const sha256Hex = (value: string) => createHash('sha256').update(value).digest('hex');
 export const opaque = () => randomBytes(32).toString('base64url');
 export const digest = (value: string) => createHash('sha256').update(value).digest('base64url');
 export function verifySlack(raw: string, timestamp: string, signature: string, secret: string, now = Date.now()): boolean {
