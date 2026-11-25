@@ -17,7 +17,7 @@ For contributors, [AGENTS.md](AGENTS.md) points to the [product specification](d
 - Private Slack menus and prefixed commands for all enabled Modules.
 - Mail Sorter rule proposals and starter rules, Google Workspace OAuth with hosted-domain/browser checks and encrypted credentials, separately confirmed Previews, individual-message actions, Reports and conservative undo.
 - Durable PostgreSQL jobs, per-user and per-module serialization, active-operation admission, duplicate-event protection, and mutation checkpoints.
-- A shared $10/month OpenAI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Development uses separately billed local Cursor calls. Channel selection, approval, reports, and undo do not require AI; mail and natural-language inventory interpretation do.
+- A shared $10/month OpenAI allowance, $8 alert, configurable per-user ceilings, and atomic reservations before generation. Development uses separately billed local Cursor calls. Channel selection, approval, reports, and undo do not require AI; general AI answers, workbook interpretation and semantic mail classification do.
 - Startup and hourly cleanup follow each enabled Module's retention contract: [Mail Sorter](docs/mail.md#approvals-privacy-and-spending), [Documentation](docs/documentation.md#spending-availability-and-private-state), [ClickUp](docs/clickup.md#reading-results-and-recovering) and [Yousign](docs/yousign.md#receipt-recovery-and-alerts). Disabling a Module pauses its physical cleanup; Documentation inventory/history have lifetime retention.
 
 ## Modules and project structure
@@ -140,7 +140,7 @@ Send `menu`, `bonjour` or `salut` in a private DM with the bot (`hello` and `hi`
 
 Buttons update the clicked Card, including menus, results and approval screens; approval still requires an explicit confirmation. Typed commands start fresh messages. Shared public launchers and unavailable legacy Cards open personal controls or recovery guidance instead. See [in-place interactions](docs/product-spec.md#in-place-button-interactions). If a menu is unavailable, send `menu` for a fresh one.
 
-Every typed Module request, including a natural-language follow-up, needs its prefix. Opening a menu does not select a destination for later unprefixed messages. `mail` and its French alias `courrier` address the same Module.
+Mention the bot for a conversational reply: `@Mayassistant Tell me which time is it`. In a private DM try `@Mayassistant Quelle est la description de PrintYourFriends ?` for a cited workbook answer. Structured module commands use their prefix. Opening a menu does not select a destination for later unprefixed messages. `mail` and its French alias `courrier` address the same Module.
 
 | Start here | French command | English command |
 | --- | --- | --- |

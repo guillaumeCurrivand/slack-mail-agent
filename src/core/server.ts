@@ -21,6 +21,23 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (body.type === 'url_verification') return { challenge: body.challenge };
     if (body.team_id !== config.SLACK_TEAM_ID) return reply.code(403).send();
     const event = body.event;
+    // Slack supplies the installed bot user in the signed Events API envelope.
+    const bot = Array.isArray(body.authorizations) && body.authorizations.find((a: { is_bot?: boolean; user_id?: string }) =>
+      a?.is_bot === true && /^[UW][A-Z0-9]+$/.test(a.user_id ?? ''))?.user_id;
+    const mention = bot && `<@${bot}>`;
+    if (body.type === 'event_callback' && event?.type === 'message' && !event.subtype && !event.bot_id &&
+        typeof event.text === 'string' && mention && event.text.includes(mention) &&
+        /^[UW][A-Z0-9]+$/.test(event.user ?? '') && event.user !== bot) {
+      const dm = event.channel_type === 'im' && /^D[A-Z0-9]+$/.test(event.channel ?? '');
+      const channel = ['channel', 'group'].includes(event.channel_type) && /^[CG][A-Z0-9]+$/.test(event.channel ?? '');
+      if (!dm && !channel) return { ok: true };
+      if (typeof body.event_id !== 'string' || !body.event_id || event.text.length > 8000 ||
+          !/^\d+\.\d+$/.test(event.ts ?? '') || (event.thread_ts !== undefined && !/^\d+\.\d+$/.test(event.thread_ts))) return reply.code(400).send();
+      await store.enqueue(`slack:${body.event_id}`, { team: body.team_id, user: event.user, channel: event.channel,
+        ...(channel || event.thread_ts ? { thread: event.thread_ts ?? event.ts } : {}) },
+        { type: 'mention', text: event.text.replaceAll(mention, '').trim() }, 'core');
+      return { ok: true };
+    }
     if (modules.all().some(module => module.receiveChannel || module.channelAccess) && body.type === 'event_callback' && event?.type === 'message' && ['channel', 'group'].includes(event.channel_type) &&
       !event.subtype && !event.bot_id && /^[UW][A-Z0-9]+$/.test(event.user ?? '') && /^[CG][A-Z0-9]+$/.test(event.channel ?? '') && typeof event.text === 'string') {
       if (typeof body.event_id !== 'string' || !body.event_id || event.text.length > 8000 || !/^\d+\.\d+$/.test(event.ts ?? '') ||
@@ -37,11 +54,10 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (body.type !== 'event_callback' || event?.type !== 'message' || event.channel_type !== 'im' || event.subtype || event.bot_id || !/^[UW][A-Z0-9]+$/.test(event.user ?? '') || !/^D[A-Z0-9]+$/.test(event.channel ?? '') || typeof event.text !== 'string') return { ok: true };
     if (!body.event_id || event.text.length > 8000) return reply.code(400).send();
     const route = modules.text(event.text);
+    if (route.module === 'core' && !['budget', 'menu', 'help', 'hi', 'hello'].includes(String(route.payload.text).toLowerCase())) return { ok: true };
     const actor = { team: body.team_id, user: event.user, channel: event.channel };
     const operation = modules.operation(route);
-    const receiptOperation = modules.receiptOperation(route);
     if (operation) await store.enqueueOperation(`slack:${body.event_id}`, actor, route.payload, route.module, operation.key, operation.label);
-    else if (receiptOperation) await store.enqueueWithOperationSnapshot(`slack:${body.event_id}`, actor, route.payload, route.module, receiptOperation);
     else await store.enqueue(`slack:${body.event_id}`, actor, route.payload, route.module);
     return { ok: true }; // Only durable enqueue is on the acknowledgement path.
   });

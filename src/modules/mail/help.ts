@@ -10,8 +10,6 @@ export const mailHelp = {
 • courrier règles ou Gérer les règles : lire les conditions, expéditeurs, libellés et actions approuvés.
 • courrier modèles : proposer les modèles Urgent et Lettres d’information, et expliquer comment créer une association de projet. Urgent et les règles de projets gardent les messages en boîte de réception ; les lettres d’information peuvent aller à la corbeille, avec des exclusions pour factures, reçus, alertes de sécurité, notifications transactionnelles, messages urgents et projets. Les associations de projets demandent des adresses d’expéditeurs explicites.
 • Ajouter une règle / Modifier → Règle par expéditeur ou Règle par contenu : ouvrir un formulaire adapté, sans IA. Seule la règle par expéditeur demande des adresses exactes ; la règle par contenu utilise l’IA lors du tri. Saisissez le nom, la condition, les libellés, l’action et les exemples. Vérifier affiche une proposition dans le message de départ ; votre approbation séparée reste nécessaire. Le formulaire expire après 24 heures. Modifier préremplit la règle et propose son type actuel en premier ; choisir l’autre type prépare une modification à approuver. Si la règle a changé entre-temps, rouvrez le formulaire.
-• Vous pouvez aussi décrire la règle après courrier. Exemple : courrier Applique le libellé Projets/Alpha aux messages de alex@example.com et conserve-les dans ma boîte de réception.
-• Pour modifier : courrier Modifie ma règle de lettres d’information pour exclure les annonces de produits. Pour retirer, utilisez Retirer dans Gérer les règles, ou décrivez précisément la règle à supprimer.
 L’assistant présente une proposition avec des exemples. Ajouter, modifier ou supprimer une règle nécessite votre approbation séparée sous 24 heures.
 
 *3. Préparer et approuver un tri*
@@ -23,12 +21,11 @@ Un aperçu expire après 24 heures et devient invalide si les règles ou la conn
 *4. Consulter les rapports, corriger et annuler des changements*
 • courrier rapport : consulter un traitement conservé ; Dernier rapport dans le menu ouvre le plus récent traitement terminé.
 • courrier détails <identifiant-du-traitement> [page] : consulter ses messages, décisions et effets ; la première page vaut 0.
-• Correction : courrier Pour le message <identifiant-du-message> du traitement <identifiant-du-traitement>, retire le libellé Urgent et conserve-le dans ma boîte de réception. La correction reçoit son propre aperçu à confirmer ; un changement de règle future exige une autre approbation.
 • Annuler ce traitement dans un rapport : inverser uniquement les changements enregistrés par l’assistant sur les messages encore dans l’état attendu. Les messages modifiés depuis sont ignorés. Une action incertaine doit être vérifiée dans Gmail ; elle n’est pas répétée automatiquement. Les libellés nouvellement créés ne sont pas supprimés par l’annulation.
 Les règles persistent jusqu’à leur retrait. Les conversations et traces de traitements sont normalement conservées 30 jours lorsque le module est activé. L’annulation dépend aussi de la disponibilité du message dans Gmail.
 
 *Coûts et limites*
-Le langage naturel et la classification sémantique utilisent le budget OpenAI partagé. Aide, menus, lecture des règles, modèles, rapports enregistrés, confirmations et annulation ne nécessitent pas de génération payante. Envoyez budget pour consulter l’usage.
+La classification sémantique utilise le budget OpenAI partagé. Aide, menus, lecture des règles, modèles, rapports enregistrés, confirmations et annulation ne nécessitent pas de génération payante. Envoyez budget pour consulter l’usage.
 Le tri est à la demande. L’envoi d’e-mails, la suppression définitive, l’ouverture de liens et le traitement de pièces jointes ne sont pas proposés.
 Préfixe conseillé : courrier ; mail et les commandes anglaises restent compatibles. courrier aide (ou courrier seul) rouvre ce guide.`,
 };

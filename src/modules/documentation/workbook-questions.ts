@@ -3,6 +3,7 @@ import { BudgetExceeded, type Budget } from '../../core/budget.js';
 import { ownerKey, uid, type Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, type TableCell } from '../../core/slack.js';
+import { cellText } from '../../core/slack.js';
 import type { Sql } from '../../core/store.js';
 import { requestPlan, type QuestionAIConfig } from './ai.js';
 import { cellView, nameColumn, tabs, type Cell, type Sheet, type SheetRow, type Tab, type Workbook } from './sheets.js';
@@ -125,6 +126,27 @@ function execute(provider: Workbook, sources: Source[], request: z.infer<typeof 
   if (totals.length && summaries.length) return notice('Posez séparément la question de comptage et la question sur les valeurs.');
   if (totals.length) return { ...notice('Nombre de lignes correspondant à votre question.'), table: { columns: ['Onglet', 'Filtre', 'Nombre', 'Source'], rows: totals, literalText: true } };
   return result.page(summaries.join('\n'));
+}
+
+/** Present only retrieved values and their verified Sheets sources in the reply. */
+export function workbookReply(page: MenuPage): string {
+  if (!page.table?.rows.length) return page.text.includes('0 ligne(s)') ? 'Je n’ai trouvé aucune ligne correspondant à votre question.' : page.text;
+  const count = page.table.columns.includes('Nombre');
+  const rows = page.table.rows;
+  const lines = rows.map(([name, field, value, source]) => {
+      const citation = Array.isArray(source) && source[0]?.url ? `[${source[0].text}](${source[0].url})` : cellText(source!);
+      const subject = cellText(name!), heading = cellText(field!), fact = cellText(value!);
+      if (count) return `Dans l’onglet ${subject}, ${fact} ${fact === '1' ? 'ligne correspond' : 'lignes correspondent'} au filtre « ${heading} ». ${citation}`;
+      if (heading.toLowerCase() === 'description' && fact !== '(vide)') return `**${subject}** — ${fact}\n${citation}`;
+      if (fact === '(vide)') return `Pour ${subject}, le champ « ${heading} » est vide. ${citation}`;
+      return `Pour ${subject}, le champ « ${heading} » indique « ${fact} ». ${citation}`;
+    });
+  let reply = '';
+  for (const line of lines) {
+    if (reply.length + line.length > 8000) return reply + '\nPrécisez votre question pour voir les autres résultats.';
+    reply += (reply ? '\n\n' : '') + line;
+  }
+  return reply;
 }
 
 export async function answerWorkbook(provider: Workbook, sql: Sql, config: QuestionAIConfig, actor: Actor,

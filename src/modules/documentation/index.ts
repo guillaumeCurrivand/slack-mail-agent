@@ -20,10 +20,10 @@ import { InventoryForms, inventoryFormDestination } from './forms.js';
 import type { SavedForm } from '../../core/forms.js';
 import type { Workbook } from './sheets.js';
 import { LiveWorkbook, workbookHelp, type SheetMutation } from './workbook.js';
-import { answerWorkbook } from './workbook-questions.js';
+import { answerWorkbook, workbookReply } from './workbook-questions.js';
 
 const literal = (value: string) => escapeCardValue(value);
-const questionHelp = "Questions en langage naturel : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ? L’interprétation utilise le budget IA partagé ; ouvrir les fiches et parcourir les résultats est gratuit. Le contexte de projet est privé et expire après 30 minutes. Modifications : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe ; documentation archive l’outil Tracker. Décrivez une seule fiche et des valeurs explicites. Les références doivent correspondre exactement. Rien ne change avant votre confirmation séparée." + "\n" + inventoryQueryHelp;
+const questionHelp = "En DM, mentionnez @Mayassistant pour poser une question sur le classeur. Utilisez le menu pour modifier une fiche." + "\n" + inventoryQueryHelp;
 const recordPage = (destination: string, id: string) => `${destination}_${id}${['history', 'components'].includes(destination) ? '_0' : ''}`;
 
 export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig = readDocumentationAIConfig({}), slackToken = '', provider?: Workbook): AssistantModule {
@@ -33,7 +33,7 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
   const catalog = new Catalog(store);
   const changes = new InventoryChanges(store);
   const lifecycle = new Lifecycle(store);
-  const questions = new DocumentationQuestions(sql, aiConfig);
+  const questions = new DocumentationQuestions(sql);
   async function deliver(actor: Actor, eventId: string, message: AgentMessage, context: ModuleContext) {
     if (message.table && tableSize(message.table) > 18_000) {
       const confirmation = message.buttons?.find(button => button.action === 'open_confirmation_record' || button.action.startsWith('confirm_'))?.value;
@@ -137,6 +137,10 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
   return {
     menuActions: ['request_archive', 'request_restore', 'form_prepare', 'form_open', 'sheet_apply', 'sheet_cancel'],
     forms: forms.forms,
+    ...(provider && workbook ? { async answerQuestion(actor: Actor, question: string, id: string, context: ModuleContext) {
+      if (!workbook.allowed(actor)) return 'Le classeur est disponible uniquement en message privé dans son espace Slack.';
+      return workbookReply(await answerWorkbook(provider, context.sql, aiConfig, actor, question, id, context.budget));
+    } } : {}),
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
     help: workbook ? {
       text: workbookHelp + '\n\nInventaire structuré (PostgreSQL)\n' + documentationHelp.text,
@@ -196,11 +200,6 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         const content = typeof destination === 'string' ? await page(actor, destination) : destination;
         await navigation.show(actor, eventId, { ...content, recordChoices: content.recordChoices?.map(link => ({ ...link, page: `documentation:${link.page}` })), links: [...(content.links ?? []).map(link => ({ ...link, page: `documentation:${link.page}` })), { label: "Retour au menu", page: 'main' }] });
       };
-      const interpret = async (text: string) => {
-        const result = await questions.ask(actor, text, eventId, context);
-        if (typeof result !== 'string' && 'command' in result) return this.handle(actor, { type: 'text', text: result.command, inventory: true }, eventId, context);
-        return typeof result === 'string' ? show(result) : deliver(actor, eventId, result, context);
-      };
       if (payload.type === 'text' && /^inventaire\s/i.test(String(payload.text))) {
         payload = { ...payload, text: String(payload.text).slice('inventaire '.length), inventory: true };
       }
@@ -222,17 +221,6 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       if (payload.type === 'action' && payload.action === 'choose_question_project') {
         const result = await questions.choose(actor, payload);
         return typeof result === 'string' ? show(result) : deliver(actor, eventId, result, context);
-      }
-      const lifecycleText = payload.type === 'text' ? /^(archive|restore) (project|technology|component|host|hosting|hosting-entry|tool)\s+([\s\S]+)$/i.exec(String(payload.text)) : null;
-      let conversationalLifecycle = false;
-      if (lifecycleText && /^(?:this project|it)$|^(?:named|called)\s+/i.test(lifecycleText[3]!.trim())) {
-        const kind = lifecycleText[2]!.toLowerCase().replace('hosting-entry', 'hosting') as 'project' | RecordKind;
-        const exact = kind === 'project' ? await store.lookup(actor, lifecycleText[3]!.trim()) : await store.lookupRecord(actor, kind, lifecycleText[3]!.trim());
-        conversationalLifecycle = exact.total === 0;
-      }
-      if (payload.type === 'text' && ((/^(create|edit) (project|technology|component|host|hosting|tool)\s/i.test(String(payload.text)) && !/[{[]/.test(String(payload.text)))
-        || conversationalLifecycle)) {
-        return interpret(String(payload.text));
       }
       const source = await questions.source(actor, eventId);
       if (await lifecycle.handle(actor, payload, eventId, navigation, message => deliver(actor, eventId, message, context), show, source)) return;
@@ -258,9 +246,6 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
         if (total === 1) return show(recordPage(destination, projects[0]!.id));
         if (total > 1) return show(`lookup_${await store.saveLookup(actor, eventId, lookup[2]!.trim(), destination)}_0`);
         return deliver(actor, eventId, { kind: "Projet introuvable", text: "Aucun projet ne correspond exactement à cet identifiant, nom ou alias." }, context);
-      }
-      if (text.toLowerCase() !== 'help') {
-        return interpret(text);
       }
       return deliver(actor, eventId, { kind: "Aide de Documentation", text: `${help}\n${questionHelp}\n${lifecycleHelp}\n${catalogHelp}\n${componentHelp}\n${hostHelp}\n${hostingHelp}\n${toolHelp}` }, context);
     },

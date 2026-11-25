@@ -1,14 +1,12 @@
-import { BudgetExceeded } from '../../core/budget.js';
 import { ownerKey, uid, type Actor } from '../../core/identity.js';
-import type { JobPayload, ModuleContext } from '../../core/modules.js';
+import type { JobPayload } from '../../core/modules.js';
 import type { MenuPage } from '../../core/navigation.js';
 import type { Sql } from '../../core/store.js';
 import { escapeCardValue, type MessageTable } from '../../core/slack.js';
-import { interpretQuestion, questionPlan, type QuestionAIConfig, type QuestionPlan } from './ai.js';
+import { questionPlan, type QuestionPlan } from './ai.js';
 import { statusText } from './lifecycle.js';
 import { DocumentationStore } from './store.js';
-import { InventoryQueries, inventoryQuery, inventoryQueryHelp, type InventoryQuery } from './inventory-query.js';
-import { resolveMutation, type ResolvedMutation } from './mutations.js';
+import { InventoryQueries, inventoryQuery, inventoryQueryHelp } from './inventory-query.js';
 import { InventoryPresentation, pageLinks } from './presentation.js';
 
 export const questionSchema = `
@@ -27,7 +25,7 @@ const fallback = "L’interprétation en langage naturel est indisponible. Les p
 const literal = escapeCardValue;
 export class DocumentationQuestions {
   private store: DocumentationStore;
-  constructor(private sql: Sql, private config: QuestionAIConfig) { this.store = new DocumentationStore(sql); }
+  constructor(private sql: Sql) { this.store = new DocumentationStore(sql); }
   async source(actor: Actor, eventId: string): Promise<string> {
     const saved = (await this.sql.query("SELECT id FROM documentation_questions WHERE team=$1 AND owner=$2 AND channel=$3 AND event_id=$4 AND plan->>'operation'='mutation'", [actor.team, ownerKey(actor), actor.channel, eventId])).rows[0];
     return saved ? 'Slack natural-language' : 'Slack structured';
@@ -45,13 +43,6 @@ export class DocumentationQuestions {
       [id, actor.team, ownerKey(actor), actor.channel, eventId, JSON.stringify({ operation: 'inventory', selector: null, query: validated })]);
     return `question_${id}_0`;
   }
-  private async validateInventory(actor: Actor, saved: SavedQuestion, query: InventoryQuery): Promise<string | MenuPage> {
-    if (saved.status === 'validated') return `question_${saved.id}_0`;
-    const validated = await new InventoryQueries(this.sql).validate(actor, query);
-    if ('kind' in validated) return validated;
-    await this.sql.query("UPDATE documentation_questions SET plan=$2,status='validated' WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5", [saved.id, JSON.stringify({ operation: 'inventory', selector: null, query: validated }), actor.team, ownerKey(actor), actor.channel]);
-    return `question_${saved.id}_0`;
-  }
   async remember(actor: Actor, projectId: string) {
     await this.sql.query(`INSERT INTO documentation_project_context(owner,channel,team,project_id) VALUES($1,$2,$3,$4)
       ON CONFLICT(owner,channel) DO UPDATE SET project_id=excluded.project_id,selected_at=now()`, [ownerKey(actor), actor.channel, actor.team, projectId]);
@@ -59,70 +50,6 @@ export class DocumentationQuestions {
   private async saved(actor: Actor, id: string): Promise<SavedQuestion | undefined> {
     return (await this.sql.query(`SELECT * FROM documentation_questions WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4
       AND created_at>=now()-interval '30 days'`, [id, actor.team, ownerKey(actor), actor.channel])).rows[0];
-  }
-  async ask(actor: Actor, question: string, eventId: string, context: ModuleContext): Promise<string | MenuPage | ResolvedMutation> {
-    const inserted = await this.sql.query(`INSERT INTO documentation_questions(id,team,owner,channel,event_id) VALUES($1,$2,$3,$4,$5)
-      ON CONFLICT(owner,event_id) DO NOTHING RETURNING id`, [uid(), actor.team, ownerKey(actor), actor.channel, eventId]);
-    let saved: SavedQuestion = (await this.sql.query('SELECT * FROM documentation_questions WHERE owner=$1 AND channel=$2 AND event_id=$3', [ownerKey(actor), actor.channel, eventId])).rows[0];
-    if (!saved.plan) {
-      if (!inserted.rows.length) return { kind: "Question indisponible", text: `${fallback}\nCette demande a une tentative indisponible ou incertaine ; aucun nouvel appel payant ne sera lancé automatiquement.` };
-      try {
-        if (!this.config.key) throw new Error('No API key');
-        const plan = await interpretQuestion(this.config, actor, question, context.budget, async id => {
-          await this.sql.query('UPDATE documentation_questions SET reservation_id=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5', [saved.id, id, actor.team, ownerKey(actor), actor.channel]);
-        });
-        await this.sql.query("UPDATE documentation_questions SET plan=$2,status='interpreted' WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5", [saved.id, JSON.stringify(plan), actor.team, ownerKey(actor), actor.channel]);
-        saved = { ...saved, plan };
-      } catch (error) {
-        const reason = error instanceof BudgetExceeded ? "Le budget d’IA partagé est épuisé ou réservé." : "La clé API, le fournisseur ou l’interprétation validée est indisponible ; les dépenses incertaines restent réservées.";
-        await this.sql.query("UPDATE documentation_questions SET status='unavailable' WHERE id=$1 AND team=$2 AND owner=$3 AND channel=$4", [saved.id, actor.team, ownerKey(actor), actor.channel]);
-        return { kind: "Question indisponible", text: `${reason}\n${fallback}` };
-      }
-    }
-    const plan = questionPlan.parse(saved.plan);
-    if (plan.operation === 'mutation' && plan.mutation) {
-      if (saved.resolved_command) return { command: saved.resolved_command, projectId: saved.project_id };
-      const result = await resolveMutation(this.sql, actor, plan.mutation, question);
-      if ('command' in result) {
-        await this.sql.query("UPDATE documentation_questions SET resolved_command=$2,project_id=$3,status='validated' WHERE id=$1 AND team=$4 AND owner=$5 AND channel=$6", [saved.id, result.command, result.projectId, actor.team, ownerKey(actor), actor.channel]);
-        if (result.projectId) await this.remember(actor, result.projectId);
-      }
-      return result;
-    }
-    if (plan.operation === 'inventory' && plan.query) {
-      const query = plan.query;
-      if (saved.status !== 'validated' && query.filters.some(filter => filter.kind === 'project' && filter.selector === 'this project')) {
-        const projectId = (await this.sql.query(`SELECT project_id FROM documentation_project_context WHERE owner=$1 AND channel=$2 AND team=$3 AND selected_at>now()-interval '30 minutes' AND selected_at<=now()`, [ownerKey(actor), actor.channel, actor.team])).rows[0]?.project_id;
-        if (!projectId) return { kind: "Choisir un projet", text: "Votre contexte de projet privé est absent ou expiré. Répétez avec un identifiant de projet exact." };
-        query.filters = query.filters.map(filter => filter.kind === 'project' && filter.selector === 'this project' ? { ...filter, selector: projectId } : filter);
-      }
-      return this.validateInventory(actor, saved, query);
-    }
-    if (plan.operation === 'clarify') return { kind: "Préciser la question", text: `Choisissez une opération sur une seule fiche, une cible exacte et des valeurs de remplacement explicites ou les champs de création requis. Les fiches manquantes exigent une création séparée confirmée. Pour consulter, précisez les relations et filtres exacts, notamment le périmètre des composants. Rien n’a été sélectionné ni modifié. Utilisez documentation aide pour les champs autorisés.\n${inventoryQueryHelp}` };
-    if (plan.operation === 'unsupported') return { kind: "Question non prise en charge", text: `Utilisez les champs métier définis et une seule fiche par opération confirmée. Modifications groupées, changements de schéma, secrets, suppression définitive, restauration de valeurs historiques et contenus de documents ne sont pas disponibles. Les informations de compte et d’accès se limitent aux références, instructions et liens de gestionnaire de mots de passe. Utilisez documentation aide pour les champs autorisés.\n${inventoryQueryHelp}` };
-    if (!saved.project_id && !saved.candidates) {
-      let projectId: string | undefined;
-      if (plan.selector) {
-        const matches = await this.store.lookup(actor, plan.selector);
-        if (!matches.total) return { kind: "Projet introuvable", text: "Aucun projet ne correspond exactement à cet identifiant, nom ou alias. Utilisez documentation projets ou documentation créer projet pour proposer une création séparée." };
-        if (matches.total > 1) {
-          // Save every candidate identifier, not a guessed first page.
-          const ids = matches.projects.map(p => p.id);
-          for (let page = 1; page < matches.pages; page++) ids.push(...(await this.store.projects(actor, page, plan.selector)).projects.map(p => p.id));
-          await this.sql.query('UPDATE documentation_questions SET candidates=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5', [saved.id, JSON.stringify(ids), actor.team, ownerKey(actor), actor.channel]);
-          await this.sql.query('DELETE FROM documentation_project_context WHERE owner=$1 AND channel=$2', [ownerKey(actor), actor.channel]);
-          return `question_${saved.id}_0`;
-        }
-        projectId = matches.projects[0]!.id;
-      } else {
-        projectId = (await this.sql.query(`SELECT project_id FROM documentation_project_context WHERE owner=$1 AND channel=$2 AND team=$3
-          AND selected_at>now()-interval '30 minutes' AND selected_at<=now()`, [ownerKey(actor), actor.channel, actor.team])).rows[0]?.project_id;
-      }
-      if (!projectId || !await this.store.project(actor, projectId)) return { kind: "Choisir un projet", text: "Quel projet ? Votre contexte de projet privé est absent ou expiré. Ouvrez documentation projet <identifiant, nom exact ou alias>, puis répétez la question avec le préfixe documentation." };
-      await this.sql.query('UPDATE documentation_questions SET project_id=$2 WHERE id=$1 AND team=$3 AND owner=$4 AND channel=$5 AND project_id IS NULL', [saved.id, projectId, actor.team, ownerKey(actor), actor.channel]);
-      await this.remember(actor, projectId);
-    }
-    return `question_${saved.id}_0`;
   }
   async choose(actor: Actor, payload: JobPayload): Promise<string | MenuPage> {
     const match = typeof payload.value === 'string' ? /^([^|]+)\|([^|]+)$/.exec(payload.value) : null;

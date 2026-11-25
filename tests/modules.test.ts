@@ -259,9 +259,9 @@ it('durably binds signed text, new actions and old actions to their module', asy
       await post('/slack/actions', raw, 'application/x-www-form-urlencoded');
     }
     const rows = (await sql.query('SELECT module,payload FROM jobs')).rows;
-    expect(rows).toHaveLength(6);
+    expect(rows).toHaveLength(5);
     expect(rows.filter(r => r.module === 'mail')).toHaveLength(3);
-    expect(rows).toContainEqual({ module: 'core', payload: { type: 'text', text: 'sort' } });
+    expect(rows).not.toContainEqual({ module: 'core', payload: { type: 'text', text: 'sort' } });
     expect(rows.filter(r => r.payload.action === 'confirm_run').every(r => r.module === 'mail')).toBe(true);
   } finally { await app.close(); }
 });

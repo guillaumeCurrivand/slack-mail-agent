@@ -20,7 +20,7 @@ The deployment must include `mail` in `ENABLED_MODULES`. Mail Sorter needs Googl
 
 ## Commands and menu
 
-Send commands in your private DM with the bot. `courrier` is the French alias for `mail`; natural-language follow-ups also need a prefix. Opening this Module's menu does not route later unprefixed messages to it.
+Send commands in your private DM with the bot. `courrier` is the French alias for `mail`. Use the rule forms for changes. Opening this Module's menu does not route later unprefixed messages to it.
 
 | Purpose | French shortcut | English shortcut |
 | --- | --- | --- |
@@ -35,22 +35,13 @@ Send commands in your private DM with the bot. `courrier` is the French alias fo
 
 Details page numbers start at zero; omitting the page opens the first page. Details show five messages per page. The menu also offers **Gérer les règles**, **Dernier rapport**, **Connexion Gmail** and **Approbations en attente** when eligible saved work exists. Add/Edit opens a preparation screen with **Règle par expéditeur** and **Règle par contenu**. Only the sender form asks for exact addresses; the content form explains that classification uses AI when sorting. Editing offers the current type first and permits switching types through a separately approved Proposal. Both forms retain required examples and validation, use no AI to prepare the Proposal, and reject stale edits. Rule removal and starter rules also produce separately approved Proposals. Undo is attached to a retained Report.
 
-Describe a rule after the prefix, for example:
-
-```text
-courrier Applique le libellé Projects/Alpha aux messages de alex@example.com et conserve-les dans ma boîte de réception.
-courrier Modifie ma règle de lettres d’information pour exclure les annonces de produits.
-```
-
-For a correction, identify the retained run and message, for example `courrier Pour le message <message-id> du traitement <run-id>, retire le libellé Urgent et conserve-le dans ma boîte de réception.` Interpretation uses AI. Corrections receive their own Preview; changing future rules requires separate rule approval. See [Rules and conversation](product-spec.md#rules-and-conversation).
-
 ## Approvals, privacy and spending
 
 Rules, mailbox authorization, conversations, Previews and action records belong to the Slack User. The Module does not offer shared team rules or access to another User's mail. Connection and disconnect each require explicit Slack confirmation; disconnect removes active credentials and cancels pending Previews while keeping rules. Revoking the Google grant is a separate account action.
 
 Rule Proposals and sorting Previews have a 24-hour validity window. Changed rules or a changed Gmail connection invalidate an old Preview. **Approbations en attente** only reopens eligible saved rule Proposals and Previews; reading them does not extend validity or start another scan. See [Processing and approvals](product-spec.md#processing-and-approvals) for the authoritative safeguards.
 
-Natural-language interpretation and semantic mail classification use the shared AI allowance. Menus, rule inspection, starter templates, retained Details/Reports, approval and undo need no paid generation. Overlapping sorting starts report the existing request. Use `budget` to read shared recorded and reserved usage; see [AI provider and budget](product-spec.md#ai-provider-and-budget).
+Semantic mail classification uses the shared AI allowance. Menus, rule inspection, starter templates, retained Details/Reports, approval and undo need no paid generation. Overlapping sorting starts report the existing request. Use `budget` to read shared recorded and reserved usage; see [AI provider and budget](product-spec.md#ai-provider-and-budget).
 
 Approved rules persist until removed. Conversation and action-record cleanup follows the [retention policy](product-spec.md#memory-and-undo), including paused cleanup while the Module is disabled. Slack, provider and backup retention are separate.
 

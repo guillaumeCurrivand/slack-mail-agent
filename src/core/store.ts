@@ -45,14 +45,6 @@ export class JobStore {
   async defer(id: string, until: Date) {
     await this.sql.query("UPDATE jobs SET status='queued',available_at=$2 WHERE id=$1 AND status IN ('queued','running')", [id, until]);
   }
-  /** Preserve active work at receipt even when intent is resolved later. */
-  async enqueueWithOperationSnapshot(id: string, actor: Actor, payload: Record<string, unknown>, module: string, operation: string) {
-    await this.sql.query(`INSERT INTO jobs(id,owner,actor,payload,module)
-      SELECT $1,$2,$3,COALESCE((SELECT $4::jsonb || jsonb_build_object('activeOperation',job_id)
-        FROM core_operation_slots WHERE owner=$2 AND module=$5 AND operation=$6 AND active),$4::jsonb),$5
-      ON CONFLICT DO NOTHING`,
-    [id, ownerKey(actor), JSON.stringify(actor), JSON.stringify(payload), module, operation]);
-  }
   /** Resolve an intent known only after routing; returns the original active job. */
   async claimOperation(id: string, actor: Actor, module: string, operation: string): Promise<string> {
     const result = await this.sql.query(`INSERT INTO core_operation_slots(owner,module,operation,job_id) VALUES($1,$2,$3,$4)

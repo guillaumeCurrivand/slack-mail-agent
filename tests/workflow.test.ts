@@ -32,20 +32,15 @@ class FakeMailbox implements Mailbox {
     return this.snapshot(id);
   }
 }
-function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'yes', extras: { converse?: Intelligence['converse'] } = {}) {
+function harness(mailbox = new FakeMailbox(), decision: 'yes' | 'uncertain' = 'yes') {
   const messages: Array<AgentMessage & { actor: Actor }> = [];
   const messenger: Messenger = { async send(actor, message) { messages.push({ actor, ...message }); } };
-  const seen: unknown[] = [];
   const intelligence: Intelligence = {
-    async converse(actor, text, context) {
-      if (extras.converse) return extras.converse(actor, text, context);
-      seen.push(context); return { intent: 'reply', reply: `Received ${text}`, rule: null, ruleId: null, runId: null, messageId: null, correction: null };
-    },
     async classify(_actor, _mail, rules) { return rules.map(r => ({ ruleId: r.id, decision, reason: 'Time-sensitive request' })); },
   };
   const budget = new Budget(sql);
   const engine = new Engine({ store, messenger, intelligence, budget, mailbox: () => mailbox, connectUrl: async () => 'https://agent.example.com/auth/google?ticket=test' });
-  return { engine, mailbox, messages, seen, budget };
+  return { engine, mailbox, messages, budget };
 }
 async function seed(rules?: Rule[]) {
   const state = emptyState(); state.connection = { id: 'connection-a', email: 'alice@example.com', subject: 'google-alice', encryptedTokens: 'sealed' };
@@ -62,8 +57,6 @@ describe('approved mailbox workflow', () => {
     expect(h.mailbox.mutations).toHaveLength(0);
     expect((await store.load(bob)).runs).toEqual([]);
     await h.engine.handle(bob, { type: 'text', text: 'What are my rules?' }, uid());
-    expect(JSON.stringify(h.seen)).not.toContain('google-alice');
-    expect(JSON.stringify(h.seen)).not.toContain('urgent');
     await action(h, 'confirm_run', run.id);
     expect(h.mailbox.mutations).toHaveLength(1);
     expect((await h.mailbox.read('m1')).labels).toEqual(['INBOX', 'LURGENT']);
@@ -127,7 +120,7 @@ describe('approved mailbox workflow', () => {
   });
   it('never exposes Gmail credentials to the conversation model', async () => {
     await seed(); const h = harness(); await h.engine.handle(alice, { type: 'text', text: 'Help me organize projects' }, uid());
-    expect(JSON.stringify(h.seen)).not.toContain('sealed'); expect(JSON.stringify(h.seen)).not.toContain('google-alice');
+    expect(h.messages.at(-1)?.kind).toBe('Aide');
   });
   it('persists rule proposals without activating them until their owner approves', async () => {
     const h = harness(); await h.engine.handle(alice, { type: 'text', text: 'starters' }, uid());
@@ -138,26 +131,6 @@ describe('approved mailbox workflow', () => {
 });
 
 describe('shared AI allowance', () => {
-  it('validates a complete conversation response and accounts for its token usage', async () => {
-    const budget = new Budget(sql); const requests: any[] = [];
-    const answer = { intent: 'reply', reply: 'What project should this sender belong to?', rule: null, ruleId: null, runId: null, messageId: null, correction: null };
-    const fakeFetch = (async (_url: any, options: any) => {
-      requests.push(JSON.parse(options.body));
-      return requests.length === 1 ? Response.json({ input_tokens: 200 }) : Response.json({ status: 'completed', usage: { input_tokens: 200, output_tokens: 30 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify(answer) }] }] });
-    }) as typeof fetch;
-    const ai = new OpenAI('fake', 'gpt-4.1-mini-2025-04-14', budget, fakeFetch);
-    expect(await ai.converse(alice, 'Help with projects', {})).toEqual(answer);
-    expect(requests[1].store).toBe(false);
-    expect(requests[1].text.format.strict).toBe(true);
-    expect(requests[1].text).toEqual(requests[0].text);
-    expect(requests[0].instructions).toMatch(/standard markdown in reply/i);
-    expect(requests[0].instructions).toMatch(/not Slack mrkdwn/i);
-    expect(requests[0].instructions).toMatch(/Do not mention people or channels/i);
-    expect(requests[0].instructions).toMatch(/do not include links/i);
-    expect(requests[0].instructions).toMatch(/never claim actions were executed/i);
-    expect(requests[0].instructions).toMatch(/Never layout a Preview, Details, Report/i);
-    expect(await budget.usage()).toEqual({ charged: 0.000128, reserved: 0 });
-  });
   it('accounts for unsettled reservations across users and settles only once', async () => {
     const budget = new Budget(sql, 10_000_000); const first = await budget.reserve(alice, 9_000_000);
     await expect(budget.reserve(bob, 2_000_000)).rejects.toBeInstanceOf(BudgetExceeded);
@@ -202,15 +175,7 @@ describe('Help Card', () => {
     }
   });
 
-  it('falls back to the Help Card when the model Reply is empty or missing', async () => {
-    const empty = harness(undefined, 'yes', { converse: async () => ({ intent: 'reply', reply: '', rule: null, ruleId: null, runId: null, messageId: null, correction: null }) });
-    await empty.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
-    expectHelpCard(empty.messages.at(-1)!);
 
-    const missing = harness(undefined, 'yes', { converse: async () => ({ intent: 'reply', reply: undefined as unknown as string, rule: null, ruleId: null, runId: null, messageId: null, correction: null }) });
-    await missing.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
-    expectHelpCard(missing.messages.at(-1)!);
-  });
 });
 
 describe('Connection Cards', () => {
@@ -279,7 +244,7 @@ describe('Rules Cards', () => {
     await empty.engine.handle(alice, { type: 'text', text: 'rules' }, uid());
     expect(empty.messages.at(-1)).toMatchObject({
       kind: "Vos règles",
-      text: "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou décrivez votre première règle après le préfixe courrier.",
+      text: "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou ouvrez Gérer les règles pour en ajouter une.",
     });
 
     await seed();
@@ -347,7 +312,7 @@ describe('Rules Cards', () => {
     });
     expect(h.messages[1]).toEqual({
       actor: alice,
-      text: "Modèle de projet : lorsque l’expéditeur correspond à une association approuvée, appliquez un libellé de projet et conservez le message dans la boîte de réception. Commencez votre réponse par courrier, puis indiquez le nom du projet et les adresses e-mail des expéditeurs.",
+      text: "Modèle de projet : lorsque l’expéditeur correspond à une association approuvée, appliquez un libellé de projet et conservez le message dans la boîte de réception. Dans Gérer les règles, choisissez Ajouter une règle puis Règle par expéditeur.",
       buttons: undefined,
     });
     expect(h.messages[1]!.kind).toBeUndefined();
@@ -536,7 +501,7 @@ describe('Run Cards', () => {
     expect(sent[0]!.kind).toBe("Aperçu");
     expect(sent[1]).toEqual({
       actor: alice,
-      text: "Cette correction ne change pas le comportement futur. Commencez votre réponse par courrier et décrivez le changement souhaité de la règle ; je le proposerai séparément pour approbation.",
+      text: "Cette correction ne change pas le comportement futur. Ouvrez Gérer les règles pour proposer une modification séparée.",
       buttons: undefined,
     });
     expect(sent[1]!.kind).toBeUndefined();
@@ -569,11 +534,11 @@ describe('Run Cards', () => {
 });
 
 describe('Agent Replies', () => {
-  it('posts talk as a Reply with no kind header and stores the model string', async () => {
+  it('keeps unmentioned Mail prose out of the conversation model and history', async () => {
     const h = harness();
     await h.engine.handle(alice, { type: 'text', text: 'How do I sort?' }, uid());
-    expect(h.messages).toEqual([{ actor: alice, text: 'Received How do I sort?', buttons: undefined }]);
-    expect((await store.load(alice)).history.map(turn => turn.content)).toEqual(['How do I sort?', 'Received How do I sort?']);
+    expect(h.messages.at(-1)?.kind).toBe('Aide');
+    expect((await store.load(alice)).history).toHaveLength(0);
   });
   it('posts unlabeled engine messages as Replies, not Cards', async () => {
     const h = harness();
@@ -597,14 +562,8 @@ describe('Agent Replies', () => {
     expect(h.messages.at(-1)).toEqual({ actor: alice, text: "Action non prise en charge.", buttons: undefined });
 
     await h.engine.handle(alice, { type: 'text', text: 'keep this', resolved: { intent: 'correction', reply: '', rule: null, ruleId: null, runId: run.id, messageId: 'm1', correction: { addLabels: [], removeLabels: [], disposition: 'keep' } } }, uid());
-    expect(h.messages.at(-1)).toMatchObject({ text: "Cette correction ne change pas le comportement futur. Commencez votre réponse par courrier et décrivez le changement souhaité de la règle ; je le proposerai séparément pour approbation." });
+    expect(h.messages.at(-1)).toMatchObject({ text: "Cette correction ne change pas le comportement futur. Ouvrez Gérer les règles pour proposer une modification séparée." });
     expect(h.messages.at(-1)!.kind).toBeUndefined();
   });
-  it('posts errors as unlabeled Replies', async () => {
-    const failing = harness(undefined, 'yes', { converse: async () => { throw new Error('provider exploded'); } });
-    await failing.engine.handle(alice, { type: 'text', text: 'What can you do?' }, uid());
-    expect(failing.messages.at(-1)).toMatchObject({ text: expect.stringMatching(/^Cette demande n’a pas pu aboutir/) });
-    expect(failing.messages.at(-1)!.kind).toBeUndefined();
 
-  });
 });

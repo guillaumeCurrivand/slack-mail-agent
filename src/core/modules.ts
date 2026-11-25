@@ -35,6 +35,8 @@ export interface AssistantModule {
   channelAccess?(actor: Actor): Promise<boolean>;
   /** A static handoff shown instead of running this Module in a DM. */
   channelOnly?: string;
+  /** Read-only knowledge available in a private mention. */
+  answerQuestion?(actor: Actor, question: string, eventId: string, context: ModuleContext): Promise<string>;
   /** Slack's short-lived form triggers must be exchanged before queued work. */
   forms?: {
     openActions: readonly string[];
@@ -43,7 +45,7 @@ export interface AssistantModule {
     submit(actor: Pick<Actor, 'team' | 'user'>, view: { callback_id: string; private_metadata: string; state?: { values?: unknown } }): Promise<Record<string, unknown>>;
     suggest?(actor: Pick<Actor, 'team' | 'user'>, input: { form: string; block: string; action: string; query: string }): Promise<Record<string, unknown>>;
   };
-  workOperations?: readonly { key: string; label: string; commands: readonly string[]; action: string; snapshotUnknownText?: boolean }[];
+  workOperations?: readonly { key: string; label: string; commands: readonly string[]; action: string }[];
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
   registerRoutes?(app: FastifyInstance): void;
@@ -59,7 +61,7 @@ export class ModuleRegistry {
   private modules = new Map<string, AssistantModule>();
   private prefixes = new Map<string, AssistantModule>();
   private legacyActions = new Map<string, string>();
-  constructor(modules: AssistantModule[]) {
+  constructor(modules: AssistantModule[], private readonly mention?: (actor: Actor, question: string, eventId: string, context: ModuleContext, modules: AssistantModule[]) => Promise<void>) {
     for (const module of modules) {
       if (!/^[a-z][a-z0-9_-]*$/.test(module.id) || ['core', 'help', 'budget', 'menu', 'hello', 'hi', 'aide', 'bonjour', 'salut'].includes(module.id) || this.modules.has(module.id)) throw new Error('Invalid or duplicate module identifier.');
       this.modules.set(module.id, module);
@@ -100,9 +102,6 @@ export class ModuleRegistry {
       ? operation.commands.includes(String(job.payload.text ?? '').trim().toLowerCase())
       : job.payload.type === 'menu_action' && job.payload.action === operation.action);
   }
-  receiptOperation(job: RoutedJob): string | undefined {
-    return job.payload.type === 'text' ? this.modules.get(job.module)?.workOperations?.find(operation => operation.snapshotUnknownText)?.key : undefined;
-  }
   text(text: string): RoutedJob {
     const [prefix = '', rest = ''] = text.trim().split(/\s+([\s\S]*)/, 2);
     const id = prefix.toLowerCase(), module = this.prefixes.get(id);
@@ -125,6 +124,9 @@ export class ModuleRegistry {
   }
   async dispatch(job: RoutedJob, actor: Actor, eventId: string, context: ModuleContext) {
     const channel = /^[CG]/.test(actor.channel);
+    if (job.module === 'core' && job.payload.type === 'mention') {
+      return this.mention?.(actor, String(job.payload.text), eventId, context, channel ? [] : this.all().filter(m => m.answerQuestion));
+    }
     if (channel) {
       const module = this.modules.get(job.module);
       if (!module?.channelAccess || !await module.channelAccess(actor)) return;
@@ -179,7 +181,7 @@ export class ModuleRegistry {
     if (destination === 'help') return { kind: "Aide — guide de l’assistant", text: [
       'L’assistant réunit les modules ci-dessous. Choisissez leur aide pour connaître toutes leurs capacités, commandes et exemples.',
       '*Commandes communes*\n• menu : ouvrir un nouveau menu avec les modules activés.\n• aide (ou help) : ouvrir ce guide.\n• budget : consulter les dépenses d’IA enregistrées et les montants réservés, au total et par module, pour le mois civil UTC.\n• bonjour / salut (hello / hi) : ouvrir le menu.',
-      '*Choisir un module*\nCommencez chaque demande écrite par son préfixe, même en langage naturel. <préfixe> aide ouvre son guide ; un préfixe seul ouvre également son aide. Ouvrir un menu ne change pas le routage des messages suivants. Les commandes anglaises restent compatibles.',
+      '*Choisir un module*\nMentionnez @Mayassistant pour poser une question. Pour les commandes, commencez par le préfixe du module. <préfixe> aide ouvre son guide ; un préfixe seul ouvre également son aide. Ouvrir un menu ne change pas le routage des messages suivants. Les commandes anglaises restent compatibles.',
       '*Modules activés*\n' + (this.all().map(module => `${module.name ?? module.id} — ${module.description}.\nPréfixe : ${module.aliases?.[0] ?? module.id}. Guide : ${module.aliases?.[0] ?? module.id} aide.`).join('\n\n') || 'Aucun module n’est actuellement activé.'),
       '*Données et confirmations*\nLes modules personnels restent privés en DM. Certains modules proposent une interface dans les canaux, gèrent des données partagées ou publient des notifications : leur guide précise qui peut voir les données et les changements. Une confirmation porte sur la proposition affichée ; un message en langage naturel ne la remplace pas.',
       '*Coûts et démarrage*\nLire l’aide et parcourir les menus n’utilise pas d’IA. Les boutons de lancement peuvent démarrer une analyse payante. Les modules qui utilisent OpenAI partagent le plafond mensuel configuré ; budget affiche l’usage. Les demandes incertaines conservent leur réservation. Les guides identifient les parcours gratuits et les éventuelles facturations externes séparées.',

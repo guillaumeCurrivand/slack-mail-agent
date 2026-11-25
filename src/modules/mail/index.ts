@@ -24,7 +24,7 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
   return {
     id: 'mail', name: "Tri des e-mails", description: "Trier votre Gmail selon vos règles personnelles approuvées",
     help: mailHelp,
-    workOperations: [{ key: SORT_OPERATION, label: "Trier la boîte de réception", commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox', snapshotUnknownText: true }],
+    workOperations: [{ key: SORT_OPERATION, label: "Trier la boîte de réception", commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox' }],
     menuActions: ['sort_inbox', 'form_prepare', 'form_open'],
     forms: forms.forms,
     async menu(actor, page, context) {

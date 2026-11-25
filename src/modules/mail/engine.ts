@@ -72,25 +72,18 @@ export class Engine {
     const quick: Record<string, Intent['intent']> = { connect: 'connect', 'connect gmail': 'connect', starters: 'starters', rules: 'rules', sort: 'sort', 'sort my inbox': 'sort', 'sort my mail': 'sort', report: 'report', budget: 'budget' };
     let intent: Intent;
     if (quick[command]) intent = { intent: quick[command]!, reply: '', rule: null, ruleId: null, runId: null, messageId: null, correction: null };
-    else if (event.resolved) intent = event.resolved;
-    else {
-      intent = await this.d.intelligence.converse(actor, text, {
-        rules: state.rules, history: state.history.slice(-20), connected: Boolean(state.connection),
-        runs: state.runs.slice(-3).map(r => ({ id: r.id, status: r.status, messages: r.items.slice(0, 100).map(i => ({ id: i.id, subject: i.subject.slice(0, 120), plan: i.plan, status: i.status })) })),
-      });
-      // Persist the interpretation before acting so a worker restart doesn't pay to reinterpret it.
-      await this.d.store.sql.query("UPDATE jobs SET payload=jsonb_set(jsonb_set(payload,'{resolved}',$2::jsonb),'{presentationLanguage}','\"fr\"'::jsonb) WHERE id=$1 AND owner=$3", [eventId, JSON.stringify(intent), ownerKey(actor)]);
-    }
+    else if (event.resolved && event.resolved.intent !== 'reply') intent = event.resolved;
+    else return this.sendHelp(actor);
     state.history.push({ role: 'user', content: text.slice(0, 4000), at: new Date().toISOString() });
     switch (intent.intent) {
       case 'connect': return this.sendCard(actor, "Connexion", `Connectez votre propre boîte Google Workspace avec ce lien à usage unique (expire dans 10 minutes) :\n${await this.d.connectUrl(actor)}`);
       case 'starters': {
         await this.propose(actor, state, { kind: 'rules', rules: starterRules() });
-        return this.send(actor, "Modèle de projet : lorsque l’expéditeur correspond à une association approuvée, appliquez un libellé de projet et conservez le message dans la boîte de réception. Commencez votre réponse par courrier, puis indiquez le nom du projet et les adresses e-mail des expéditeurs.");
+        return this.send(actor, "Modèle de projet : lorsque l’expéditeur correspond à une association approuvée, appliquez un libellé de projet et conservez le message dans la boîte de réception. Dans Gérer les règles, choisissez Ajouter une règle puis Règle par expéditeur.");
       }
       case 'rules':
         if (this.d.showMenu) return this.d.showMenu(actor, state, 'rules-0');
-        return this.sendCard(actor, "Vos règles", state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nExpéditeurs : ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : "analyse du contenu"}\nLibellés : ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'aucun'}; action : ${stateLabel(r.action)}`).join('\n\n') : "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou décrivez votre première règle après le préfixe courrier.");
+        return this.sendCard(actor, "Vos règles", state.rules.length ? state.rules.map(r => `${escapeCardValue(r.name)} [${escapeCardValue(r.id)}]\n${escapeCardValue(r.condition)}\nExpéditeurs : ${r.senders.length ? r.senders.map(escapeCardValue).join(', ') : "analyse du contenu"}\nLibellés : ${r.labels.length ? r.labels.map(escapeCardValue).join(', ') : 'aucun'}; action : ${stateLabel(r.action)}`).join('\n\n') : "Vous n’avez aucune règle approuvée. Envoyez courrier modèles ou ouvrez Gérer les règles pour en ajouter une.");
       case 'budget': return this.send(actor, await budgetReport(this.d.budget));
       case 'sort': {
         const original = event.activeOperation ?? (this.d.admitSort ? await this.d.admitSort(actor, eventId) : eventId);
@@ -99,7 +92,7 @@ export class Engine {
       }
       case 'report': return this.report(actor, state, intent.runId ?? state.runs.at(-1)?.id);
       case 'propose_rule': {
-        if (!intent.rule) return this.send(actor, "Commencez votre réponse par courrier et décrivez la condition, les libellés, l’action et les exceptions.");
+        if (!intent.rule) return this.send(actor, "Ouvrez Gérer les règles pour ajouter ou modifier une règle.");
         if (intent.ruleId && !state.rules.some(r => r.id === intent.ruleId)) return this.send(actor, "Cette règle ne fait pas partie de vos règles enregistrées.");
         return this.propose(actor, state, { kind: 'rules', rules: [validateRule(intent.rule)], language: event.resolved && event.presentationLanguage !== 'fr' ? undefined : 'fr', ...(intent.ruleId ? { replaceId: intent.ruleId } : {}) });
       }
@@ -124,10 +117,10 @@ export class Engine {
     return this.sendCard(actor, draft.kind === 'delete' ? "Supprimer la règle" : "Proposition de règle", `${draft.language === 'fr' ? '' : `${retainedTextNotice}\n\n`}${description}\n\nAucune règle ne change avant votre approbation.`, [{ label: "Approuver les règles", action: 'approve_draft', value: draft.id, style: draft.kind === 'delete' ? 'danger' : 'primary' }, { label: "Annuler", action: 'cancel_draft', value: draft.id }]);
   }
   private async action(actor: Actor, state: UserState, action: string, value: string) {
-    if (action === 'menu_add_rule') return this.send(actor, "Commencez votre réponse par courrier et décrivez la condition, les libellés, l’action et les exceptions. Je proposerai une règle avec des exemples pour votre approbation.");
+    if (action === 'menu_add_rule') return this.send(actor, "Ouvrez Gérer les règles pour ajouter ou modifier une règle. Je proposerai une règle avec des exemples pour votre approbation.");
     if (action === 'menu_edit_rule') {
       const rule = state.rules.find(rule => rule.id === value);
-      return this.send(actor, rule ? `Pour modifier ${escapeCardValue(rule.name)}, répondez : courrier modifie la règle ${escapeCardValue(rule.id)} puis indiquez la condition, les libellés, l’action et les exceptions souhaités. Les modifications nécessitent une approbation séparée.` : "Cette règle n’est plus disponible dans votre compte. Ouvrez à nouveau Gérer les règles.");
+      return this.send(actor, rule ? `Pour modifier ${escapeCardValue(rule.name)}, ouvrez Gérer les règles, choisissez cette règle puis Modifier. Les modifications nécessitent une approbation séparée.` : "Cette règle n’est plus disponible dans votre compte. Ouvrez à nouveau Gérer les règles.");
     }
     if (action === 'menu_latest_report') return this.report(actor, state,
       state.runs.findLast(run => run.status === 'done' || run.status === 'undone')?.id);
@@ -205,7 +198,7 @@ export class Engine {
   }
   private async scan(actor: Actor, state: UserState, sourceId: string) {
     if (!state.connection) return this.send(actor, "Connectez d’abord Gmail : envoyez courrier connecter.");
-    if (!state.rules.length) return this.send(actor, "Approuvez d’abord au moins une règle : envoyez courrier modèles ou décrivez une règle après le préfixe courrier.");
+    if (!state.rules.length) return this.send(actor, "Approuvez d’abord au moins une règle : envoyez courrier modèles ou ajoutez une règle dans Gérer les règles.");
     const mailbox = this.connected(actor, state);
     let run = state.runs.find(r => r.sourceId === sourceId);
     if (!run) {
@@ -338,6 +331,6 @@ export class Engine {
     const existing = await this.connected(actor, state).labels(); run.newLabels = labels.filter(name => !existing.some(l => l.name === name));
     state.runs.push(run); await this.d.store.save(actor, state);
     await this.preview(actor, run);
-    return this.send(actor, "Cette correction ne change pas le comportement futur. Commencez votre réponse par courrier et décrivez le changement souhaité de la règle ; je le proposerai séparément pour approbation.");
+    return this.send(actor, "Cette correction ne change pas le comportement futur. Ouvrez Gérer les règles pour proposer une modification séparée.");
   }
 }

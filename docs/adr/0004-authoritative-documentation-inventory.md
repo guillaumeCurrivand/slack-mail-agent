@@ -8,6 +8,8 @@ Presentation update, 13/10/2026: the [in-place reply decision](0013-in-place-but
 
 During the design interview, the user selected the database as the authoritative company inventory after importing the existing spreadsheet. Independently editing both Google Sheets and the database would require synchronization and conflict rules; one authority keeps shared edits and their history consistent. Documentation will expose this shared inventory through private Agent interactions, with inventory facts and documentation links as its initial knowledge scope.
 
+On 25/11/2026 the user chose a single conversational entry point. A signed bot mention can select a read-only module source in a private DM. This separates open-ended questions from the command parser and keeps approvals and mutations in deterministic workflows. The assistant answers from workbook cells in prose and cites their origin. See [mention routing](../product-spec.md#questions-addressed-to-mayassistant).
+
 The later [live workbook decision](../documentation.md#live-google-sheets-workbook) applies to the four sheet-backed tabs. Google Sheets owns their cells and both editors use that source. The PostgreSQL decision below continues to apply to structured inventory records.
 
 The user chose to apply confirmed field changes even when another person edits the record after the preview, favoring simple collaborative editing over rejecting stale confirmations. An implementation must serialize commits, preserve unrelated fields, and record the actual before/after values atomically with each mutation. Record versions may support history but must not become a reason to reject these confirmations.

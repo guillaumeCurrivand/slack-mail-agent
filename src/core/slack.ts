@@ -173,7 +173,7 @@ export class Slack implements Messenger {
     if (typeof result.ts !== 'string' || !/^\d+\.\d+$/.test(result.ts)) throw new Error('Slack message identity unavailable.');
     return result.ts;
   }
-  private async deliver(actor: { channel: string; thread?: string }, message: AgentMessage, timestamp?: string, thread = !timestamp && /^[CG]/.test(actor.channel) ? actor.thread : undefined) {
+  private async deliver(actor: { channel: string; thread?: string }, message: AgentMessage, timestamp?: string, thread = !timestamp ? actor.thread : undefined) {
     if (thread && !/^\d+\.\d+$/.test(thread)) throw new SlackDeliveryRejected('Invalid thread.');
     const text = message.kind ? message.text : sanitizeReply(message.text);
     if (text.length > 12_000) throw new SlackDeliveryRejected('Message text exceeds Slack limits.');

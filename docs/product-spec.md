@@ -1,6 +1,6 @@
 # Private Slack assistant — current product specification
 
-Documentation can use the team's shared Google Sheets workbook directly in private Slack DMs. The four connected tabs use the current named columns in row 1, including access references. Adding, renaming or moving a column in Sheets takes effect the next time the tab is opened or refreshed in Slack. Ordinary Documentation questions in a private DM also read Google Sheets. The AI selects columns and filters using the question and current headings. The bot retrieves values and counts locally and cites the corresponding cells or ranges. Workspace Documentation users can create, read, update and delete workbook records in each tab. Writes require an owner-bound preview and separate confirmation. Deleting removes the complete reviewed sheet row. The existing PostgreSQL inventory remains available separately. See the [workbook contract](documentation.md#live-google-sheets-workbook).
+Documentation can use the team's shared Google Sheets workbook directly in private Slack DMs. The four connected tabs use the current named columns in row 1, including access references. Adding, renaming or moving a column in Sheets takes effect the next time the tab is opened or refreshed in Slack. Questions addressed to @Mayassistant in a private DM can read Google Sheets. The AI selects columns and filters using the question and current headings. The bot retrieves values and counts locally and cites the corresponding cells or ranges. Workspace Documentation users can create, read, update and delete workbook records in each tab. Writes require an owner-bound preview and separate confirmation. Deleting removes the complete reviewed sheet row. The existing PostgreSQL inventory remains available separately. See the [workbook contract](documentation.md#live-google-sheets-workbook).
 
 Status: approved by the user after the design interview. An initial local implementation and automated tests are available; live integration and model-quality validation remain release requirements. Deployment and purchasing services are not authorized by this document.
 
@@ -10,9 +10,15 @@ The optional [HyperDX module](hyperdx.md) delivers daily service error and warni
 
 This document owns shared routing, navigation, presentation, access and spending safeguards, plus the Mail Sorter contract. Start with the [module overview](../README.md#modules-and-project-structure) for setup and usage. Module-specific guides/contracts are [Mail Sorter](mail.md), [Documentation](documentation.md), [ClickUp](clickup.md), [Yousign](yousign.md) and [Development](development.md). Their implementation status does not establish successful production deployment.
 
+## Questions addressed to Mayassistant
+
+Only a Slack user mention of the installed bot starts a conversational answer. This applies in a private DM and in channels where Slack delivers messages to the app. The reply uses prose in the originating conversation or thread. General questions share the existing AI allowance. Simple current-time questions use the application clock and identify the timezone (Paris by default).
+
+In a DM the assistant can select an enabled read-only knowledge source, or the user can name it directly. Documentation reads the connected workbook and cites matching cells or ranges. Workbook values stay out of model input. Shared-channel mentions have no access to private module data. Mentions cannot submit forms, authorize work or perform mutations. Unmentioned module commands, menus, literal searches and confirmations retain their existing workflow paths. This replaces the old Mail intent interpreter and Documentation question and mutation interpreters for module-prefixed prose.
+
 ## Approved module extension
 
-The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. The five current Modules are Mail Sorter, Documentation, ClickUp, Yousign and Development. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, including natural language (`mail sort`, `mail change my newsletter rule`). There is no remembered active module or AI-based routing. Shared `help` and `budget` commands require no module prefix.
+The user subsequently approved preparing this assistant for multiple built-in modules in one bot, with private interactions per user. The five current Modules are Mail Sorter, Documentation, ClickUp, Yousign and Development. Mail Sorter's Gmail behavior below remains applicable; new DM requests now require the `mail` prefix, for example `mail sort`. Menus do not establish an active module. Shared `help` and `budget` commands require no module prefix.
 
 Modules are maintained in this repository and deployed together, with independent enablement, connection requirements, and module-owned data. OpenAI work shares the existing $10 monthly AI ceiling, with usage tracked by module. Development's explicitly approved local Cursor billing is separate; see its contract below. Disabled modules do not execute work; saved state and pending jobs remain for re-enablement. Existing queued mail work and previously posted mail buttons retain their approval and ownership safeguards.
 
@@ -126,7 +132,7 @@ The User approved the [Development contract](development.md) on 03/10/2026 and a
 On 12/10/2026 the User clarified that Development operations must be available in both Slack project channels and private DMs. `development menu` opens setup, project status, repository selection and workflow controls on either surface, including before the first project exists; the private main menu also opens Development. Replies and modal confirmations return to the originating DM or channel thread. Channel screens are shared with channel members; DM screens stay private. Navigation and confirmations remain initiator/conversation/message-bound. Public ticket buttons only open a member’s own controls. Channel configuration fixes the originating channel and cannot reveal another channel’s projects. DM configuration offers a channel selector and shows only projects accessible to both the User and bot, with checks on current and proposed channels before saving. Membership is rechecked for each project operation. Private actions still affect shared project state; ticket links, clarifications and worker reports remain in project channels. Channel ingress accepts only Development’s opted-in namespace, leaving other Modules and personal budget messages private. See the [channel interface](development.md#clickable-channel-interface) and [decision](adr/0011-development-channel-interface.md).
 
 - One Slack workspace, serving the user's team of 10.
-- User interactions are private except Development's explicitly connected project channels. Yousign's approved automatic notifications post to selected channels under [its own contract](yousign.md); other Modules retain their existing private boundaries.
+- General bot mentions can be answered in channels. Personal module data stays private. Development also supports explicitly connected project channels. Yousign's approved automatic notifications post to selected channels under [its own contract](yousign.md); other Modules retain their existing private boundaries.
 - Each Mail Sorter user connects at most one personal-to-them Google Workspace Gmail account; connecting Gmail is not required to use the assistant's shared commands or other independent modules.
 - Each user has separate Gmail authorization, rules, project mappings, conversation history, previews, and action records.
 - No shared team rules in version one. Team administrators may manage availability and connection health through the product but cannot browse other users' mail, rules, or conversations through it.
@@ -140,7 +146,7 @@ The next three sections define Mail Sorter's rules, sorting workflow and starter
 
 ## Rules and conversation
 
-- Users define rules conversationally, including objective conditions and semantic judgments.
+- Users define rules through guided forms, including objective conditions and semantic judgments.
 - The agent restates a proposed rule precisely and shows examples before the user approves saving it.
 - Corrections apply to the relevant message; proposed changes to future behavior require separate rule approval.
 - Project sender mappings are user-defined. If a sender belongs to multiple projects, apply an approved subject/content disambiguation rule or ask the user.

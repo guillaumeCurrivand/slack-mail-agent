@@ -1,5 +1,11 @@
 # Updating production
 
+## Mention replies
+
+Use the existing message.im, message.channels and message.groups subscriptions in the [Slack manifest](../slack-manifest.json). In a channel, invite the bot and select its Slack mention from autocomplete. No new scopes, database migration or environment variables are required. General AI questions use the existing OpenAI configuration. Private Documentation answers also need the workbook setup below.
+
+After rebuilding the app, send `@Mayassistant Tell me which time is it` in a channel and check for the Paris time in its thread. In a DM, mention the bot and ask for a known project description. Verify the prose and its Sheets link, then send the same question without a mention and check that it produces no conversational answer. Check `menu` and `documentation classeur` separately.
+
 ## Documentation workbook
 
 Deploying the code leaves the workbook disabled until you configure both values. Enable the Google Sheets API in the service account’s Google Cloud project and share the specific workbook with its `client_email` as **Editor**. Keep general access restricted. Use a dedicated service account and ensure the workbook contains only data intended for Documentation users.

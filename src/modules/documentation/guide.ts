@@ -15,8 +15,7 @@ export const documentationHelp = {
 Ouvrir et les liens de relation permettent de naviguer entre les fiches. Les listes proposent Précédent/Suivant ; les commandes de liste acceptent une page commençant à 0. Les liens de ressources enregistrés sont cliquables, mais leur contenu n’est pas lu par l’assistant.
 
 *2. Poser des questions, rechercher et compter*
-• Questions : documentation où Alpha est-il hébergé ? ; documentation quelles technologies utilise ce projet ? ; documentation quels projets utilisent React et OVH sur leurs composants ? ; documentation combien de projets utilisent React ? ; documentation quels outils sont utilisés par toute l’entreprise ?
-L’interprétation en langage naturel utilise le budget IA partagé. La réponse s’appuie sur les fiches actuelles et les relations explicites ; les informations inconnues ne sont pas inventées. Votre contexte de projet privé expire après 30 minutes.
+• En DM, mentionnez @Mayassistant pour interroger le classeur connecté. Les réponses citent leurs sources.
 • documentation rechercher <JSON> et documentation compter <JSON> : filtrer gratuitement les fiches par relations et valeurs exactes, ou compter les correspondances distinctes. La rubrique Rechercher et compter explique les champs, le périmètre d’un même composant et les exemples. La pagination relit les données ; un changement d’inventaire redémarre la consultation.
 
 *3. Créer et modifier une fiche*
@@ -24,7 +23,6 @@ L’interprétation en langage naturel utilise le budget IA partagé. La répons
 Un champ facultatif vidé devient inconnu ; une liste existante vidée devient une liste vide. Les commandes structurées restent disponibles pour distinguer explicitement null d’une chaîne ou liste vide. Les parents d’un composant ou hébergement ne sont pas modifiables.
 • Commande structurée : documentation créer projet {"name":"Alpha","description":"Application équipe"}.
 • Modification ciblée : documentation modifier projet Alpha {"description":"Nouvelle description","notes":null}.
-• Langage naturel : documentation crée un projet nommé Alpha ; documentation remplace la description de ce projet par Application équipe.
 Décrivez une seule fiche, une cible exacte et des valeurs explicites. Choisissez ci-dessous la rubrique du type de fiche pour voir les commandes, champs autorisés et contraintes. Les clés JSON restent techniques. Une référence manquante exige une création séparée ; les relations ne créent pas d’autres fiches automatiquement.
 L’assistant affiche les valeurs proposées et demande votre confirmation séparée dans ce DM sous 24 heures. Rien ne change avant confirmation. Seuls les champs fournis sont remplacés, même si une autre personne les a modifiés depuis la proposition ; les autres champs sont conservés. null rend un champ facultatif inconnu ; une valeur vide exprime une valeur vide. Les identifiants, métadonnées et historique ne sont pas modifiables.
 
@@ -39,7 +37,7 @@ Archiver conserve l’identifiant, les relations et l’historique. Les référe
 L’historique métier est conservé avec l’inventaire, y compris après archivage. Les confirmations et boutons restent personnels ; relire une proposition ne prolonge pas sa validité.
 
 *Coûts, accès et limites*
-Menus, fiches, relations, historique, requêtes JSON, créations/modifications structurées, archivage et restauration n’utilisent pas d’IA. Les questions et mutations en langage naturel utilisent le budget OpenAI partagé et gardent les mêmes confirmations. Envoyez budget pour consulter l’usage.
+Menus, fiches, relations, historique, requêtes JSON, créations/modifications structurées, archivage et restauration n’utilisent pas d’IA. Les questions adressées à @Mayassistant peuvent utiliser le budget OpenAI partagé. Envoyez budget pour consulter l’usage.
 Stockez seulement les références de comptes et liens/instructions vers un gestionnaire de mots de passe, jamais des mots de passe ou clés API. L’assistant ne lit pas les documents derrière les liens et n’effectue pas d’opération auprès des hébergeurs. Les modifications groupées, changements de schéma, suppression définitive et restauration de valeurs historiques ne sont pas proposés.
 L’import depuis des sources externes est un outil opérateur hors ligne avec revue préalable ; ce n’est pas une commande Slack.
 documentation aide (ou documentation seul) rouvre ce guide. Les commandes anglaises restent compatibles ; les rubriques ci-dessous détaillent chaque parcours.`,

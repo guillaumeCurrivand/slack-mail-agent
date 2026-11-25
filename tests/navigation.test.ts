@@ -111,9 +111,9 @@ it('discovers enabled modules and shared commands in a private main menu without
       expect(blocks(menu).filter((block: any) => block.type === 'actions').map((block: any) => block.elements.length)).toEqual([2, 1]);
       expect(new Set(buttons(menu).map((item: any) => item.action_id)).size).toBe(3);
     }
-    const guidance = await h.dm('sort');
-    expect(guidance.body.text).toContain("préfixe");
-    button(guidance, 'Menu');
+    const before = h.messages.length;
+    await h.dm('sort');
+    expect(h.messages).toHaveLength(before);
   } finally { await h.close(); }
 });
 
@@ -125,7 +125,9 @@ it('retires Unanswered even with legacy enablement and refuses old commands and 
     expect(modules.enabledIds()).toEqual(['core', 'documentation']);
     expect((await h.dm('menu')).body.text).not.toContain('sans réponse');
     expect(buttons(await h.dm('menu')).map((item: any) => item.text.text)).not.toContain('Messages Slack sans réponse');
-    expect((await h.dm('slack unanswered')).body.text).toContain('préfixe');
+    const beforeUnmentioned = h.messages.length;
+    await h.dm('slack unanswered');
+    expect(h.messages).toHaveLength(beforeUnmentioned);
     const old = { method: 'chat.postMessage', ts: '123.456', body: {} };
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: old.ts }, actions: [{ action_id: 'slack:find_unanswered', value: 'old|unanswered', action_ts: randomUUID() }] }) }).toString();
     expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
@@ -364,20 +366,11 @@ it('shows ordinary workflow controls together and pages only unusually large cho
   } finally { await h.close(); }
 });
 
-it('requests new Mail explanations in French and reopens a retained English proposal without translating or renewing it', async () => {
+it('requires a mention for conversation and reopens a retained English proposal without translating or renewing it', async () => {
   const h = await harness(mailEnv);
   const original = { name: 'Old English name', kind: 'sender' as const, category: 'project' as const, condition: 'Original English condition', senders: ['alex@example.com'], labels: ['Projects/Alpha'], action: 'keep' as const, examples: ['Alex matches', 'Bob does not'] };
-  const requests: any[] = [];
-  vi.stubGlobal('fetch', vi.fn(async (url: string, options?: RequestInit) => {
-    expect(new URL(url).hostname).toBe('api.openai.com');
-    requests.push(JSON.parse(String(options?.body)));
-    if (url.endsWith('/input_tokens')) return Response.json({ input_tokens: 100 });
-    return Response.json({ status: 'completed', usage: { input_tokens: 100, output_tokens: 40 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify({ intent: 'reply', reply: 'Décrivez la règle souhaitée.', rule: null, ruleId: null, runId: null, messageId: null, correction: null }) }] }] });
-  }));
   try {
-    expect((await h.dm('courrier Bonjour, aide-moi avec mes règles')).body.text).toBe('Décrivez la règle souhaitée.');
-    expect(requests[0].instructions).toContain('Always write reply, new rule names, descriptions, examples and classification reasons in French');
-    expect(JSON.parse(requests[0].input).text).toBe('Bonjour, aide-moi avec mes règles');
+    expect((await h.dm('courrier Bonjour, aide-moi avec mes règles')).body.text).toContain('Triez votre propre boîte');
     const state = await new Store(sql).load(alice), created = new Date().toISOString();
     state.drafts.push({ id: 'legacy-proposal', kind: 'rules', created, rules: [original] });
     await new Store(sql).save(alice, state);
@@ -387,17 +380,15 @@ it('requests new Mail explanations in French and reopens a retained English prop
     expect(reopened.body.text).toContain(original.condition);
     expect(reopened.body.text).toContain(original.labels[0]);
     expect((await new Store(sql).load(alice)).drafts[0]).toEqual({ id: 'legacy-proposal', kind: 'rules', created, rules: [original] });
-    expect(requests).toHaveLength(2);
+
   } finally { await h.close(); }
 });
 
 it('accepts a signed button callback when Slack omits its optional value', async () => {
   const h = await harness();
   try {
-    const guidance = await h.dm('sort');
-    const selected = button(guidance, 'Menu');
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team },
-      user: { id: alice.user }, channel: { id: alice.channel }, actions: [{ action_id: selected.action_id, action_ts: randomUUID() }] }) }).toString();
+      user: { id: alice.user }, channel: { id: alice.channel }, actions: [{ action_id: 'core:menu', action_ts: randomUUID() }] }) }).toString();
     expect((await h.post('/slack/actions', raw, 'application/x-www-form-urlencoded')).statusCode).toBe(200);
     const menu = await h.drain();
     expect(title(menu)).toBe('Menu');
@@ -503,7 +494,7 @@ it('associates old-menu and typed duplicate starts with the original request eve
   } finally { await h.close(); }
 });
 
-it('keeps a natural-language sort tied to work active at receipt after later intent resolution', async () => {
+it('admits only the explicit sort command when unmentioned Mail prose arrives during a sort', async () => {
   const h = await harness(mailEnv);
   try {
     const postText = async (text: string) => {
@@ -514,12 +505,9 @@ it('keeps a natural-language sort tied to work active at receipt after later int
     };
     const original = await postText('mail sort');
     const natural = await postText('mail please sort my inbox now');
-    expect((await sql.query('SELECT payload FROM jobs WHERE id=$1', [natural])).rows[0].payload.activeOperation).toBe(original);
-    await sql.query("UPDATE jobs SET payload=jsonb_set(payload,'{resolved}',$2::jsonb) WHERE id=$1", [natural,
-      JSON.stringify({ intent: 'sort', reply: '', rule: null, ruleId: null, runId: null, messageId: null, correction: null })]);
+    expect((await sql.query('SELECT payload FROM jobs WHERE id=$1', [natural])).rows[0].payload.activeOperation).toBeUndefined();
     await h.drain();
-    expect(h.messages.some(message => message.body.text.includes(`Demande existante : ${original}`))).toBe(true);
-    expect((await new Store(sql).load(alice)).runs).toHaveLength(0);
+    expect((await sql.query("SELECT count(*)::int AS n FROM core_operation_slots WHERE job_id=$1", [original])).rows[0].n).toBe(1);
   } finally { await h.close(); }
 });
 
@@ -543,7 +531,9 @@ it('updates only the clicked menu, checks ownership and keeps module selection o
     await h.click(first, "Documentation", bob);
     await h.click(first, "Documentation", alice, second.ts);
     expect(h.messages.filter(message => message.method === 'chat.update')).toHaveLength(updates);
-    expect((await h.dm('channels')).body.text).toContain("préfixe");
+    const beforeUnmentioned = h.messages.length;
+    await h.dm('channels');
+    expect(h.messages).toHaveLength(beforeUnmentioned);
   } finally { await h.close(); }
 });
 
@@ -776,7 +766,9 @@ it('browses mail rules and prepares Add/Edit forms in place without changing rul
     button(edit, 'Règle par contenu');
     expect((await sql.query('SELECT definition FROM mail_guided_forms')).rows[0].definition.context.base.id).toBe('rule-6');
     button(await h.click(rules, "Ajouter une règle"), 'Règle par expéditeur');
-    expect((await h.dm('change Priority 0')).body.text).toContain("préfixe");
+    const beforeUnmentioned = h.messages.length;
+    await h.dm('change Priority 0');
+    expect(h.messages).toHaveLength(beforeUnmentioned);
     expect((await h.click(await h.dm('menu', bob), "Tri des e-mails", bob)).body.text).not.toContain('Priority');
     expect((await h.click(mail, "Dernier rapport")).body.text).toContain('Aucun traitement conservé');
     expect(buttons(mail).some((item: any) => item.text.text === "Approbations en attente")).toBe(false);

@@ -8,6 +8,7 @@ export const PRICE_CARD = { 'gpt-4.1-mini-2025-04-14': { input: 0.4, cached: 0.1
 export const costMicro = (input: number, output: number) => Math.ceil(input * 0.4 + output * 1.6);
 export class Budget {
   constructor(private sql: Sql, private limitMicro = 10_000_000, private userLimitMicro = 10_000_000, private module = 'core') {}
+  forModule(id: string) { return new Budget(this.sql, this.limitMicro, this.userLimitMicro, id); }
   async reserve(actor: Actor, amount: number, now = new Date()) {
     if (!Number.isSafeInteger(amount) || amount < 0) throw new Error('Invalid budget reservation');
     const month = now.toISOString().slice(0, 7), id = uid();
