@@ -1729,11 +1729,13 @@ it('answers only real bot mentions, keeps channel replies threaded and reuses th
   } finally { await h.app.close(); }
 });
 
-it('answers ordinary Documentation questions from current cells with sources and sends only headings and the question for interpretation', async () => {
+it('plans with headings and composes private Slack answers from only the matching facts with verified sources', async () => {
   const project = [['Projet', 'Responsable'], ['Alpha', 'Camille'], ['Beta', '']];
   const sources: Record<string, string[][]> = { projet: project, Technologies: [['Technologie']], hébergement: [['Hébergeur']], Outils: [['Outil', 'Référent'], ['Tracker', 'Alex']] };
   let q = { tab: 'projects', mode: 'values', fields: ['Responsable'], filters: [{ field: 'Projet', match: 'equals', value: 'Alpha' }] };
   let calls = 0;
+  const evidence: Array<Array<{ subject: string; field: string; value: string }>> = [];
+  let invalidCitation = false;
   vi.stubGlobal('fetch', vi.fn(async (input: string, init?: RequestInit) => {
     const url = new URL(input);
     if (url.hostname === 'oauth2.googleapis.com') return Response.json({ access_token: 'synthetic', expires_in: 3600 });
@@ -1750,6 +1752,16 @@ it('answers ordinary Documentation questions from current cells with sources and
       expect(JSON.parse(body.input).sources).toEqual(['documentation']);
       if (url.pathname.endsWith('input_tokens')) return Response.json({ input_tokens: 35 });
       return Response.json({ status: 'completed', usage: { input_tokens: 35, output_tokens: 8 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify({ source: 'documentation', answer: '' }) }] }] });
+    }
+    if (body.text.format.name === 'workbook_answer') {
+      const { facts } = JSON.parse(body.input);
+      if (url.pathname.endsWith('input_tokens')) return Response.json({ input_tokens: 90 });
+      evidence.push(facts);
+      const first = facts[0];
+      const answer = first.subject === 'Les Enfantastiques' ? 'Tu peux préparer ta séance de chant avec des versions karaoké.'
+        : first.field === 'Description' ? 'Les invités choisissent leurs photos à imprimer sur place.'
+        : first.value === '1' ? 'Un projet attend encore un responsable.' : `${first.value} pilote le projet ${first.subject}.`;
+      return Response.json({ status: 'completed', usage: { input_tokens: 90, output_tokens: 14 }, output: [{ content: [{ type: 'output_text', text: JSON.stringify({ answer, sources: [invalidCitation ? 999 : 1] }) }] }] });
     }
     expect(JSON.parse(body.input)).toMatchObject({ schema: expect.arrayContaining([{ tab: 'projects', headings: project[0] }]) });
     for (const privateValue of ['Camille', 'Marine', 'Tracker', 'Alex']) expect(body.input).not.toContain(privateValue);
@@ -1769,7 +1781,7 @@ it('answers ordinary Documentation questions from current cells with sources and
     expect(calls).toBe(0);
     const ask = () => h.dm('<@UMAYA> documentation Qui est responsable du projet Alpha ?');
     const first = await ask();
-    expect(first.body.text).toContain('Camille');
+    expect(first.body.text).toContain('Camille pilote le projet Alpha.');
     expect(first.body.blocks[0].text).toContain('https://docs.google.com/spreadsheets/d/qa-book/edit#gid=3&range=B2');
     project[0]!.splice(1, 0, 'Fonction'); project[1] = ['Alpha', 'Design', 'Marine']; project[2] = ['Beta', '', ''];
     const updated = await h.dm('<@UMAYA> Qui est responsable du projet Alpha ?');
@@ -1777,7 +1789,7 @@ it('answers ordinary Documentation questions from current cells with sources and
     expect(updated.body.blocks[0].text).toContain('https://docs.google.com/spreadsheets/d/qa-book/edit#gid=3&range=C2');
     q = { tab: 'projects', mode: 'count', fields: [], filters: [{ field: 'Responsable', match: 'empty', value: '' }] };
     const counted = await h.dm('<@UMAYA> documentation Combien de projets sans responsable ?');
-    expect(counted.body.text).toContain('1 ligne correspond');
+    expect(counted.body.text).toContain('Un projet attend encore un responsable.');
     q = { tab: 'projects', mode: 'values', fields: ['Invented'], filters: [] };
     expect((await ask()).body.text).toContain('Précisez');
     q = { ...q, fields: ['Responsable'], filters: [{ field: 'Projet', match: 'equals', value: 'Beta' }] };
@@ -1786,6 +1798,34 @@ it('answers ordinary Documentation questions from current cells with sources and
     expect(bodyText(searched)).toContain('Outils!A2');
     expect(calls).toBe(5);
     expect((await sql.query("SELECT count(*)::int AS n FROM documentation_questions WHERE status='workbook_ready' AND reservation_id IS NOT NULL")).rows[0].n).toBeGreaterThanOrEqual(5);
+    project.splice(0, project.length, ['Projet', 'Accès', 'Description'], ['PrintYourFriends', 'private-access-note', 'Pendant la fête, chacun sélectionne des photos à imprimer.'], ['EFT', 'private', 'Un projet musical.']);
+    const overview = await h.dm('<@UMAYA> Projet PrintYourFriends');
+    expect(overview.body.text).toContain('Les invités choisissent leurs photos à imprimer sur place.');
+    expect(overview.body.blocks[0].text).toContain('range=C2');
+    expect(evidence.at(-1)).toEqual([{ id: 1, subject: 'PrintYourFriends', field: 'Description', value: project[1]![2] }]);
+    q = { tab: 'projects', mode: 'overview', fields: [], filters: [{ field: 'Projet', match: 'equals', value: 'Enfantastiques' }] };
+    const miss = await h.dm('<@UMAYA> Peux-tu me décrire le projet Enfantastiques ?');
+    expect(miss.body.text).toContain('le nom ou le sigle');
+    invalidCitation = true;
+    const corrected = await h.dm('<@UMAYA> Les Enfantastiques = EFT');
+    expect(evidence.at(-1)?.[0]?.subject).toBe('EFT');
+    expect(corrected.body.text).toContain('Un projet musical.');
+    expect(corrected.body.blocks[0].text).toContain('range=C3');
+    expect(corrected.body.text).not.toContain('photos');
+    project.push(['Les Enfantastiques', '', 'Préparation de séances de chant avec des versions karaoké.']);
+    const beforeAmbiguity = evidence.length;
+    expect((await h.dm('<@UMAYA> Les Enfantastiques = EFT')).body.text).toContain('Plusieurs fiches');
+    expect(evidence).toHaveLength(beforeAmbiguity);
+    project.splice(2, 1); // The live workbook uses the full name, including its French article.
+    invalidCitation = false;
+    expect((await h.dm('<@UMAYA> Peux-tu me décrire le projet enfantastiques ?')).body.text).toContain('Tu peux préparer ta séance de chant');
+    expect(evidence.at(-1)?.[0]?.subject).toBe('Les Enfantastiques');
+    const beforeAccess = evidence.length;
+    q = { tab: 'projects', mode: 'values', fields: ['Accès'], filters: [{ field: 'Projet', match: 'equals', value: 'PrintYourFriends' }] };
+    const access = await h.dm('<@UMAYA> documentation Quels sont les accès du projet PrintYourFriends ?');
+    expect(access.body.text).toContain('private-access-note');
+    expect(evidence).toHaveLength(beforeAccess);
+    expect(JSON.stringify(evidence)).not.toContain('private-access-note');
   } finally { await h.app.close(); }
 });
 

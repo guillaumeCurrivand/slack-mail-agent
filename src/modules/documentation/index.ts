@@ -139,7 +139,8 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
     forms: forms.forms,
     ...(provider && workbook ? { async answerQuestion(actor: Actor, question: string, id: string, context: ModuleContext) {
       if (!workbook.allowed(actor)) return 'Le classeur est disponible uniquement en message privé dans son espace Slack.';
-      return workbookReply(await answerWorkbook(provider, context.sql, aiConfig, actor, question, id, context.budget));
+      const result = await answerWorkbook(provider, context.sql, aiConfig, actor, question, id, context.budget);
+      return workbookReply(result, question, aiConfig, actor, context.budget);
     } } : {}),
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
     help: workbook ? {
