@@ -5,6 +5,7 @@ export function frenchCommand(module: string, text: string): string {
     clickup: { aide: 'help', tâches: 'tasks', taches: 'tasks', statuts: 'statuses', connecter: 'connect', déconnecter: 'disconnect', deconnecter: 'disconnect' },
     yousign: { aide: 'help', canaux: 'channels', statut: 'status' },
     hyperdx: { aide: 'help', canaux: 'channels' },
+    factures: { aide: 'help' },
     development: { aide: 'help', projets: 'projects' },
     documentation: { aide: 'help', historique: 'history', archives: 'archived', archivés: 'archived' },
   };

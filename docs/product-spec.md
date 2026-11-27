@@ -8,6 +8,8 @@ Status: approved by the user after the design interview. An initial local implem
 
 The optional [HyperDX module](hyperdx.md) delivers daily service error and warning reports to an operator-authorized Slack channel using the existing bot and durable integration queue.
 
+The optional [Factures module](factures.md) pilots monthly Anthropic billing collection from a Gmail label in the existing production mailbox. It serves authorized Slack recipients in private DMs and can send a scheduled recap or archive attached PDFs in an operator-configured Drive folder. The module owns its Google authorization and delivery state.
+
 This document owns shared routing, navigation, presentation, access and spending safeguards, plus the Mail Sorter contract. Start with the [module overview](../README.md#modules-and-project-structure) for setup and usage. Module-specific guides/contracts are [Mail Sorter](mail.md), [Documentation](documentation.md), [ClickUp](clickup.md), [Yousign](yousign.md) and [Development](development.md). Their implementation status does not establish successful production deployment.
 
 ## Questions addressed to Mayassistant

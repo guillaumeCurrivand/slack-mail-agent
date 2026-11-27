@@ -15,10 +15,12 @@ import { readYousignConfig } from '../modules/yousign/config.js';
 import { createYousignModule } from '../modules/yousign/index.js';
 import { readDevelopmentConfig } from '../modules/development/config.js';
 import { createDevelopmentModule } from '../modules/development/index.js';
+import { createFacturesModule, readArchiveConfig, readFacturesConfig } from '../modules/factures/index.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const factories = {
     hyperdx: () => createHyperdxModule(readHyperdxConfig(env), config.SLACK_TEAM_ID, config.SLACK_BOT_TOKEN),
+    factures: () => createFacturesModule(readFacturesConfig(env), readArchiveConfig(env), config.SLACK_TEAM_ID),
     mail: () => createMailModule({ ...readMailConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql, config.SLACK_BOT_TOKEN),
     documentation: () => createDocumentationModule(sql, readQuestionConfig(env), config.SLACK_BOT_TOKEN, configuredWorkbook(env, config.SLACK_TEAM_ID)),
     clickup: () => createClickupModule({ ...readClickupConfig(env), PUBLIC_URL: config.PUBLIC_URL }, sql),

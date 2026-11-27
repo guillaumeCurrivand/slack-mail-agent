@@ -1,5 +1,18 @@
 # Updating production
 
+## Activation du module Factures
+
+Déployez la version qui contient le module avant d’ajouter `factures` à `ENABLED_MODULES`. Pour activer le pilote, configurez l’accès Gmail en lecture seule, le libellé et les utilisateurs autorisés dans le `.env` privé. Le [guide Factures](factures.md#configuration) décrit les variables et les contrôles de démarrage. Les tables sont créées automatiquement au démarrage. Les permissions Slack existantes couvrent les messages privés.
+
+```sh
+cd /opt/slack-mail-agent
+git pull --ff-only origin main &&
+docker compose up -d --build app &&
+curl -fsS --retry 10 --retry-all-errors http://127.0.0.1:3001/ready
+```
+
+Commencez par la [vérification en DM](factures.md#vérification-après-activation) avant d’activer le récapitulatif mensuel.
+
 ## Mention replies
 
 Use the existing message.im, message.channels and message.groups subscriptions in the [Slack manifest](../slack-manifest.json). In a channel, invite the bot and select its Slack mention from autocomplete. No new scopes, database migration or environment variables are required. General AI questions use the existing OpenAI configuration. Private Documentation answers also need the workbook setup below.
