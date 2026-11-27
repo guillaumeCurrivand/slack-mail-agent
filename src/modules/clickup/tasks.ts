@@ -1,7 +1,7 @@
 import type { Actor } from '../../core/identity.js';
 import { formatDate, formatNumber } from '../../core/presentation.js';
 import type { MenuPage } from '../../core/navigation.js';
-import type { Button } from '../../core/slack.js';
+import { WRAPPED_TABLE_LIMIT, type Button } from '../../core/slack.js';
 import { ClickupAPI, ClickupError } from './api.js';
 import type { Connection, Scan, StatusFilter, Task } from './domain.js';
 import { ClickupStore } from './store.js';
@@ -58,10 +58,11 @@ export async function retrieveTasks(store: ClickupStore, api: ClickupAPI, actor:
 export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connection, workspaceId: string, sourceId: string, requestedPage: number): Promise<MenuPage> {
   // Keep complete names and locations; use smaller pages when values are long.
   const pages: Task[][] = [[]];
-  const tableBudget = Math.max(1000, 16_000 - filterSummary(scan.filter ?? { mode: 'default' }).length);
+  const tableBudget = WRAPPED_TABLE_LIMIT - 500;
+  const rowSize = (task: Task) => task.name.length + task.url.length + task.status.length + task.priority.length + task.workspace.length + task.list.length + 80;
   let size = 0;
   for (const task of scan.tasks) {
-    const length = task.name.length + task.url.length + task.status.length + task.priority.length + task.workspace.length + task.list.length + 80;
+    const length = rowSize(task);
     if (pages.at(-1)!.length && (pages.at(-1)!.length >= 40 || size + length > tableBudget)) { pages.push([]); size = 0; }
     pages.at(-1)!.push(task); size += length;
   }
@@ -96,8 +97,8 @@ export async function taskPage(api: ClickupAPI, scan: Scan, connection: Connecti
     scan.complete && !scan.tasks.length ? 'Aucune tâche assignée correspondant à ce filtre dans Mayasquad.' : '',
     scan.notice, accessNotice,
   ].filter(Boolean).join('\n');
-  // Result paging must revisit this handler and recheck live task access, never cached display rows.
-  return { kind: 'Mes tâches ClickUp', text, bindButtons: true, buttons, tablePaging: false,
+  // Each provider page rechecks access. An oversized single task may need display continuations.
+  return { kind: 'Mes tâches ClickUp', text, bindButtons: true, buttons, tablePaging: accessible.some(task => rowSize(task) > tableBudget),
     ...(accessible.length ? { table: { columns: ['Tâche', 'Statut', 'Échéance', 'Priorité', 'Workspace', 'Liste'], rows: accessible.map(task => [
       [{ text: task.name, url: task.url }], task.status, task.due === null ? '—' : `${date(task.due)}${day(task.due) < day(Date.now()) ? ' · En retard' : ''}`, task.priority, task.workspace, task.list,
     ]) } } : {}),

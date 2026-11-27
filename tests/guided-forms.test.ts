@@ -10,7 +10,7 @@ import { dispatchJob } from '../src/core/dispatch.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { Slack } from '../src/core/slack.js';
 import { Store } from '../src/modules/mail/store.js';
-import { wideTableRows } from './slack-blocks.js';
+import { wrappedTableRows } from './slack-blocks.js';
 
 const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
@@ -194,7 +194,7 @@ it('reads the live workbook and writes a reviewed edit from a signed Slack DM to
     const prepare = async () => {
       const list = await h.dm('documentation hébergements');
       const record = await h.click(list, 'Ouvrir');
-      const fields = wideTableRows(record.blocks);
+      const fields = wrappedTableRows(record.blocks);
       expect(fields).toHaveLength(headers.length);
       for (const [i, header] of headers.entries()) {
         const row = fields[i]!;

@@ -3,28 +3,25 @@ export function tableBlocks(blocks: any[]): any[] {
     ? block.rows.flatMap((row: any) => row.items.flatMap((item: any) => tableBlocks([item.block]))) : [block]);
 }
 
-export function wideTableRows(blocks: any[]): Array<{ fields: Record<string, string>; actions: any[] }> {
-  const rows: Array<{ fields: Record<string, string>; actions: any[] }> = [];
-  for (const block of blocks) {
-    if (block.type === 'actions' && rows.length) rows.at(-1)!.actions.push(...block.elements);
-    if (block.type !== 'rich_text') continue;
-    for (const section of block.elements) {
-      const fields: Record<string, string> = {};
-      let column: string | undefined;
-      for (const part of section.elements) {
-        if (part.style?.bold && part.text.endsWith(' · ')) {
-          if (column !== undefined) fields[column] = fields[column]!.slice(0, -1);
-          column = part.text.slice(0, -3);
-          fields[column!] = '';
-        } else if (column !== undefined) fields[column] += part.text;
-      }
-      if (column !== undefined) {
-        fields[column] = fields[column]!.slice(0, -2);
-        rows.push({ fields, actions: [] });
-      }
-    }
+export function wrappedTableRows(blocks: any[]): Array<{ fields: Record<string, string>; actions: any[] }> {
+  const index = blocks.findIndex(block => block.type === 'table');
+  if (index < 0) return [];
+  const actions = new Map<string, any[]>();
+  let number: string | undefined;
+  for (const block of blocks.slice(index + 1)) {
+    if (block.type === 'context') number = /^Ligne (\d+)\b/.exec(block.elements[0]?.text)?.[1];
+    else if (block.type === 'actions' && number) actions.set(number, [...(actions.get(number) ?? []), ...block.elements]);
+    else break;
   }
-  return rows;
+  const [headings, ...rows] = blocks[index].rows;
+  return rows.map((row: any[]) => {
+    const cells = actions.size ? row.slice(0, -1) : row;
+    const fields = Object.fromEntries(cells.flatMap((cell, column) => {
+      const value = cell.type === 'rich_text' ? cell.elements.flatMap((section: any) => section.elements.map((part: any) => part.text)).join('') : cell.text;
+      return value === ' ' ? [] : [[headings[column].text, value]];
+    }));
+    return { fields, actions: actions.get(row.at(-1)?.text) ?? [] };
+  });
 }
 
 // Slack rejects data_table (and other newer blocks) in layout fallbacks.

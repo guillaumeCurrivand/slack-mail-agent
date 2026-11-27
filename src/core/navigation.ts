@@ -1,5 +1,5 @@
 import { ownerKey, uid, type Actor } from './identity.js';
-import { cellSize, mapRowActions, buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, VISIBLE_ACTION_BUTTONS, type AgentMessage, type Button, type Messenger, type MessageTable, type TableCell } from './slack.js';
+import { cellSize, mapRowActions, buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, VISIBLE_ACTION_BUTTONS, WRAPPED_TABLE_LIMIT, type AgentMessage, type Button, type Messenger, type MessageTable, type TableCell } from './slack.js';
 import type { Sql } from './store.js';
 
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
@@ -111,7 +111,7 @@ function tablePages(table: MessageTable, budget: number): MessageTable[] {
   const actionSize = headings.length * Math.max(75, table.rowButtonFallback?.length ?? 0);
   const rowBudget = budget - headerSize - actionSize;
   // Reserve ten of Slack's fifty blocks for message context and navigation.
-  const maxRows = headings.length ? Math.floor(40 / (1 + Math.ceil(headings.length / VISIBLE_ACTION_BUTTONS))) : 100;
+  const maxRows = headings.length ? Math.floor(40 / (1 + Math.ceil(headings.length / VISIBLE_ACTION_BUTTONS))) : 99;
   const createPage = (): MessageTable => ({ ...table, rows: [], ...(table.rowButtons ? { rowButtons: [] } : {}) });
   let page = createPage(), size = headerSize;
   for (const [index, row] of table.rows.entries()) {
@@ -126,7 +126,7 @@ function tablePages(table: MessageTable, budget: number): MessageTable[] {
         .map(part => context.map((field, i) => i === column ? part : field)));
     }
     for (const piece of pieces) {
-      const rowSize = piece.reduce((sum, cell) => sum + cellSize(cell), actionSize);
+      const rowSize = piece.reduce((sum, cell) => sum + Math.max(1, cellSize(cell)), actionSize);
       if (page.rows.length && (size + rowSize > budget || page.rows.length >= maxRows)) {
         pages.push(page);
         page = createPage();
@@ -144,9 +144,9 @@ function tablePages(table: MessageTable, budget: number): MessageTable[] {
 function visiblePage(message: AgentMessage, id: string, requestedControl = 0, requestedText = 0, namespace = 'core', view?: AgentMessage['tableView']): AgentMessage {
   const textPages = splitText(message.text, !message.kind);
   // Retain full rows and their bound actions in saved content; only delivery is paged.
-  const budget = 19_000 - Math.max(...textPages.map(text => text.length))
+  const budget = Math.min(WRAPPED_TABLE_LIMIT - 500, 19_000 - Math.max(...textPages.map(text => text.length))
     - (message.resourceLinks ?? []).reduce((sum, link) => sum + link.label.length + link.url.length, 0)
-    - (message.buttons ?? []).reduce((sum, button) => sum + button.label.length, 0);
+    - (message.buttons ?? []).reduce((sum, button) => sum + button.label.length, 0));
   const tables = message.table ? message.tablePaging === false ? [message.table] : tablePages(message.table, budget) : [];
   const contentPages = Math.max(textPages.length, tables.length);
   const textPage = Math.max(0, Math.min(requestedText, contentPages - 1));
@@ -156,7 +156,7 @@ function visiblePage(message: AgentMessage, id: string, requestedControl = 0, re
     : { pages: [message.buttons ?? []], pinned: [] as Button[] };
   const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
   const table = tables[textPage];
-  const tableView = view ?? 'wide';
+  const tableView = view ?? 'wrapped';
   const pageButton = (label: string, nextControl: number, nextText: number, nextView = view) => ({ label, action: `${namespace}:controls`, value: `${id}|${nextControl}|${nextText}${nextView ? `|${nextView}` : ''}`, ...(namespace === 'core' ? { scope: 'core' as const } : {}) });
   return { ...message, text: contentPages > 1 ? `Réponse — page ${textPage + 1}/${contentPages}\n${textPages[textPage] ?? ''}` : message.text,
     ...(message.table ? { table, tableView } : {}),
@@ -165,8 +165,8 @@ function visiblePage(message: AgentMessage, id: string, requestedControl = 0, re
       ...(controlPage + 1 < pages.length ? [pageButton(nextActions, controlPage + 1, textPage)] : []),
       ...(textPage ? [pageButton(tables.length > 1 ? 'Tableau précédent' : 'Précédent', controlPage, textPage - 1)] : []),
       ...(textPage + 1 < contentPages ? [pageButton(tables.length > 1 ? 'Tableau suivant' : 'Suivant', controlPage, textPage + 1)] : []),
-      ...(table ? [tableView === 'wide' ? pageButton('Vue tableau', controlPage, textPage, 'compact')
-        : pageButton('Lire en pleine largeur', controlPage, textPage, 'wide')] : [])] };
+      ...(table ? [tableView === 'wrapped' ? pageButton('Tableau compact', controlPage, textPage, 'compact')
+        : pageButton('Tableau avec retour à la ligne', controlPage, textPage, 'wrapped')] : [])] };
 }
 
 /** Recorded Agent messages can update only through owner- and message-bound controls. */
@@ -185,14 +185,14 @@ export class Navigation {
 
   async controls(actor: Actor, eventId: string, value: unknown, timestamp: unknown) {
     const bound = await this.boundTarget(actor, value, timestamp);
-    const requested = bound && /^(\d{1,4})\|(\d{1,4})(?:\|(wide|compact))?$/.exec(bound.value);
+    const requested = bound && /^(\d{1,4})\|(\d{1,4})(?:\|(wide|wrapped|compact))?$/.exec(bound.value);
     if (!bound || !requested) return;
     const saved = (await this.sql.query('SELECT content FROM core_navigation_menus WHERE id=$1 AND owner=$2 AND channel=$3 AND timestamp=$4',
       [bound.target.id, ownerKey(actor), actor.channel, bound.target.timestamp])).rows[0]?.content as AgentMessage | undefined;
     if (!saved) return;
     const [, controlPage, textPage, view] = requested;
     return this.deliver(actor, eventId, bound.target.id, saved, bound.target, false, Number(controlPage), Number(textPage),
-      view === 'wide' || view === 'compact' ? view : undefined);
+      view === 'compact' ? view : view ? 'wrapped' : undefined);
   }
 
   async show(actor: Actor, eventId: string, page: MenuPage, target = this.messenger.replyTarget?.(actor)) {

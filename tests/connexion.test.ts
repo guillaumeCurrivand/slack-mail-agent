@@ -11,7 +11,7 @@ import { Slack, type AgentMessage, type Button } from '../src/core/slack.js';
 import { coreSchema, JobStore, type Sql } from '../src/core/store.js';
 import { emptyState } from '../src/modules/mail/domain.js';
 import { mailSchema, Store } from '../src/modules/mail/store.js';
-import { wideTableRows } from './slack-blocks.js';
+import { wrappedTableRows } from './slack-blocks.js';
 
 const baseEnv = { ENABLED_MODULES: 'connexion', SLACK_TEAM_ID: 'TTEAM', SLACK_SIGNING_SECRET: 'fake',
   SLACK_BOT_TOKEN: 'fake', PUBLIC_URL: 'https://example.test', DATABASE_URL: 'unused' };
@@ -97,7 +97,11 @@ it('lists only the caller’s accounts and opens the owner module’s signed con
     ]);
     const slack = new Slack('fake', async (_url, options) => {
       const { blocks } = JSON.parse(String(options?.body));
-      const rows = wideTableRows(blocks);
+      const table = blocks.find((block: any) => block.type === 'table');
+      expect(table?.column_settings).toEqual(Array.from({ length: 5 }, () => ({ is_wrapped: true })));
+      expect(table.rows[0].map((cell: any) => cell.text)).toEqual(['Application', 'Accès', 'État enregistré', 'Compte', 'Actions']);
+      expect(table.rows.slice(1).map((row: any[]) => row[4].text)).toEqual(['1', '2', '3', '4']);
+      const rows = wrappedTableRows(blocks);
       expect(rows.map(row => row.fields.Compte)).toEqual(['alice@clickup.test', 'alice@example.test', 'alice@example.test', undefined]);
       expect(rows[3]?.fields['État enregistré']).toBe('Intégration configurée');
       expect(rows.every(row => row.actions[0]?.text.text === 'Ouvrir')).toBe(true);

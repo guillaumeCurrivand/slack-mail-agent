@@ -1,4 +1,4 @@
-import { tableBlocks, wideTableRows } from './slack-blocks.js';
+import { tableBlocks, wrappedTableRows } from './slack-blocks.js';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
@@ -99,7 +99,7 @@ async function harness() {
   const buttons = (post: (typeof posts)[number]) => [
     ...tableBlocks(post.blocks).flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements
       : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => named(cell.element, row[0].text))) : []),
-    ...wideTableRows(post.blocks).flatMap(row => row.actions.map(action => named(action, row.fields.Canal!))),
+    ...wrappedTableRows(post.blocks).flatMap(row => row.actions.map(action => named(action, row.fields.Canal!))),
   ];
   const click = async (post: (typeof posts)[number], label: string, actor = alice, timestamp = post.ts) => {
     let current = post;
@@ -167,7 +167,7 @@ it('shares selections through signed private routing while hiding private destin
 
 it('renders a channel list with signed checkbox-style controls that update and persist in place', async () => {
   const h = await harness(), list = await h.text('yousign canaux');
-  const rows = wideTableRows(list.blocks);
+  const rows = wrappedTableRows(list.blocks);
   expect(rows.map(row => row.fields)).toEqual([
     { Canal: '#legal', Visibilité: 'Privé', Notifications: 'Désactivées' },
     { Canal: '#sales', Visibilité: 'Public', Notifications: 'Désactivées' },
@@ -181,16 +181,16 @@ it('renders a channel list with signed checkbox-style controls that update and p
   expect((await h.sql.query('SELECT * FROM yousign_destinations')).rows).toHaveLength(0);
   const activated = await h.click(list, 'Activer #legal');
   expect(activated.ts).toBe(list.ts);
-  const activeRow = wideTableRows(activated.blocks)[0]!;
+  const activeRow = wrappedTableRows(activated.blocks)[0]!;
   expect(activeRow.fields.Notifications).toBe('Activées');
   expect(activeRow.actions[0].text.text).toBe('☑ Retirer');
   expect(activeRow.actions[0].style).toBe('danger');
   expect(activeRow.actions[0].action_id).toMatch(/^yousign:channel_remove~button-\d+$/);
   const reopened = await h.text('yousign channels');
-  expect(wideTableRows(reopened.blocks)[0]?.fields.Notifications).toBe('Activées');
+  expect(wrappedTableRows(reopened.blocks)[0]?.fields.Notifications).toBe('Activées');
   const removed = await h.click(reopened, 'Retirer #legal');
   expect(removed.ts).toBe(reopened.ts);
-  expect(wideTableRows(removed.blocks)[0]?.actions[0].text.text).toBe('☐ Activer');
+  expect(wrappedTableRows(removed.blocks)[0]?.actions[0].text.text).toBe('☐ Activer');
 });
 
 it('opens the same channel table from menu navigation and typed commands', async () => {
@@ -198,12 +198,12 @@ it('opens the same channel table from menu navigation and typed commands', async
   const main = await h.click(await h.text('menu'), 'Yousign');
   const page = await h.click(main, 'Choisir les canaux');
   expect(page.ts).toBe(main.ts);
-  const menuRows = wideTableRows(page.blocks);
-  expect(menuRows.map(row => row.fields)).toEqual(wideTableRows(typed.blocks).map(row => row.fields));
+  const menuRows = wrappedTableRows(page.blocks);
+  expect(menuRows.map(row => row.fields)).toEqual(wrappedTableRows(typed.blocks).map(row => row.fields));
   expect(menuRows[0]?.actions[0].action_id).toMatch(/^yousign:channel_add~button-\d+$/);
   const selected = await h.click(page, 'Activer #legal');
   expect(selected.ts).toBe(page.ts);
-  expect(wideTableRows(selected.blocks)[0]?.fields.Notifications).toBe('Activées');
+  expect(wrappedTableRows(selected.blocks)[0]?.fields.Notifications).toBe('Activées');
 });
 
 it('retains inaccessible selections and hides their rows when current access is lost', async () => {
@@ -218,19 +218,19 @@ it('retains inaccessible selections and hides their rows when current access is 
 it('shows recovery navigation without an empty table when no channels can be displayed', async () => {
   const h = await harness(); h.aliceChannels.length = 0;
   const empty = await h.text('yousign canaux');
-  expect(wideTableRows(empty.blocks)).toHaveLength(0);
+  expect(wrappedTableRows(empty.blocks)).toHaveLength(0);
   expect(empty.text).toContain('Aucun canal partagé');
   expect(h.buttons(empty).map(button => button.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour à Yousign', 'Menu']);
   h.setDirectoryFailure(true);
   const unavailable = await h.text('yousign canaux');
-  expect(wideTableRows(unavailable.blocks)).toHaveLength(0);
+  expect(wrappedTableRows(unavailable.blocks)).toHaveLength(0);
   expect(unavailable.text).toContain('ne peut pas être vérifié');
   expect(h.buttons(unavailable).map(button => button.text.text.replace(/^(?:🧭|\?) /, ''))).toEqual(['Retour à Yousign', 'Menu']);
 });
 
 it('keeps previously posted unsuffixed channel controls compatible', async () => {
   const h = await harness(), list = await h.text('yousign canaux');
-  const row = wideTableRows(list.blocks).find(row => row.fields.Canal === '#sales');
+  const row = wrappedTableRows(list.blocks).find(row => row.fields.Canal === '#sales');
   const legacy = { ...list, blocks: [{ type: 'actions', elements: [{ ...row!.actions[0], action_id: 'yousign:channel_add', text: { type: 'plain_text', text: 'Activer #sales' } }] }] };
   await h.click(legacy, 'Activer #sales');
   expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'CPUBLIC' }]);
@@ -313,7 +313,7 @@ it('does not repeat uncertain effects and requires exact actor/DM-bound confirma
   expect(attention.ts).toBe(status.ts);
   expect(JSON.stringify(attention.blocks)).toContain('signer.done');
   expect(JSON.stringify(attention.blocks)).not.toContain('signature_request.done');
-  expect(wideTableRows(attention.blocks)).toHaveLength(1);
+  expect(wrappedTableRows(attention.blocks)).toHaveLength(1);
   const proposal = await h.click(attention, 'Examiner #sales');
   expect(proposal.ts).toBe(status.ts);
   expect(proposal.text).toContain('Contrat'); expect(proposal.text).toContain('doublon');
@@ -411,17 +411,17 @@ it('paginates the shared selector and accepts eligible externally shared channel
   const h = await harness();
   for (let index = 0; index < 12; index++) h.aliceChannels.push({ id: `CEXTERNAL${index}`, name: `external-${String(index).padStart(2, '0')}`, is_channel: true, is_ext_shared: true });
   const first = await h.text('yousign channels'); expect(first.text).toContain('page 1/2');
-  const firstRows = wideTableRows(first.blocks);
+  const firstRows = wrappedTableRows(first.blocks);
   expect(firstRows).toHaveLength(10);
   expect(firstRows.every(row => row.actions[0]?.type === 'button')).toBe(true);
   expect(new Set(firstRows.map(row => row.actions[0].action_id)).size).toBe(10);
   expect(h.buttons(first).some(button => /Actions/.test(button.text.text))).toBe(false);
   const second = await h.click(first, 'Suivant'); expect(second.ts).toBe(first.ts); expect(second.text).toContain('page 2/2');
-  expect(wideTableRows(second.blocks).map(row => row.fields.Canal)).toEqual(['#external-10', '#external-11', '#legal', '#sales']);
+  expect(wrappedTableRows(second.blocks).map(row => row.fields.Canal)).toEqual(['#external-10', '#external-11', '#legal', '#sales']);
   expect(h.buttons(second).some(button => /Actions/.test(button.text.text))).toBe(false);
   const selected = await h.click(second, 'Activer #external-10');
   expect(selected.ts).toBe(first.ts);
-  expect(wideTableRows(selected.blocks)[0]?.fields.Notifications).toBe('Activées');
+  expect(wrappedTableRows(selected.blocks)[0]?.fields.Notifications).toBe('Activées');
   expect((await h.sql.query('SELECT channel_id FROM yousign_destinations WHERE active')).rows).toEqual([{ channel_id: 'CEXTERNAL10' }]);
   const previous = await h.click(selected, 'Précédent');
   expect(previous.ts).toBe(first.ts); expect(previous.text).toContain('page 1/2');

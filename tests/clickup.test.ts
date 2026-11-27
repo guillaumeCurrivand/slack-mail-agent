@@ -1,4 +1,4 @@
-import { wideTableRows } from './slack-blocks.js';
+import { wrappedTableRows } from './slack-blocks.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -171,7 +171,7 @@ it('shows every status toggle in a table without paging the action buttons', asy
   expect(first.table?.columns).toEqual(['Statut', 'Inclus', 'Disponibilité']);
   expect(first.table?.rows).toHaveLength(4);
   expect(first.table?.rowButtons).toHaveLength(4);
-  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu', 'Vue tableau']);
+  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu', 'Tableau compact']);
   const choice = first.table!.rowButtons![0]!;
   expect(choice.label).toBe('☐ Ajouter');
   expect(choice.action).toBe('clickup:status_add');
@@ -583,7 +583,7 @@ it('keeps more than 100 status choices reachable and preserves a saved filter af
   const seen = new Set<string>();
   const checkPage = () => {
     const picker = h.messages.at(-1)!;
-    expect(picker.buttons?.filter(button => button.action === 'core:controls').map(button => button.label)).toEqual(['Vue tableau']);
+    expect(picker.buttons?.filter(button => button.action === 'core:controls').map(button => button.label)).toEqual(['Tableau compact']);
     expect(picker.table!.rows).toHaveLength(10);
     expect(picker.table!.rowButtons!.every(button => button?.label === '☑ Retirer')).toBe(true);
     for (const row of picker.table!.rows) seen.add(cellText(row[0]!));
@@ -668,7 +668,7 @@ it('routes signed French status commands and editor controls through Slack ingre
     await h.run(job, job.actor, job.id); const picker = h.messages.at(-1)!;
     const rendered: any[] = [];
     await new Slack('unused', (async (_input, options) => { rendered.push(JSON.parse(String(options?.body))); return Response.json({ ok: true }); }) as typeof fetch).send(alice, picker);
-    const rows = wideTableRows(rendered[0].blocks);
+    const rows = wrappedTableRows(rendered[0].blocks);
     const closed = rows.find(row => row.fields.Statut === 'Closed');
     expect(Object.keys(closed!.fields)).toEqual(['Statut', 'Inclus', 'Disponibilité']);
     expect(rows.every(row => row.actions[0]?.type === 'button')).toBe(true);
@@ -835,17 +835,18 @@ it('admits signed French commands and Refresh into one operation slot and hides 
   await app.close(); await off.close();
 });
 
-it('renders full-width results with literal values and ClickUp links', async () => {
+it('renders wrapped tables with literal values and ClickUp links', async () => {
   const p = provider([[task('one', { name: '<@UOTHER> **literal**' })]]), h = await connected(p);
   await h.text('clickup tasks'); const result = h.messages.at(-1)!;
   const sent: any[] = [];
   const slack = new Slack('fake', (async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) as typeof fetch);
   await slack.send(alice, result);
-  const rows = wideTableRows(sent[0].blocks);
+  const rows = wrappedTableRows(sent[0].blocks);
   expect(rows).toHaveLength(1);
   expect(rows[0]?.fields.Tâche).toBe('<@UOTHER> **literal**');
-  expect(sent[0].blocks.filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements)
-    .flatMap((section: any) => section.elements)).toContainEqual({ type: 'link', text: '<@UOTHER> **literal**', url: 'https://app.clickup.com/t/one' });
+  const table = sent[0].blocks.find((block: any) => block.type === 'table');
+  expect(table.column_settings.every((column: any) => column.is_wrapped)).toBe(true);
+  expect(table.rows[1][0].elements[0].elements).toContainEqual({ type: 'link', text: '<@UOTHER> **literal**', url: 'https://app.clickup.com/t/one' });
 });
 
 it('recovers a confirmed connection after definite delivery rejection without repeating its effect', async () => {

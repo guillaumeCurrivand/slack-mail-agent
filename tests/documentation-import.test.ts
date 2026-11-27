@@ -12,7 +12,7 @@ import { ModuleRegistry } from '../src/core/modules.js';
 import { dispatchJob } from '../src/core/dispatch.js';
 import { createDocumentationModule } from '../src/modules/documentation/index.js';
 import { runImportCommand } from '../src/modules/documentation/import-cli.js';
-import { cellText, type AgentMessage, type Messenger } from '../src/core/slack.js';
+import { cellText, type AgentMessage, type Button, type Messenger } from '../src/core/slack.js';
 import { importSnapshot, importConfig, resolvedImportReview } from './fixtures/documentation-import-review.js';
 
 const snapshot = JSON.stringify({ version: 1, source: 'Synthetic workbook', sheets: [
@@ -45,11 +45,14 @@ beforeEach(async () => {
 afterEach(() => vi.unstubAllGlobals());
 afterAll(async () => db.close());
 
-async function slackRead(command: string, team = 'TTEAM') {
+async function slackRead(command: string | Button, team = 'TTEAM') {
   const modules = new ModuleRegistry([createDocumentationModule(sql)]), messages: AgentMessage[] = [];
   const messenger: Messenger = { async send(_actor, message) { messages.push(message); }, async post(_actor, message) { messages.push(message); return `1.${messages.length}`; }, async update(_actor, _ts, message) { messages.push(message); } };
+  const route = typeof command === 'string' ? modules.text(command) : modules.action(command.action, command.value);
+  expect(route).toBeDefined();
+  const payload = typeof command === 'string' ? route!.payload : { ...route!.payload, timestamp: '1.1' };
   await dispatchJob(sql, { AI_MONTHLY_LIMIT_USD: 0, AI_USER_MONTHLY_LIMIT_USD: 0, AI_ALERT_USD: 8, SLACK_ADMIN_USER_ID: '' }, modules, messenger,
-    { ...modules.text(command), actor: { team, user: 'UALICE', channel: 'DALICE' }, id: randomUUID() });
+    { ...route!, payload, actor: { team, user: 'UALICE', channel: 'DALICE' }, id: randomUUID() });
   const message = messages.at(-1)!;
   const bound = [...(message.buttons ?? []), ...(message.table?.rowButtons ?? []).flat()].flatMap(button => button ? [button.value.split('|')[0]!] : []).find(value => /^[0-9a-f-]{36}$/.test(value));
   const saved = bound ? (await sql.query('SELECT content FROM core_navigation_menus WHERE id=$1', [bound])).rows[0]?.content as AgentMessage | undefined : undefined;
@@ -90,7 +93,8 @@ it('imports and reconciles a single Component with 26 reviewed Technologies with
   expect(await importer.apply(expandedSnapshot, review, approval)).toMatchObject({ authoritative: true, reconciled: true, expected: 32, applied: 32, initialHistory: 32, relationships: 30,
     counts: { project: 1, technology: 26, host: 2, component: 1, hosting: 1, tool: 1 }, problems: [] });
   const detail = await slackRead('documentation component Web');
-  const technologies = linkedTechnologies(detail);
+  const next = await slackRead(detail.buttons!.find(button => button.label === 'Valeurs suivantes')!);
+  const technologies = [detail, next].flatMap(linkedTechnologies);
   expect(new Set(technologies).size).toBe(26);
   expect(technologies).toContain('Extra technology 24');
   expect(await importer.apply(expandedSnapshot, review, approval)).toMatchObject({ applied: 32, initialHistory: 32, relationships: 30 });

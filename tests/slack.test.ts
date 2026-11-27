@@ -1,4 +1,4 @@
-import { tableBlocks, validLayoutFallbacks, wideTableRows } from './slack-blocks.js';
+import { tableBlocks, validLayoutFallbacks, wrappedTableRows } from './slack-blocks.js';
 import { expect, it } from 'vitest';
 import { Slack, type AgentMessage } from '../src/core/slack.js';
 
@@ -38,7 +38,7 @@ it('keeps data tables outside containers, links displayed web destinations and r
   expect(tableBlocks(body.blocks)[1].rows[1][1].elements[0].elements).toEqual([{ type: 'link', text: 'Documentation', url: 'https://example.com/docs' }, { type: 'text', text: 'Unsafe' }, { type: 'text', text: 'Credentials' }]);
   const sent: unknown[] = [];
   const slack = new Slack('token', (async () => { sent.push(true); return Response.json({ ok: true }); }) as typeof fetch);
-  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ["Nom"], rows: [['x'.repeat(20_000)]] } })).rejects.toThrow('exceeds Slack limits');
+  await expect(slack.send(actor, { kind: 'Inventory', text: '', table: { columns: ["Nom"], rows: [['x'.repeat(10_000)]] } })).rejects.toThrow('exceeds Slack limits');
   expect(sent).toHaveLength(0);
 });
 
@@ -67,9 +67,9 @@ it('keeps both decisions beside one literal mail subject and leaves completed ro
       { label: 'Laisser', action: 'mail:skip_item', value: 'proposal-1' },
     ], null],
   } });
-  const rows = wideTableRows(body.blocks);
+  const rows = wrappedTableRows(body.blocks);
   expect(rows.map(row => row.fields.Objet)).toEqual([subject, 'Terminé']);
-  expect(body.blocks[1].elements[0].elements).toContainEqual({ type: 'text', text: subject });
+  expect(body.blocks[1].rows[1][0]).toEqual({ type: 'raw_text', text: subject });
   expect(rows[0]!.actions.map(action => [action.action_id, action.value])).toEqual([
     ['mail:accept_item~button-0', 'proposal-1'], ['mail:skip_item~button-1', 'proposal-1'],
   ]);
@@ -196,7 +196,7 @@ it('marks structural navigation without marking page choices or changing action 
   const table = await post({ kind: 'Inventaire', text: 'Fiches', table: {
     columns: ['Nom'], rows: [['Alpha']], rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|alpha' }],
   } });
-  expect(wideTableRows(table.blocks)[0]?.actions[0].text.text).toBe('Ouvrir');
+  expect(wrappedTableRows(table.blocks)[0]?.actions[0].text.text).toBe('Ouvrir');
 });
 
 it.each(['Connexion', 'Connect'])('makes all displayed %s URLs clickable', async kind => {

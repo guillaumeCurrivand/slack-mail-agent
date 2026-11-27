@@ -8,7 +8,8 @@ export const mapRowActions = (row: RowActions, map: (button: Button) => Button):
   Array.isArray(row) ? row.map(map) : row && map(row);
 export type MessageTable = { columns: string[]; rows: TableCell[][]; literalText?: boolean; rowButtons?: RowActions[]; rowButtonColumn?: string | string[]; rowButtonFallback?: string };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; tableView?: 'wide' | 'compact'; selects?: MessageSelect[] };
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; tableView?: 'wrapped' | 'compact'; selects?: MessageSelect[] };
+export const WRAPPED_TABLE_LIMIT = 10_000;
 export const validResourceUrl = (value: string) => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>\\]/.test(value); }
   catch { return false; }
@@ -223,8 +224,10 @@ export class Slack implements Messenger {
     }
     if (message.table) {
       const table = message.table;
+      const wrapped = message.tableView !== 'compact';
       const headings = table.rowButtons ? [table.rowButtonColumn ?? 'Actions'].flat() : [];
       const controlsByRow = table.rowButtons?.map(row => row ? [row].flat() : []);
+      const hasRowActions = controlsByRow?.some(row => row.length);
       if (!table.columns.length || table.columns.length + headings.length > 20 || table.rows.length < 1 || table.rows.length > 200 || table.rows.some(row => row.length !== table.columns.length) || (controlsByRow && (controlsByRow.length !== table.rows.length || !headings.length || controlsByRow.some(row => row.length > headings.length))))
         throw new SlackDeliveryRejected('Invalid message table.');
       const rows: TableCell[][] = [table.columns, ...table.rows];
@@ -232,11 +235,14 @@ export class Slack implements Messenger {
       const rowButtonFallback = table.rowButtonFallback ?? 'Rechercher la fiche dans le DM';
       const actionSize = headings.join('').length + (controlsByRow ?? []).reduce((sum, row) => sum +
         row.reduce((n, button) => n + Math.max(buttonDisplayLabel(button).slice(0, 75).length, rowButtonFallback.length), headings.length - row.length), 0);
-      const size = rows.flat().reduce((sum, cell) => sum + cellSize(cell), 0)
-        + actionSize;
+      const cellContentSize = rows.flat().reduce((sum, cell) => sum + Math.max(1, cellSize(cell)), 0);
+      const referenceHeading = headings.length === 1 ? headings[0]! : 'Actions';
+      const referenceSize = hasRowActions ? referenceHeading.length + table.rows.reduce((sum, _, i) => sum + String(i + 1).length, 0) : 0;
+      const size = cellContentSize + (wrapped ? referenceSize : actionSize);
       const totalSize = size + text.length + (message.resourceLinks?.reduce((sum, link) => sum + link.label.length + link.url.length, 0) ?? 0)
         + buttons.reduce((sum, button) => sum + button.label.length, 0);
-      if (totalSize > 20_000) throw new SlackDeliveryRejected('Message table exceeds Slack limits.');
+      if (totalSize > 20_000 || (wrapped && (rows.length > 100 || size > WRAPPED_TABLE_LIMIT)))
+        throw new SlackDeliveryRejected('Message table exceeds Slack limits.');
       // Native tables are top-level blocks, between the kind header and controls.
       const selectors = cardBlocks.filter(block => block.type === 'actions' && block.elements.some((element: any) => element.type === 'static_select'));
       const controls = [...selectors, ...cardBlocks.filter(block => ['actions', 'divider'].includes(block.type) && !selectors.includes(block))];
@@ -259,26 +265,23 @@ export class Slack implements Messenger {
           ...(button.style ? { style: button.style } : {}),
         };
       };
-      if (message.tableView !== 'compact') {
-        const elements: Array<{ type: 'rich_text_section'; elements: RichTextPart[] }> = [];
-        const flushRows = () => {
-          if (elements.length) blocks.push({ type: 'rich_text', elements: elements.splice(0) });
-        };
-        for (const [index, row] of table.rows.entries()) {
-          const fields = row.flatMap<RichTextPart>((cell, column) => cellText(cell) ? [
-            { type: 'text', text: `${table.columns[column]} · `, style: { bold: true } },
-            ...cellParts(cell), { type: 'text', text: '\n' },
-          ] : []);
-          elements.push({ type: 'rich_text_section', elements: [...fields, { type: 'text', text: fields.length ? '\n' : '—\n\n' }] });
-          const actions = controlsByRow?.[index]?.map((button, column) => rowButton(button, index, column)) ?? [];
-          if (actions.length) {
-            flushRows();
-            for (let start = 0; start < actions.length; start += VISIBLE_ACTION_BUTTONS) {
-              blocks.push({ type: 'actions', elements: actions.slice(start, start + VISIBLE_ACTION_BUTTONS) });
-            }
+      if (wrapped) {
+        const columns = hasRowActions ? [...table.columns, referenceHeading] : table.columns;
+        const rawCell = (text: string) => ({ type: 'raw_text', text: text || ' ' });
+        blocks.push({ type: 'table', column_settings: columns.map(() => ({ is_wrapped: true })), rows: [columns.map(rawCell),
+          ...table.rows.map((row, i) => [...row.map(cellBlock),
+            ...(hasRowActions ? [rawCell(controlsByRow?.[i]?.length ? String(i + 1) : '—')] : [])]),
+        ] });
+        for (const [index, row] of (controlsByRow ?? []).entries()) {
+          if (!row.length) continue;
+          const label = cellText(table.rows[index]![0]!).split(/\r?\n/, 1)[0]!.trim().slice(0, 120);
+          const reference = `Ligne ${index + 1}`;
+          blocks.push({ type: 'context', elements: [{ type: 'plain_text', text: label && label !== String(index + 1) ? `${reference} · ${label}` : reference }] });
+          const actions = row.map((button, column) => rowButton(button, index, column));
+          for (let start = 0; start < actions.length; start += VISIBLE_ACTION_BUTTONS) {
+            blocks.push({ type: 'actions', elements: actions.slice(start, start + VISIBLE_ACTION_BUTTONS) });
           }
         }
-        flushRows();
       } else {
         const dataRows = table.rows.map((row, index) => {
           const cells = row.map(cellBlock);

@@ -1,6 +1,6 @@
 import type { Actor } from '../../core/identity.js';
 import type { MenuPage } from '../../core/navigation.js';
-import { cellSize, cellText, escapeCardValue, validResourceUrl, type MessageTable, type TableCell } from '../../core/slack.js';
+import { cellSize, cellText, escapeCardValue, validResourceUrl, WRAPPED_TABLE_LIMIT, type MessageTable, type TableCell } from '../../core/slack.js';
 import { recordTitle, type InventoryValues, type RecordKind } from './domain.js';
 import type { Confirmation, DocumentationStore } from './store.js';
 import { formatNumber } from '../../core/presentation.js';
@@ -142,6 +142,10 @@ export function valuePages(content: MenuPage): MenuPage[] {
     else textPages[textPages.length - 1] += `${textPages.at(-1) ? '\n' : ''}${line}`;
   }
   if (!content.table) return textPages.map(text => ({ ...content, text }));
+  const actionHeadings = content.table.rowButtons ? [content.table.rowButtonColumn ?? 'Actions'].flat().length
+    : Number(content.recordChoices?.length === content.table.rows.length);
+  const actionSize = actionHeadings * Math.max(75, content.table.rowButtonFallback?.length ?? 0);
+  const rowLimit = actionHeadings ? 20 : 99;
   const tables: MessageTable[] = [{ columns: content.table.columns, rows: [] }];
   const sources: number[][] = [[]];
   for (const [source, row] of content.table.rows.entries()) {
@@ -160,7 +164,9 @@ export function valuePages(content: MenuPage): MenuPage[] {
     const count = Math.max(...chunks.map(parts => parts.length));
     for (let i = 0; i < count; i++) {
       const piece = chunks.map((parts, index) => parts[i] ?? (index === 0 ? `${cellText(row[0]!)} (suite)` : ''));
-      if (tables.at(-1)!.rows.length >= 100 || tableSize({ ...tables.at(-1)!, rows: [...tables.at(-1)!.rows, piece] }) > 17_000) {
+      const page = tables.at(-1)!;
+      if (page.rows.length && (page.rows.length >= rowLimit || tableSize({ ...page, rows: [...page.rows, piece] })
+        + (page.rows.length + 1) * actionSize > WRAPPED_TABLE_LIMIT - 1000)) {
         tables.push({ columns: content.table.columns, rows: [] });
         sources.push([]);
       }

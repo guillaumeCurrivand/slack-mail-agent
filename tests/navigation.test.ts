@@ -1,4 +1,4 @@
-import { tableBlocks, validLayoutFallbacks, wideTableRows } from './slack-blocks.js';
+import { tableBlocks, validLayoutFallbacks, wrappedTableRows } from './slack-blocks.js';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -281,18 +281,18 @@ it('namespaces and binds module-menu table actions through signed dispatch', asy
   try {
     const menu = await h.dm('menu'), page = await h.click(menu, 'Table fixture');
     const before = h.messages.length;
-    await h.click(page, 'Vue tableau', bob);
+    await h.click(page, 'Tableau compact', bob);
     expect(h.messages).toHaveLength(before);
-    const [row] = wideTableRows(page.body.blocks);
+    const [row] = wrappedTableRows(page.body.blocks);
     expect(row!.fields).toEqual({ Nom: 'Active' });
     const control = row!.actions[0];
     expect(control.action_id).toMatch(/^table_fixture:toggle~button-\d+$/);
-    const compact = await h.click(page, 'Vue tableau');
+    const compact = await h.click(page, 'Tableau compact');
     expect(compact.ts).toBe(page.ts);
     expect(tableBlocks(compact.body.blocks).find((block: any) => block.type === 'data_table').rows[1][1].element.value).toBe(control.value);
-    const expanded = await h.click(compact, 'Lire en pleine largeur');
+    const expanded = await h.click(compact, 'Tableau avec retour à la ligne');
     expect(expanded.ts).toBe(page.ts);
-    expect(wideTableRows(expanded.body.blocks)).toEqual([row]);
+    expect(wrappedTableRows(expanded.body.blocks)).toEqual([row]);
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: page.ts },
       actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }],
     }) }).toString();
@@ -317,13 +317,16 @@ it('pages oversized tables in place without truncating values or losing row acti
   try {
     const first = await h.click(await h.dm('menu'), 'Grande liste');
     const second = await h.click(first, 'Tableau suivant');
-    expect(second.ts).toBe(first.ts);
-    const rows = [first, second].flatMap(page => wideTableRows(page.body.blocks));
+    const third = await h.click(second, 'Tableau suivant');
+    const last = await h.click(third, 'Tableau suivant');
+    const pages = [first, second, third, last];
+    expect(pages.every(page => page.ts === first.ts)).toBe(true);
+    const rows = pages.flatMap(page => wrappedTableRows(page.body.blocks));
     expect(rows.map(row => row.fields.Valeur)).toEqual(Array.from({ length: 8 }, (_, i) => String(i).repeat(4000)));
     expect(rows.map(row => row.actions[0].value.split('|').at(-1))).toEqual(Array.from({ length: 8 }, (_, i) => String(i)));
     expect(findButton(await h.click(second, 'Tableau précédent'), 'Voir 0')).toBeTruthy();
-    await h.click(second, 'Voir 7', bob); expect(opened).toEqual([]);
-    await h.click(second, 'Voir 7'); expect(opened).toEqual(['7']);
+    await h.click(last, 'Voir 7', bob); expect(opened).toEqual([]);
+    await h.click(last, 'Voir 7'); expect(opened).toEqual(['7']);
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
 });
@@ -645,7 +648,7 @@ it('connects through the existing invitation and confirms disconnect without era
     expect((await h.click(proposal, "Déconnecter Gmail")).body.text).toContain('n’est plus valide');
     const listedRules = (await h.dm("courrier règles")).body;
     expect(listedRules.text).toContain('Urgent');
-    expect(wideTableRows(listedRules.blocks)[0]?.actions[0].text.text).toBe('Ouvrir');
+    expect(wrappedTableRows(listedRules.blocks)[0]?.actions[0].text.text).toBe('Ouvrir');
     expect((await h.dm("courrier rapport")).body.text).toContain('annulé');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
@@ -766,7 +769,7 @@ it('browses mail rules and prepares Add/Edit forms in place without changing rul
     expect(rules.method).toBe('chat.update');
     expect(rules.body.text).toContain('Priority 0');
     expect(rules.body.text).not.toContain('Priority 6');
-    expect(wideTableRows(rules.body.blocks)).toHaveLength(6);
+    expect(wrappedTableRows(rules.body.blocks)).toHaveLength(6);
     const next = await h.click(rules, "Suivant");
     expect(next.ts).toBe(rules.ts);
     expect(next.body.text).toContain('Priority 6');
@@ -949,8 +952,8 @@ it('bounds long rule summaries while retaining every page and action', async () 
   try {
     let page = await h.click(await h.click(await h.dm('menu'), "Tri des e-mails"), "Gérer les règles");
     for (let n = 0; n < 7; n++) {
-      expect(wideTableRows(page.body.blocks).length).toBeLessThanOrEqual(6);
-      const text = renderedText(page);
+      expect(wrappedTableRows(page.body.blocks).length).toBeLessThanOrEqual(6);
+      const text = [renderedText(page), ...wrappedTableRows(page.body.blocks).flatMap(row => Object.values(row.fields))].join('\n');
       expect(text.length).toBeLessThan(20_000);
       expect(text).toContain(`Long rule ${n * 6}`);
       expect(text).not.toContain("…");

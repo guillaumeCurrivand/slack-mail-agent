@@ -1,4 +1,4 @@
-import { tableBlocks, wideTableRows } from './slack-blocks.js';
+import { tableBlocks, wrappedTableRows } from './slack-blocks.js';
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -42,7 +42,7 @@ function findButton(message: Posted, label: string) {
 function button(message: Posted, label: string) { const found = findButton(message, label); expect(found, `${label}; available: ${buttons(message).map(item => item.text.text).join(', ')}`).toBeTruthy(); return found; }
 function cellValue(cell: any): string { return typeof cell === 'string' ? cell : Array.isArray(cell) ? cell.map(part => part.text).join('') : cell.type === 'rich_text' ? cell.elements.flatMap((section: any) => section.elements.map((part: any) => part.text)).join('') : cell.type === 'action_cell' ? cell.fallback.text : cell.text; }
 function bodyText(message: Posted): string {
-  const text = parts(message).filter(block => block.type === 'rich_text' && !wideTableRows([block]).length)
+  const text = parts(message).filter(block => block.type === 'rich_text')
     .map(block => block.elements.flatMap((section: any) => section.elements.map((part: any) => part.text)).join('\n'));
   const rows = tableRows(message).map(row => row.Champ !== undefined && (row.Avant !== undefined || row.Après !== undefined)
     ? `${row.Champ}: ${row.Après ?? ''}\n${row.Champ} (before): ${row.Avant ?? ''}` : Object.values(row).join(': '));
@@ -55,9 +55,9 @@ function visibleLinks(message: Posted): string[] {
   tableBlocks(message.body.blocks).forEach(visit); return urls;
 }
 function tableRows(message: Posted): Record<string, string>[] {
-  const table = parts(message).find(block => ['table', 'data_table'].includes(block.type));
+  const table = parts(message).find(block => block.type === 'data_table');
   return table ? table.rows.slice(1).map((row: any[]) => Object.fromEntries(row.filter(cell => cell.type !== 'action_cell').map((cell, index) => [cellValue(table.rows[0][index]), cellValue(cell)])))
-    : wideTableRows(message.body.blocks).map(row => row.fields);
+    : wrappedTableRows(message.body.blocks).map(row => row.fields);
 }
 async function recordId(message: Posted): Promise<string> {
   const control = buttons(message).find(item => /:confirm_|:open_confirmation_record$/.test(logicalAction(item.action_id) ?? ''));
@@ -200,7 +200,7 @@ it('renders native top-level tables with private row buttons, clickable saved li
     expect(visibleLinks(proposal)).toEqual(['https://example.com/alpha?branch=main', 'http://docs.example.com/alpha']);
     await h.click(proposal, "Confirmer la création");
     const expanded = await h.dm('documentation projects');
-    const list = await h.click(expanded, 'Vue tableau');
+    const list = await h.click(expanded, 'Tableau compact');
     const table = tableBlocks(list.body.blocks).find((block: any) => block.type === 'data_table');
     expect(table.rows[0].map(cellValue)).toEqual(["Nom", "Description", "Liens", "Actions"]);
     expect(table.rows).toHaveLength(2);
@@ -258,7 +258,9 @@ it('preserves all long relationship comparison values across pages within Slack 
     const urls = Array.from({ length: 12 }, (_, i) => `https://example.com/${'a'.repeat(375)}${String(i).padStart(2, '0')}`);
     const creation = await h.dm(`documentation create project ${JSON.stringify({ name: 'Link review', repositories: urls.slice(0, 6), documentationLinks: urls.slice(6) })}`);
     expect(bodyText(creation)).toContain('Link review');
-    expect(visibleLinks(creation)).toEqual(urls);
+    const continuation = await h.click(creation, 'Tableau suivant');
+    expect(continuation.ts).toBe(creation.ts);
+    expect([...visibleLinks(creation), ...visibleLinks(continuation)]).toEqual(urls);
     expect((await sql.query('SELECT applied_at FROM documentation_confirmations WHERE id=$1', [button(creation, "Confirmer la création").value])).rows[0].applied_at).toBeNull();
     const parent = await recordId(await h.click(await h.dm("documentation créer projet {\"name\":\"Large stack\"}"), "Confirmer la création"));
     const technologies = Array.from({ length: 50 }, (_, i) => ({ id: randomUUID(), name: `Technology ${String(i).padStart(2, '0')} ${'x'.repeat(175)}` }));
@@ -274,7 +276,7 @@ it('preserves all long relationship comparison values across pages within Slack 
       const rows = tableRows(page);
       expect(rows.length).toBeGreaterThan(0);
       expect(JSON.stringify(rows)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-      expect(rows.flatMap(row => Object.values(row)).reduce((sum, cell) => sum + cell.length, 0)).toBeLessThanOrEqual(20_000);
+      expect(rows.flatMap(row => Object.values(row)).reduce((sum, cell) => sum + cell.length, 0)).toBeLessThanOrEqual(10_000);
       for (const row of rows) { original += row.Avant ?? ''; replacement += row.Après ?? ''; }
       pages++;
       if (!buttons(page).some(control => control.text.text === "Valeurs suivantes")) break;
@@ -553,11 +555,13 @@ it('keeps complete long-result values and private record controls', async () => 
   try {
     for (let i = 0; i < 9; i++) await h.click(await h.dm(`documentation créer projet ${JSON.stringify({ name: `Long ${i}`, description: 'D'.repeat(1500), notes: 'N'.repeat(1500) })}`), "Confirmer la création");
     const first = await h.dm('documentation search {"target":"project"}');
-    const text = bodyText(first);
+    const next = await h.click(first, 'Valeurs suivantes');
+    const text = bodyText(first) + bodyText(next);
+    expect(next.ts).toBe(first.ts);
     for (let i = 0; i < 9; i++) expect(text).toContain(`Long ${i}`);
     expect(text).toContain("D".repeat(1500)); expect(text).not.toContain("abrégé");
-    expect(bodyText(await h.click(first, 'Long 7'))).toContain('D'.repeat(1500));
-    expect(buttons(first).some(control => control.text.text === 'Suivant')).toBe(false);
+    expect(bodyText(await h.click(next, 'Long 7'))).toContain('D'.repeat(1500));
+    expect(findButton(next, 'Valeurs suivantes')).toBeUndefined();
   } finally { await h.app.close(); }
 });
 
@@ -589,9 +593,12 @@ it('keeps Tool identities and complete literal markup visible', async () => {
   try {
     for (let i = 0; i < 9; i++) await h.click(await h.dm(`documentation créer outil ${JSON.stringify({ name: `Tool ${i} ${'_'.repeat(110)}`, category: '_'.repeat(120), usage: '_'.repeat(1500), referent: '_'.repeat(1500), companyWide: true })}`), "Confirmer la création");
     const first = await h.dm('documentation search {"target":"tool"}');
-    for (let i = 0; i < 9; i++) expect(bodyText(first)).toContain(`Tool ${i}`);
-    expect(bodyText(first)).toContain("_".repeat(1500)); expect(bodyText(first)).not.toContain("abrégé");
-    expect(buttons(first).some(control => control.text.text === 'Suivant')).toBe(false);
+    const next = await h.click(first, 'Valeurs suivantes');
+    const last = await h.click(next, 'Valeurs suivantes');
+    const text = [first, next, last].map(bodyText).join('\n');
+    for (let i = 0; i < 9; i++) expect(text).toContain(`Tool ${i}`);
+    expect(text).toContain('_'.repeat(1500)); expect(text).not.toContain('abrégé');
+    expect(findButton(last, 'Valeurs suivantes')).toBeUndefined();
   } finally { await h.app.close(); }
 });
 
@@ -1211,8 +1218,11 @@ it('confirms a combined Component stack above 20, preserves all 50 references on
     const full = technologies.slice(0, 50).map(technology => technology.id);
     await h.click(await h.dm(`documentation edit component ${componentId} ${JSON.stringify({ technologies: full })}`), "Confirmer la modification");
     const detail = await h.dm(`documentation component ${componentId}`);
-    expect(buttons(detail).filter(control => control.text.text.startsWith('Stack technology '))).toHaveLength(50);
-    expect(await recordId(await h.click(detail, 'Stack technology 50'))).toBe(full[49]);
+    const next = await h.click(detail, 'Valeurs suivantes');
+    const last = await h.click(next, 'Valeurs suivantes');
+    expect([detail, next, last].flatMap(page => wrappedTableRows(page.body.blocks))
+      .filter(row => row.fields.Valeur?.startsWith('Stack technology ') && row.actions.length === 1)).toHaveLength(50);
+    expect(await recordId(await h.click(last, 'Stack technology 50'))).toBe(full[49]);
     expect((await sql.query('SELECT fields FROM documentation_records WHERE id=$1', [componentId])).rows[0].fields.technologies).toEqual(full);
     const pending = (await sql.query('SELECT count(*)::int count FROM documentation_confirmations')).rows[0].count;
     const excessive = technologies.map(technology => technology.id);
@@ -1839,14 +1849,16 @@ it('plans with headings and composes private Slack answers from only the matchin
     const firstResultPage = await h.dm('documentation chercher Unicité');
     const beforePaging = vi.mocked(fetch).mock.calls.length;
     const nextResultPage = await h.click(firstResultPage, 'Tableau suivant');
-    expect(nextResultPage.ts).toBe(firstResultPage.ts);
+    const lastResultPage = await h.click(nextResultPage, 'Tableau suivant');
+    const pages = [firstResultPage, nextResultPage, lastResultPage];
+    expect(pages.every(page => page.ts === firstResultPage.ts)).toBe(true);
     expect(vi.mocked(fetch)).toHaveBeenCalledTimes(beforePaging);
-    const pieces = [firstResultPage, nextResultPage].flatMap(page => wideTableRows(page.body.blocks));
+    const pieces = pages.flatMap(page => wrappedTableRows(page.body.blocks));
     expect(pieces.map(piece => piece.fields.Valeur).join('')).toBe(description);
     expect(pieces.every(piece => piece.fields.Ligne === 'Projet avec une description longue')).toBe(true);
-    expect(pieces[0]!.actions[0].value).toBe(pieces[1]!.actions[0].value);
-    expect(visibleLinks(firstResultPage)).toEqual(visibleLinks(nextResultPage));
-    expect(visibleLinks(nextResultPage)[0]).toContain('range=C');
+    expect(new Set(pieces.map(piece => piece.actions[0].value)).size).toBe(1);
+    expect(pages.map(page => visibleLinks(page)[0])).toEqual(Array(3).fill(visibleLinks(firstResultPage)[0]));
+    expect(visibleLinks(lastResultPage)[0]).toContain('range=C');
   } finally { await h.app.close(); }
 });
 
@@ -1865,10 +1877,10 @@ it('discovers a new Google column through Slack navigation and prepares its row 
     const tab = await h.click(await h.dm('documentation classeur'), 'projet');
     headers.splice(1, 0, 'Responsable'); data.splice(1, 0, 'Camille');
     const refreshed = await h.click(tab, 'Actualiser');
-    const open = wideTableRows(refreshed.body.blocks)[0]!.actions[0];
+    const open = wrappedTableRows(refreshed.body.blocks)[0]!.actions[0];
     await h.enqueueClick(refreshed, open);
     const detail = await h.drain();
-    const row = wideTableRows(detail.body.blocks).find(r => r.fields.Champ === 'Responsable');
+    const row = wrappedTableRows(detail.body.blocks).find(r => r.fields.Champ === 'Responsable');
     expect(row?.fields.Valeur).toBe('Camille');
     expect(row!.actions[0].text.text).toBe('Modifier · Responsable');
     await h.enqueueClick(detail, row!.actions[0]);
