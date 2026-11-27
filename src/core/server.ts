@@ -21,6 +21,19 @@ export function createServer(config: { SLACK_SIGNING_SECRET: string; SLACK_TEAM_
     if (body.type === 'url_verification') return { challenge: body.challenge };
     if (body.team_id !== config.SLACK_TEAM_ID) return reply.code(403).send();
     const event = body.event;
+    if (body.type === 'event_callback' && event?.type === 'entity_details_requested') {
+      const object = modules.all().find(module => module.workObject?.type === event.external_ref?.type)?.workObject;
+      if (!object) return { ok: true };
+      if (!/^[UW][A-Z0-9]+$/.test(event.user ?? '') || !/^D[A-Z0-9]+$/.test(event.channel ?? '') ||
+          typeof event.message_ts !== 'string' || !/^\d+\.\d+$/.test(event.message_ts) ||
+          typeof event.external_ref?.id !== 'string' || typeof event.entity_url !== 'string' || event.entity_url.length > 1000 ||
+          typeof event.trigger_id !== 'string' || !event.trigger_id || event.trigger_id.length > 300 ||
+          typeof body.event_id !== 'string' || !/^[a-z0-9_-]{1,120}$/i.test(body.event_id)) return reply.code(403).send();
+      await object.open({ team: body.team_id, user: event.user, channel: event.channel }, {
+        id: event.external_ref.id, url: event.entity_url, trigger: event.trigger_id, timestamp: event.message_ts, eventId: body.event_id,
+      });
+      return { ok: true };
+    }
     // Slack supplies the installed bot user in the signed Events API envelope.
     const bot = Array.isArray(body.authorizations) && body.authorizations.find((a: { is_bot?: boolean; user_id?: string }) =>
       a?.is_bot === true && /^[UW][A-Z0-9]+$/.test(a.user_id ?? ''))?.user_id;

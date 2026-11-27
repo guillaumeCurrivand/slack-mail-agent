@@ -6,6 +6,19 @@ Déployez le commit qui contient [Connexion](connexion.md), puis ajoutez `connex
 
 Après le redémarrage, envoyez `connexion` en DM. Vérifiez les états pour votre compte et ouvrez Gmail ou ClickUp avec **Ouvrir**. Le module propriétaire doit afficher son écran de gestion et demander sa confirmation habituelle avant une déconnexion.
 
+### Activation du pilote du tableau interactif
+
+Déployez le commit du pilote sur `main`. Dans les réglages de l’app Slack Mayassistant, activez **Work Object Previews** pour le type **Item**, ajoutez le domaine HTTPS de `PUBLIC_URL` à la liste des domaines intégrables et abonnez l’app à l’événement bot `entity_details_requested`. Le manifeste contient cet événement. Le pilote publie lui-même la carte Work Object. La configuration des aperçus de liens partagés se gère séparément. [Documentation Slack](https://docs.slack.dev/messaging/work-objects-embeds/)
+
+Gardez `connexion` dans `ENABLED_MODULES`. Le pilote réutilise l’origine HTTPS, le jeton du bot, le secret de signature Slack et le stockage de navigation existants. Aucune autre variable d’environnement ni migration manuelle ne sont nécessaires. En cas de déploiement manuel, utilisez le script serveur qui sauvegarde la base et vérifie le démarrage.
+
+```sh
+cd /opt/slack-mail-agent
+bash scripts/deploy.sh
+```
+
+En DM, envoyez `connexion tableau`, ouvrez la carte, puis vérifiez une adresse longue, le filtre **Accès** et un bouton **Ouvrir**. Le module propriétaire doit s’ouvrir dans ce DM et conserver ses confirmations. Vérifiez aussi qu’un second utilisateur reçoit uniquement ses propres comptes et que `connexion` ouvre toujours le tableau natif.
+
 ## Activation du module Factures
 
 Déployez la version qui contient le module avant d’ajouter `factures` à `ENABLED_MODULES`. Pour activer le pilote, configurez l’accès Gmail en lecture seule, le libellé et les utilisateurs autorisés dans le `.env` privé. Le [guide Factures](factures.md#configuration) décrit les variables et les contrôles de démarrage. Les tables sont créées automatiquement au démarrage. Les permissions Slack existantes couvrent les messages privés.

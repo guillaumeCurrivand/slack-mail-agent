@@ -18,12 +18,13 @@ import { readDevelopmentConfig } from '../modules/development/config.js';
 import { createDevelopmentModule } from '../modules/development/index.js';
 import { createFacturesModule, readArchiveConfig, readFacturesConfig } from '../modules/factures/index.js';
 import { createConnexionModule } from '../modules/connexion/index.js';
+import { createConnexionPanel } from '../modules/connexion/panel.js';
 import type { AssistantModule } from '../core/modules.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
   const enabled: AssistantModule[] = [];
   const factories = {
-    connexion: () => createConnexionModule(config.SLACK_TEAM_ID, () => enabled),
+    connexion: () => createConnexionModule(config.SLACK_TEAM_ID, () => enabled, createConnexionPanel(config, sql)),
     hyperdx: () => createHyperdxModule(readHyperdxConfig(env), config.SLACK_TEAM_ID, config.SLACK_BOT_TOKEN),
     factures: () => {
       const courrier = config.enabledModules.includes('mail') ? createMailFacturesSource(readMailConfig(env)) : undefined;

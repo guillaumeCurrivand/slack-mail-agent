@@ -195,8 +195,8 @@ export class Navigation {
       view === 'compact' ? view : view ? 'wrapped' : undefined);
   }
 
-  async show(actor: Actor, eventId: string, page: MenuPage, target = this.messenger.replyTarget?.(actor)) {
-    const id = target?.id ?? uid();
+  async show(actor: Actor, eventId: string, page: MenuPage, target: MenuTarget | null | undefined = this.messenger.replyTarget?.(actor)) {
+    const id = target?.id ?? page.workObject?.id ?? uid();
     const { links = [], recordChoices = [], bindButtons = false, ...content } = page;
     const rowChoices = !!content.table && recordChoices.length === content.table.rows.length;
     const bind = (button: Button) => bindButtons || button.bound ? { ...button, value: `${id}|${button.value}` } : button;
@@ -207,7 +207,7 @@ export class Navigation {
       ...(!rowChoices ? recordChoices.map(link => ({ label: link.label, action: `${this.namespace}:navigate`, value: `${id}|${link.page}` })) : []),
       ...links.map(link => ({ label: link.label, action: `${this.namespace}:navigate`, value: `${id}|${link.page}` }))] };
     const message = this.messenger.prepare?.(rawMessage) ?? rawMessage;
-    return this.deliver(actor, eventId, id, message, target, true);
+    return this.deliver(actor, eventId, id, message, target ?? undefined, true);
   }
 
   private async deliver(actor: Actor, eventId: string, id: string, fullMessage: AgentMessage, target?: MenuTarget,

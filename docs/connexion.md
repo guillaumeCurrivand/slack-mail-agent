@@ -15,3 +15,9 @@ Dans un DM avec Mayassistant, envoyez `connexion` ou choisissez **Menu → Conne
 Les intégrations d’équipe utilisent la configuration de l’administrateur. Les écrans des modules conservent leurs autorisations, parcours OAuth et confirmations. Connexion affiche la liste en DM, sans appel aux fournisseurs ou à l’IA.
 
 Pour l’activer, ajoutez `connexion` à `ENABLED_MODULES` en gardant les modules existants. La liste suit les modules activés. [Déploiement et vérification](deployment.md#activation-du-module-connexion)
+
+## Pilote du tableau interactif
+
+Dans le DM, choisissez **Ouvrir le tableau interactif** ou envoyez `connexion tableau`. Cliquez sur la carte **Connexion · Tableau interactif** pour ouvrir le panneau latéral Slack. Le tableau présente les comptes sans couper les adresses, avec recherche, filtre **Accès** et **Ouvrir** sur chaque ligne. **Ouvrir** demande l’écran de gestion du module dans la même conversation. Les décisions et confirmations de ce module restent dans Slack. Le panneau expire au bout de cinq minutes. Rouvrez la carte pour poursuivre la consultation.
+
+`connexion` ouvre le tableau natif. Pour ouvrir le panneau latéral, configurez [Work Object Previews](deployment.md#activation-du-pilote-du-tableau-interactif) dans Slack. Le panneau vérifie le propriétaire et le DM de la carte. Les données du tableau sont issues des états enregistrés au lancement de la carte. Envoyez `connexion tableau` de nouveau pour actualiser ces états.

@@ -9,6 +9,7 @@ import { logicalAction } from './presentation.js';
 
 export type JobPayload = Record<string, unknown>;
 export type RoutedJob = { module: string; payload: JobPayload };
+export type WorkObjectRequest = { id: string; url: string; trigger: string; timestamp: string; eventId: string };
 export type ModuleContext = { sql: Sql; budget: Budget; messenger: Messenger; requestedAt: Date };
 export type IntegrationContext = Pick<ModuleContext, 'sql' | 'messenger' | 'requestedAt'>;
 /** Private connection summary and an existing module page that manages it. */
@@ -52,6 +53,7 @@ export interface AssistantModule {
   legacyActions?: readonly string[];
   initialize?(sql: Sql): Promise<void>;
   registerRoutes?(app: FastifyInstance): void;
+  workObject?: { type: string; open(actor: Actor, request: WorkObjectRequest): Promise<void> };
   /** Opt-in signed channel receipt. Only durable enqueue belongs on this path. */
   receiveChannel?(actor: Actor, payload: JobPayload, eventId: string): Promise<void>;
   cleanup?(pool: Pool): Promise<void>;
@@ -143,7 +145,7 @@ export class ModuleRegistry {
       if (job.payload.type === 'navigation') {
         const destination = await navigation.target(actor, job.payload.value, job.payload.timestamp);
         if (!destination) return navigation.show(actor, eventId, { kind: "Menu indisponible", text: "Ce menu est indisponible. Envoyez menu pour en ouvrir un nouveau.", buttons: [{ label: 'Menu', action: 'core:menu', value: '' }] });
-        return navigation.show(actor, eventId, await this.page(destination.page, actor, context), destination.target);
+        return navigation.show(actor, eventId, await this.page(destination.page, actor, context), job.payload.newMessage === true ? null : destination.target);
       }
       if (job.payload.type === 'control_navigation') return navigation.controls(actor, eventId, job.payload.value, job.payload.timestamp);
       if (job.payload.type === 'text' && String(job.payload.text).toLowerCase() === 'budget') {

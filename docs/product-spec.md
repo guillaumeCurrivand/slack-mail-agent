@@ -14,6 +14,8 @@ In a private DM, a user can also authorize Factures to read one Gmail label thro
 
 The optional [Connexion module](connexion.md) gives each user a private overview of their registered accounts and accessible team integrations. Its controls open the responsible module's management screen. Connection, replacement and disconnection retain the originating module's authorization and confirmation rules.
 
+Connexion optionally offers a [Work Object panel pilot](connexion.md#pilote-du-tableau-interactif) for the same owner-visible table. It uses an expiring session issued to the verified owner of the originating Slack DM card. Web row controls enqueue the existing read-only navigation as a fresh DM screen for that owner. Approval and mutation controls remain on the responsible module's Slack screens.
+
 This document owns shared routing, navigation, presentation, access and spending safeguards, plus the Mail Sorter contract. Start with the [module overview](../README.md#modules-and-project-structure) for setup and usage. Module-specific guides/contracts are [Mail Sorter](mail.md), [Documentation](documentation.md), [ClickUp](clickup.md), [Yousign](yousign.md) and [Development](development.md). Their implementation status does not establish successful production deployment.
 
 ## Questions addressed to Mayassistant

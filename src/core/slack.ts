@@ -8,7 +8,14 @@ export const mapRowActions = (row: RowActions, map: (button: Button) => Button):
   Array.isArray(row) ? row.map(map) : row && map(row);
 export type MessageTable = { columns: string[]; rows: TableCell[][]; literalText?: boolean; rowButtons?: RowActions[]; rowButtonColumn?: string | string[]; rowButtonFallback?: string };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; tableView?: 'wrapped' | 'compact'; selects?: MessageSelect[] };
+export type WorkObject = { id: string; type: string; url: string; title: string };
+export const workObjectMetadata = (object: WorkObject, previewUrl?: string) => ({
+  entity_type: 'slack#/entities/item', url: object.url, external_ref: { id: object.id, type: object.type },
+  entity_payload: { attributes: { title: { text: object.title }, product_name: 'Mayassistant',
+    full_size_preview: { is_supported: true, mime_type: 'application/vnd.slack-embed', ...(previewUrl ? { preview_url: previewUrl } : {}) },
+  }, fields: {} },
+});
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; tableView?: 'wrapped' | 'compact'; selects?: MessageSelect[]; workObject?: WorkObject };
 export const WRAPPED_TABLE_LIMIT = 10_000;
 export const validResourceUrl = (value: string) => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>\\]/.test(value); }
@@ -176,6 +183,11 @@ export class Slack implements Messenger {
   }
   private async deliver(actor: { channel: string; thread?: string }, message: AgentMessage, timestamp?: string, thread = !timestamp ? actor.thread : undefined) {
     if (thread && !/^\d+\.\d+$/.test(thread)) throw new SlackDeliveryRejected('Invalid thread.');
+    if (message.workObject) {
+      if (timestamp || thread || !/^D[A-Z0-9]+$/.test(actor.channel)) throw new SlackDeliveryRejected('A private Work Object must start a new DM message.');
+      return this.chat('chat.postMessage', { channel: actor.channel, text: escapeSlack(message.text),
+        metadata: { entities: [workObjectMetadata(message.workObject)] } });
+    }
     const text = message.kind ? message.text : sanitizeReply(message.text);
     if (text.length > 12_000) throw new SlackDeliveryRejected('Message text exceeds Slack limits.');
     const buttons = message.buttons ?? [];
@@ -309,9 +321,14 @@ export class Slack implements Messenger {
       for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
     }
     if (blocks.length > 50) throw new SlackDeliveryRejected('Message has too many Slack blocks.');
-    const response = await this.fetcher(`https://slack.com/api/${timestamp ? 'chat.update' : 'chat.postMessage'}`, {
+    return this.chat(timestamp ? 'chat.update' : 'chat.postMessage', { channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}),
+      ...(thread ? { thread_ts: thread } : {}), text: escapeSlack([plainReading(text), ...(message.table ? [message.table.columns.join(' | '), ...message.table.rows.map(row => row.map(cellText).join(' | '))] : [])].join('\n').slice(0, 3500)), blocks, unfurl_links: false, unfurl_media: false, parse: 'none' });
+  }
+
+  private async chat(method: 'chat.update' | 'chat.postMessage', body: Record<string, unknown>) {
+    const response = await this.fetcher(`https://slack.com/api/${method}`, {
       method: 'POST', headers: { Authorization: `Bearer ${this.token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ channel: actor.channel, ...(timestamp ? { ts: timestamp } : {}), ...(thread ? { thread_ts: thread } : {}), text: escapeSlack([plainReading(text), ...(message.table ? [message.table.columns.join(' | '), ...message.table.rows.map(row => row.map(cellText).join(' | '))] : [])].join('\n').slice(0, 3500)), blocks, unfurl_links: false, unfurl_media: false, parse: 'none' }), signal: AbortSignal.timeout(20_000),
+      body: JSON.stringify(body), signal: AbortSignal.timeout(20_000),
     });
     if (response.status === 429) {
       const seconds = Number(response.headers.get('retry-after'));
@@ -320,7 +337,7 @@ export class Slack implements Messenger {
     const result = await response.json() as { ok?: boolean; error?: string; ts?: string };
     if (!response.ok || !result.ok) {
       // Transient internal errors can occur after Slack accepted a message.
-      const rejected = new Set(['access_denied', 'channel_not_found', 'ekm_access_denied', 'invalid_auth', 'invalid_blocks', 'is_archived', 'missing_scope', 'no_permission', 'not_in_channel', 'rate_limited', 'ratelimited', 'token_expired', 'token_revoked', 'message_not_found', 'cant_update_message']);
+      const rejected = new Set(['access_denied', 'channel_not_found', 'ekm_access_denied', 'invalid_auth', 'invalid_blocks', 'invalid_metadata_format', 'invalid_metadata_schema', 'is_archived', 'missing_scope', 'no_permission', 'not_in_channel', 'rate_limited', 'ratelimited', 'token_expired', 'token_revoked', 'message_not_found', 'cant_update_message']);
       if (result.ok === false && result.error && rejected.has(result.error)) throw new SlackDeliveryRejected('Slack delivery was rejected.', result.error);
       throw new Error('Slack delivery failed.');
     }
