@@ -74,6 +74,7 @@ it('opens an actor-bound Work Object from Connexion and routes each web row back
     expect(card.ts).not.toBe(menu.ts);
     expect(card.blocks).toBeUndefined();
     expect(JSON.stringify(card)).not.toContain('@example.test');
+    expect(entity.entity_payload).not.toHaveProperty('fields');
     expect(entity.entity_payload.attributes.full_size_preview).toEqual({ is_supported: true, mime_type: 'application/vnd.slack-embed' });
     const details = { type: 'event_callback', event_id: 'EvDetails', team_id: alice.team,
       event: { type: 'entity_details_requested', user: alice.user, channel: alice.channel, message_ts: card.ts,
@@ -85,6 +86,7 @@ it('opens an actor-bound Work Object from Connexion and routes each web row back
     expect((await signed('/slack/events', JSON.stringify(otherMessage))).statusCode).toBe(200);
     expect(previews).toEqual([]);
     expect((await signed('/slack/events', JSON.stringify(details))).statusCode).toBe(200);
+    expect(previews[0].metadata.entity_payload).not.toHaveProperty('fields');
     const preview = new URL(previews[0].metadata.entity_payload.attributes.full_size_preview.preview_url);
     expect(preview.search).toBe('');
     expect(preview.hash).not.toBe('');

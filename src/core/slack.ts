@@ -13,7 +13,7 @@ export const workObjectMetadata = (object: WorkObject, previewUrl?: string) => (
   entity_type: 'slack#/entities/item', url: object.url, external_ref: { id: object.id, type: object.type },
   entity_payload: { attributes: { title: { text: object.title }, product_name: 'Mayassistant',
     full_size_preview: { is_supported: true, mime_type: 'application/vnd.slack-embed', ...(previewUrl ? { preview_url: previewUrl } : {}) },
-  }, fields: {} },
+  } },
 });
 export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; tableView?: 'wrapped' | 'compact'; selects?: MessageSelect[]; workObject?: WorkObject };
 export const WRAPPED_TABLE_LIMIT = 10_000;
