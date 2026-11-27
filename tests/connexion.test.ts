@@ -7,10 +7,11 @@ import { digest } from '../src/core/crypto.js';
 import { dispatchJob } from '../src/core/dispatch.js';
 import { ownerKey, type Actor } from '../src/core/identity.js';
 import { createServer } from '../src/core/server.js';
-import type { AgentMessage, Button } from '../src/core/slack.js';
+import { Slack, type AgentMessage, type Button } from '../src/core/slack.js';
 import { coreSchema, JobStore, type Sql } from '../src/core/store.js';
 import { emptyState } from '../src/modules/mail/domain.js';
 import { mailSchema, Store } from '../src/modules/mail/store.js';
+import { wideTableRows } from './slack-blocks.js';
 
 const baseEnv = { ENABLED_MODULES: 'connexion', SLACK_TEAM_ID: 'TTEAM', SLACK_SIGNING_SECRET: 'fake',
   SLACK_BOT_TOKEN: 'fake', PUBLIC_URL: 'https://example.test', DATABASE_URL: 'unused' };
@@ -94,6 +95,15 @@ it('lists only the caller’s accounts and opens the owner module’s signed con
       ['Gmail · Factures', 'Personnel', 'Libellé à choisir', 'alice@example.test'],
       ['HyperDX', 'Équipe', 'Intégration configurée', ''],
     ]);
+    const slack = new Slack('fake', async (_url, options) => {
+      const { blocks } = JSON.parse(String(options?.body));
+      const rows = wideTableRows(blocks);
+      expect(rows.map(row => row.fields.Compte)).toEqual(['alice@clickup.test', 'alice@example.test', 'alice@example.test', undefined]);
+      expect(rows[3]?.fields['État enregistré']).toBe('Intégration configurée');
+      expect(rows.every(row => row.actions[0]?.text.text === 'Ouvrir')).toBe(true);
+      return Response.json({ ok: true });
+    });
+    await slack.send(alice, aliceHome.message);
     expect(JSON.stringify(aliceHome.message)).not.toContain('private-');
     await dm(bob, 'menu');
     await click(bob, latest(bob).ts, latest(bob).message.buttons!.find(button => button.label === 'Connexion')!);

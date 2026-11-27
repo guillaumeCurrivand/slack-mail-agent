@@ -1,4 +1,4 @@
-import { tableBlocks, validLayoutFallbacks } from './slack-blocks.js';
+import { tableBlocks, validLayoutFallbacks, wideTableRows } from './slack-blocks.js';
 import { expect, it } from 'vitest';
 import { Slack, type AgentMessage } from '../src/core/slack.js';
 
@@ -9,14 +9,14 @@ it.each(['post', 'update'])('delivers %s tables with only stable block types in 
     const body = JSON.parse(String(options?.body));
     return Response.json(validLayoutFallbacks(body.blocks) ? { ok: true } : { ok: false, error: 'invalid_blocks' });
   }) as typeof fetch);
-  const message = { kind: 'Projets', text: 'Choisissez un projet', table: { columns: ['Projet'], rows: [['Alpha']],
+  const message: AgentMessage = { kind: 'Projets', text: 'Choisissez un projet', tableView: 'compact', table: { columns: ['Projet'], rows: [['Alpha']],
     rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|project' }] } };
   await expect(mode === 'post' ? slack.send(actor, message) : slack.update(actor, '123.456', message)).resolves.toBeUndefined();
 });
 
 it('preserves every row in compatibility text for tables beyond legacy table limits', async () => {
   const rows = Array.from({ length: 200 }, (_, index) => [`${index}: ${'x'.repeat(60)}`]);
-  const body = await post({ kind: 'Longue liste', text: '', table: { columns: ['Valeur'], rows } });
+  const body = await post({ kind: 'Longue liste', text: '', tableView: 'compact', table: { columns: ['Valeur'], rows } });
   expect(validLayoutFallbacks(body.blocks)).toBe(true);
   const fallback = body.blocks[1].fallback[0];
   expect(fallback.type).toBe('rich_text');
@@ -24,7 +24,7 @@ it('preserves every row in compatibility text for tables beyond legacy table lim
 });
 
 it('keeps data tables outside containers, links displayed web destinations and rejects oversized tables before delivery', async () => {
-  const body = await post({ kind: 'Inventory', text: 'Current records', table: { columns: ["Nom", "Liens"], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: "Retour", action: 'core:navigate', value: 'bound|main' }] });
+  const body = await post({ kind: 'Inventory', text: 'Current records', tableView: 'compact', table: { columns: ["Nom", "Liens"], rows: [['Literal <@UBOB>', [{ text: 'Documentation', url: 'https://example.com/docs' }, { text: 'Unsafe', url: 'javascript:alert(1)' }, { text: 'Credentials', url: 'https://user:secret@example.com/' }]]] }, buttons: [{ label: "Retour", action: 'core:navigate', value: 'bound|main' }] });
   expect(body.blocks.map((block: any) => block.type)).toEqual(['container', 'layout', 'container']);
   expect(body.blocks[1].rows).toHaveLength(1);
   expect(body.blocks[1].rows[0].items).toHaveLength(1);
@@ -43,7 +43,7 @@ it('keeps data tables outside containers, links displayed web destinations and r
 });
 
 it('renders labelled table toggles and non-interactive rows with consistent columns and client fallback', async () => {
-  const body = await post({ kind: 'Statuts', text: 'Filtre', table: {
+  const body = await post({ kind: 'Statuts', text: 'Filtre', tableView: 'compact', table: {
     columns: ['Statut', 'Inclus'], rows: [['Active', 'Oui'], ['Absent', 'Non']],
     rowButtons: [{ label: '☑ Retirer', action: 'clickup:status_remove', value: 'bound|editor|0|choice' }, null],
     rowButtonColumn: 'Sélection', rowButtonFallback: 'Ouvrez clickup statuts dans un client Slack récent',
@@ -67,14 +67,13 @@ it('keeps both decisions beside one literal mail subject and leaves completed ro
       { label: 'Laisser', action: 'mail:skip_item', value: 'proposal-1' },
     ], null],
   } });
-  const table = tableBlocks(body.blocks).find((block: any) => block.type === 'data_table');
-  expect(table.rows[0].map((cell: any) => cell.text)).toEqual(['Objet', 'Inclure', 'Laisser']);
-  expect(table.rows[1][0]).toEqual({ type: 'raw_text', text: subject });
-  expect(table.rows[1].slice(1).map((cell: any) => [cell.element.action_id, cell.element.value])).toEqual([
+  const rows = wideTableRows(body.blocks);
+  expect(rows.map(row => row.fields.Objet)).toEqual([subject, 'Terminé']);
+  expect(body.blocks[1].elements[0].elements).toContainEqual({ type: 'text', text: subject });
+  expect(rows[0]!.actions.map(action => [action.action_id, action.value])).toEqual([
     ['mail:accept_item~button-0', 'proposal-1'], ['mail:skip_item~button-1', 'proposal-1'],
   ]);
-  expect(table.rows[2].map((cell: any) => cell.type)).toEqual(['raw_text', 'raw_text', 'raw_text']);
-  expect(validLayoutFallbacks(body.blocks)).toBe(true);
+  expect(rows[1]!.actions).toEqual([]);
 });
 
 async function post(message: AgentMessage) {
@@ -197,7 +196,7 @@ it('marks structural navigation without marking page choices or changing action 
   const table = await post({ kind: 'Inventaire', text: 'Fiches', table: {
     columns: ['Nom'], rows: [['Alpha']], rowButtons: [{ label: 'Ouvrir', action: 'core:navigate', value: 'bound|alpha' }],
   } });
-  expect(tableBlocks(table.blocks)[1].rows[1][1].element.text.text).toBe('Ouvrir');
+  expect(wideTableRows(table.blocks)[0]?.actions[0].text.text).toBe('Ouvrir');
 });
 
 it.each(['Connexion', 'Connect'])('makes all displayed %s URLs clickable', async kind => {

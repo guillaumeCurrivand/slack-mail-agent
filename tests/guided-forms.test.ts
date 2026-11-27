@@ -10,6 +10,7 @@ import { dispatchJob } from '../src/core/dispatch.js';
 import { JobStore, type Sql } from '../src/core/store.js';
 import { Slack } from '../src/core/slack.js';
 import { Store } from '../src/modules/mail/store.js';
+import { wideTableRows } from './slack-blocks.js';
 
 const alice = { team: 'TTEAM', user: 'UALICE', channel: 'DALICE' };
 const bob = { ...alice, user: 'UBOB', channel: 'DBOB' };
@@ -193,12 +194,12 @@ it('reads the live workbook and writes a reviewed edit from a signed Slack DM to
     const prepare = async () => {
       const list = await h.dm('documentation hébergements');
       const record = await h.click(list, 'Ouvrir');
-      const table = record.blocks.find((block: any) => block.type === 'layout').rows[0].items[0].block;
+      const fields = wideTableRows(record.blocks);
+      expect(fields).toHaveLength(headers.length);
       for (const [i, header] of headers.entries()) {
-        const row = table.rows[i + 1];
-        expect(row[0].text).toBe(header);
-        if (header === 'Coût Mensuel') expect(row[2]).toEqual({ type: 'raw_text', text: '—' });
-        else expect(row[2]).toMatchObject({ type: 'action_cell', element: { text: { text: 'Modifier · ' + header } } });
+        const row = fields[i]!;
+        expect(row.fields.Champ).toBe(header);
+        expect(row.actions.map(action => action.text.text)).toEqual(header === 'Coût Mensuel' ? [] : ['Modifier · ' + header]);
       }
       expect(h.buttons(record).filter(button => button.text.text.startsWith('Modifier · '))).toHaveLength(3);
       const prepared = await h.click(record, 'Modifier · Rôle');

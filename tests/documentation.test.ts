@@ -1865,13 +1865,13 @@ it('discovers a new Google column through Slack navigation and prepares its row 
     const tab = await h.click(await h.dm('documentation classeur'), 'projet');
     headers.splice(1, 0, 'Responsable'); data.splice(1, 0, 'Camille');
     const refreshed = await h.click(tab, 'Actualiser');
-    const open = parts(refreshed).find(b => b.type === 'data_table').rows[1].at(-1).element;
+    const open = wideTableRows(refreshed.body.blocks)[0]!.actions[0];
     await h.enqueueClick(refreshed, open);
     const detail = await h.drain();
-    const row = parts(detail).find(b => b.type === 'data_table').rows.find((r: any[]) => cellValue(r[0]) === 'Responsable');
-    expect(cellValue(row[1])).toBe('Camille');
-    expect(row[2].element.text.text).toBe('Modifier · Responsable');
-    await h.enqueueClick(detail, row[2].element);
+    const row = wideTableRows(detail.body.blocks).find(r => r.fields.Champ === 'Responsable');
+    expect(row?.fields.Valeur).toBe('Camille');
+    expect(row!.actions[0].text.text).toBe('Modifier · Responsable');
+    await h.enqueueClick(detail, row!.actions[0]);
     button(await h.drain(), 'Remplir le formulaire');
   } finally { await h.app.close(); }
 });

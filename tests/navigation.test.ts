@@ -281,17 +281,18 @@ it('namespaces and binds module-menu table actions through signed dispatch', asy
   try {
     const menu = await h.dm('menu'), page = await h.click(menu, 'Table fixture');
     const before = h.messages.length;
-    await h.click(page, 'Lire en pleine largeur', bob);
+    await h.click(page, 'Vue tableau', bob);
     expect(h.messages).toHaveLength(before);
-    const expanded = await h.click(page, 'Lire en pleine largeur');
-    expect(expanded.ts).toBe(page.ts);
-    const [row] = wideTableRows(expanded.body.blocks);
+    const [row] = wideTableRows(page.body.blocks);
     expect(row!.fields).toEqual({ Nom: 'Active' });
     const control = row!.actions[0];
     expect(control.action_id).toMatch(/^table_fixture:toggle~button-\d+$/);
-    const compact = await h.click(expanded, 'Vue tableau');
+    const compact = await h.click(page, 'Vue tableau');
     expect(compact.ts).toBe(page.ts);
     expect(tableBlocks(compact.body.blocks).find((block: any) => block.type === 'data_table').rows[1][1].element.value).toBe(control.value);
+    const expanded = await h.click(compact, 'Lire en pleine largeur');
+    expect(expanded.ts).toBe(page.ts);
+    expect(wideTableRows(expanded.body.blocks)).toEqual([row]);
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: page.ts },
       actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }],
     }) }).toString();

@@ -13,7 +13,7 @@ import type { Database } from '../src/core/transactions.js';
 import { createDevelopmentModule } from '../src/modules/development/index.js';
 import { DevelopmentStore } from '../src/modules/development/store.js';
 import { projectSchema, type Ticket } from '../src/modules/development/domain.js';
-import { tableBlocks } from './slack-blocks.js';
+import { wideTableRows } from './slack-blocks.js';
 
 const token = 'synthetic-worker-token-at-least-32-characters';
 const env = { PUBLIC_URL: 'https://agent.example.com', DATABASE_URL: 'postgresql://unused', SLACK_TEAM_ID: 'TTEAM', SLACK_BOT_TOKEN: 'bot', SLACK_SIGNING_SECRET: 'secret', ENABLED_MODULES: 'development', DEVELOPMENT_CLICKUP_TOKEN: 'clickup', DEVELOPMENT_WORKER_TOKEN: token };
@@ -168,11 +168,11 @@ it('pages repository row actions and retains selection on its page before separa
     const request = await h.ingress('https://app.clickup.com/t/abc123'); await h.run(request.id);
     const list = await h.click(await h.command('development menu'), 'Tickets et dépôts');
     const picker = await h.click(await h.click(list, 'À affecter'), 'Choisir les dépôts');
-    expect(tableBlocks(picker.blocks).find(block => block.type === 'data_table').rows).toHaveLength(6);
+    expect(wideTableRows(picker.blocks)).toHaveLength(5);
     const next = await h.click(picker, 'Suivant');
-    const table = tableBlocks(next.blocks).find(block => block.type === 'data_table');
-    expect(table.rows).toHaveLength(3);
-    const selected = await h.click(next, table.rows[2][3].element.text.text);
+    const rows = wideTableRows(next.blocks);
+    expect(rows).toHaveLength(2);
+    const selected = await h.click(next, rows[1]!.actions[0].text.text);
     expect(selected.ts).toBe(picker.ts);
     expect(selected.text).toContain('Page 2/2');
     expect(selected.text).toContain('1 dépôts sélectionnés');
@@ -369,10 +369,9 @@ it('changes repository selection with confirmation, preserves retained analyses 
   const ticket = await h.click(await h.click(treatment, 'Traitements du ticket'), 'Retour au ticket');
   expect(ticket.ts).toBe(page.ts);
   expect(ticket.text).toContain('Dépôts confirmés');
-  const repositories = tableBlocks(ticket.blocks).find((block: any) => block.type === 'data_table');
-  const assigned = repositories.rows.find((row: any[]) => row[1]?.text === 'Dépôt confirmé');
-  expect(JSON.stringify(assigned[0])).toContain(project.repository);
-  expect(assigned.at(-1).element.text.text).toBe('Suivre Projet pilote');
+  const assigned = wideTableRows(ticket.blocks).find(row => row.fields.Type === 'Dépôt confirmé');
+  expect(assigned?.fields['Dépôt']).toContain(project.repository);
+  expect(assigned!.actions[0].text.text).toBe('Suivre Projet pilote');
   expect((await h.click(ticket, 'Suivre Projet pilote')).ts).toBe(ticket.ts);
   expect(await h.store.history('pilot')).toHaveLength(1);
   let picker = await h.click(page, 'Modifier les dépôts');
@@ -1238,7 +1237,7 @@ it('browses projects, configuration, history and run details through signed butt
   const configuration = await h.click(detail, 'Modifier la configuration');
   expect(configuration.text).toContain('formulaire');
   const history = await h.click(detail, 'Voir les traitements');
-  expect(JSON.stringify(history)).toContain('Actions / état');
+  expect(wideTableRows(history.blocks)[0]?.actions[0].text.text).toBe('En attente du worker');
   const next = await h.click(history, 'Suivant');
   expect(next.text).toContain('Page 2');
   const run = await h.click(next, 'En attente du worker');

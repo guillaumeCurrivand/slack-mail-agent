@@ -1,5 +1,5 @@
 import { ownerKey, uid, type Actor } from './identity.js';
-import { cellSize, mapRowActions, buttonDisplayLabel, prefersWideTable, sanitizeReply, SlackDeliveryRejected, VISIBLE_ACTION_BUTTONS, type AgentMessage, type Button, type Messenger, type MessageTable, type TableCell } from './slack.js';
+import { cellSize, mapRowActions, buttonDisplayLabel, sanitizeReply, SlackDeliveryRejected, VISIBLE_ACTION_BUTTONS, type AgentMessage, type Button, type Messenger, type MessageTable, type TableCell } from './slack.js';
 import type { Sql } from './store.js';
 
 export type MenuPage = AgentMessage & { links?: Array<{ label: string; page: string }>; recordChoices?: Array<{ label: string; page: string }>; bindButtons?: boolean };
@@ -156,7 +156,7 @@ function visiblePage(message: AgentMessage, id: string, requestedControl = 0, re
     : { pages: [message.buttons ?? []], pinned: [] as Button[] };
   const controlPage = Math.max(0, Math.min(requestedControl, pages.length - 1));
   const table = tables[textPage];
-  const tableView = view ?? (table && prefersWideTable(table) ? 'wide' : 'compact');
+  const tableView = view ?? 'wide';
   const pageButton = (label: string, nextControl: number, nextText: number, nextView = view) => ({ label, action: `${namespace}:controls`, value: `${id}|${nextControl}|${nextText}${nextView ? `|${nextView}` : ''}`, ...(namespace === 'core' ? { scope: 'core' as const } : {}) });
   return { ...message, text: contentPages > 1 ? `Réponse — page ${textPage + 1}/${contentPages}\n${textPages[textPage] ?? ''}` : message.text,
     ...(message.table ? { table, tableView } : {}),

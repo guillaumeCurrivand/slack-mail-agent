@@ -1,4 +1,4 @@
-import { tableBlocks } from './slack-blocks.js';
+import { wideTableRows } from './slack-blocks.js';
 import { createHmac, randomBytes } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -171,7 +171,7 @@ it('shows every status toggle in a table without paging the action buttons', asy
   expect(first.table?.columns).toEqual(['Statut', 'Inclus', 'Disponibilité']);
   expect(first.table?.rows).toHaveLength(4);
   expect(first.table?.rowButtons).toHaveLength(4);
-  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu', 'Lire en pleine largeur']);
+  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu', 'Vue tableau']);
   const choice = first.table!.rowButtons![0]!;
   expect(choice.label).toBe('☐ Ajouter');
   expect(choice.action).toBe('clickup:status_add');
@@ -583,8 +583,7 @@ it('keeps more than 100 status choices reachable and preserves a saved filter af
   const seen = new Set<string>();
   const checkPage = () => {
     const picker = h.messages.at(-1)!;
-    expect(picker.buttons?.filter(button => button.action === 'core:controls').map(button => button.label))
-      .toEqual([picker.tableView === 'wide' ? 'Vue tableau' : 'Lire en pleine largeur']);
+    expect(picker.buttons?.filter(button => button.action === 'core:controls').map(button => button.label)).toEqual(['Vue tableau']);
     expect(picker.table!.rows).toHaveLength(10);
     expect(picker.table!.rowButtons!.every(button => button?.label === '☑ Retirer')).toBe(true);
     for (const row of picker.table!.rows) seen.add(cellText(row[0]!));
@@ -669,10 +668,11 @@ it('routes signed French status commands and editor controls through Slack ingre
     await h.run(job, job.actor, job.id); const picker = h.messages.at(-1)!;
     const rendered: any[] = [];
     await new Slack('unused', (async (_input, options) => { rendered.push(JSON.parse(String(options?.body))); return Response.json({ ok: true }); }) as typeof fetch).send(alice, picker);
-    const table = tableBlocks(rendered[0].blocks).find((block: any) => block.type === 'data_table');
-    expect(table.rows[0].map((cell: any) => cell.text)).toEqual(['Statut', 'Inclus', 'Disponibilité', 'Sélection']);
-    expect(table.rows.slice(1).every((row: any[]) => row[3].type === 'action_cell')).toBe(true);
-    const add = table.rows.find((row: any[]) => row[0].text === 'Closed')[3].element;
+    const rows = wideTableRows(rendered[0].blocks);
+    const closed = rows.find(row => row.fields.Statut === 'Closed');
+    expect(Object.keys(closed!.fields)).toEqual(['Statut', 'Inclus', 'Disponibilité']);
+    expect(rows.every(row => row.actions[0]?.type === 'button')).toBe(true);
+    const add = closed!.actions[0];
     expect(add.text.text).toBe('☐ Ajouter');
     expect(add.action_id).toMatch(/^clickup:status_add~button-\d+$/);
     const route = h.modules.action(add.action_id, add.value);
@@ -835,15 +835,17 @@ it('admits signed French commands and Refresh into one operation slot and hides 
   await app.close(); await off.close();
 });
 
-it('renders the result as a native Slack table with literal values and ClickUp links', async () => {
+it('renders full-width results with literal values and ClickUp links', async () => {
   const p = provider([[task('one', { name: '<@UOTHER> **literal**' })]]), h = await connected(p);
   await h.text('clickup tasks'); const result = h.messages.at(-1)!;
   const sent: any[] = [];
   const slack = new Slack('fake', (async (_input, init) => { sent.push(JSON.parse(String(init?.body))); return Response.json({ ok: true }); }) as typeof fetch);
   await slack.send(alice, result);
-  const table = tableBlocks(sent[0].blocks).find((block: any) => block.type === 'data_table');
-  expect(table.rows.length).toBe(2);
-  expect(JSON.stringify(table)).toContain('https://app.clickup.com/t/one');
+  const rows = wideTableRows(sent[0].blocks);
+  expect(rows).toHaveLength(1);
+  expect(rows[0]?.fields.Tâche).toBe('<@UOTHER> **literal**');
+  expect(sent[0].blocks.filter((block: any) => block.type === 'rich_text').flatMap((block: any) => block.elements)
+    .flatMap((section: any) => section.elements)).toContainEqual({ type: 'link', text: '<@UOTHER> **literal**', url: 'https://app.clickup.com/t/one' });
 });
 
 it('recovers a confirmed connection after definite delivery rejection without repeating its effect', async () => {

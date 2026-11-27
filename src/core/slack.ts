@@ -15,10 +15,6 @@ export const validResourceUrl = (value: string) => {
 };
 export const cellSize = (cell: TableCell) => typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0);
 export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
-export const prefersWideTable = (table: MessageTable) => {
-  const long = (cell: TableCell) => { const text = cellText(cell); return text.length > 80 || /[\r\n]/.test(text); };
-  return table.columns.some(long) || table.rows.some(row => row.some(long));
-};
 export const navigationCue = '🧭';
 export const helpCue = '?';
 export const buttonGroup = (button: Button): 'action' | 'navigation' | 'help' => {
@@ -263,7 +259,7 @@ export class Slack implements Messenger {
           ...(button.style ? { style: button.style } : {}),
         };
       };
-      if (message.tableView === 'wide') {
+      if (message.tableView !== 'compact') {
         const elements: Array<{ type: 'rich_text_section'; elements: RichTextPart[] }> = [];
         const flushRows = () => {
           if (elements.length) blocks.push({ type: 'rich_text', elements: elements.splice(0) });
