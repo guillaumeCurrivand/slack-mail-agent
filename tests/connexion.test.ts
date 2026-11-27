@@ -89,15 +89,15 @@ it('lists only the caller’s accounts and opens the owner module’s signed con
     const aliceHome = latest(alice);
     expect(aliceHome.message.kind).toBe('Connexion');
     expect(aliceHome.message.table?.rows).toEqual([
-      ['ClickUp', 'Personnel', 'Connecté', 'alice@clickup.test', ''],
-      ['Gmail · Courrier', 'Personnel', 'Connecté', 'alice@example.test', ''],
-      ['Gmail · Factures', 'Personnel', 'Libellé à choisir', 'alice@example.test', ''],
-      ['HyperDX', 'Équipe', 'Intégration configurée', '', ''],
+      ['ClickUp', 'Personnel', 'Connecté', 'alice@clickup.test'],
+      ['Gmail · Courrier', 'Personnel', 'Connecté', 'alice@example.test'],
+      ['Gmail · Factures', 'Personnel', 'Libellé à choisir', 'alice@example.test'],
+      ['HyperDX', 'Équipe', 'Intégration configurée', ''],
     ]);
     expect(JSON.stringify(aliceHome.message)).not.toContain('private-');
     await dm(bob, 'menu');
     await click(bob, latest(bob).ts, latest(bob).message.buttons!.find(button => button.label === 'Connexion')!);
-    expect(latest(bob).message.table?.rows[0]).toEqual(['ClickUp', 'Personnel', 'À connecter', '', '']);
+    expect(latest(bob).message.table?.rows[0]).toEqual(['ClickUp', 'Personnel', 'À connecter', '']);
     expect(JSON.stringify(latest(bob).message)).not.toContain('alice@');
     const gmailRow = aliceHome.message.table!.rowButtons![1] as Button;
     await click(bob, aliceHome.ts, gmailRow);
@@ -110,7 +110,7 @@ it('lists only the caller’s accounts and opens the owner module’s signed con
     expect((await store.load(alice)).connection?.id).toBe('gmail-alice');
     await click(alice, latest(alice).ts, latest(alice).message.buttons!.find(button => button.action === 'mail:disconnect')!);
     await dm(alice, 'connexion');
-    expect(latest(alice).message.table?.rows[1]).toEqual(['Gmail · Courrier', 'Personnel', 'À connecter', '', '']);
+    expect(latest(alice).message.table?.rows[1]).toEqual(['Gmail · Courrier', 'Personnel', 'À connecter', '']);
     await click(alice, latest(alice).ts, latest(alice).message.table!.rowButtons![0] as Button);
     expect(latest(alice).message.buttons?.some(button => button.action === 'clickup:disconnect')).toBe(true);
     await dm(alice, 'connexion');

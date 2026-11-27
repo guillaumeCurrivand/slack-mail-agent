@@ -1,4 +1,4 @@
-import { tableBlocks, validLayoutFallbacks } from './slack-blocks.js';
+import { tableBlocks, validLayoutFallbacks, wideTableRows } from './slack-blocks.js';
 import { createHmac, randomBytes, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { exportJWK, generateKeyPair, SignJWT } from 'jose';
@@ -280,8 +280,18 @@ it('namespaces and binds module-menu table actions through signed dispatch', asy
   const h = await harness(env, [fixture]);
   try {
     const menu = await h.dm('menu'), page = await h.click(menu, 'Table fixture');
-    const control = tableBlocks(page.body.blocks).find((block: any) => block.type === 'data_table').rows[1][1].element;
+    const before = h.messages.length;
+    await h.click(page, 'Lire en pleine largeur', bob);
+    expect(h.messages).toHaveLength(before);
+    const expanded = await h.click(page, 'Lire en pleine largeur');
+    expect(expanded.ts).toBe(page.ts);
+    const [row] = wideTableRows(expanded.body.blocks);
+    expect(row!.fields).toEqual({ Nom: 'Active' });
+    const control = row!.actions[0];
     expect(control.action_id).toMatch(/^table_fixture:toggle~button-\d+$/);
+    const compact = await h.click(expanded, 'Vue tableau');
+    expect(compact.ts).toBe(page.ts);
+    expect(tableBlocks(compact.body.blocks).find((block: any) => block.type === 'data_table').rows[1][1].element.value).toBe(control.value);
     const raw = new URLSearchParams({ payload: JSON.stringify({ type: 'block_actions', team: { id: alice.team }, user: { id: alice.user }, channel: { id: alice.channel }, message: { ts: page.ts },
       actions: [{ action_id: control.action_id, value: control.value, action_ts: randomUUID() }],
     }) }).toString();
@@ -307,9 +317,9 @@ it('pages oversized tables in place without truncating values or losing row acti
     const first = await h.click(await h.dm('menu'), 'Grande liste');
     const second = await h.click(first, 'Tableau suivant');
     expect(second.ts).toBe(first.ts);
-    const rows = [first, second].flatMap(page => tableBlocks(page.body.blocks).find(block => block.type === 'data_table').rows.slice(1));
-    expect(rows.map(row => row[1].text)).toEqual(Array.from({ length: 8 }, (_, i) => String(i).repeat(4000)));
-    expect(rows.map(row => row[2].element.value.split('|').at(-1))).toEqual(Array.from({ length: 8 }, (_, i) => String(i)));
+    const rows = [first, second].flatMap(page => wideTableRows(page.body.blocks));
+    expect(rows.map(row => row.fields.Valeur)).toEqual(Array.from({ length: 8 }, (_, i) => String(i).repeat(4000)));
+    expect(rows.map(row => row.actions[0].value.split('|').at(-1))).toEqual(Array.from({ length: 8 }, (_, i) => String(i)));
     expect(findButton(await h.click(second, 'Tableau précédent'), 'Voir 0')).toBeTruthy();
     await h.click(second, 'Voir 7', bob); expect(opened).toEqual([]);
     await h.click(second, 'Voir 7'); expect(opened).toEqual(['7']);
@@ -634,8 +644,7 @@ it('connects through the existing invitation and confirms disconnect without era
     expect((await h.click(proposal, "Déconnecter Gmail")).body.text).toContain('n’est plus valide');
     const listedRules = (await h.dm("courrier règles")).body;
     expect(listedRules.text).toContain('Urgent');
-    const ruleTable = tableBlocks(listedRules.blocks).find((block: any) => block.type === 'data_table');
-    expect(ruleTable.rows[1].at(-1).element.text.text).toBe('Ouvrir');
+    expect(wideTableRows(listedRules.blocks)[0]?.actions[0].text.text).toBe('Ouvrir');
     expect((await h.dm("courrier rapport")).body.text).toContain('annulé');
     expect(vi.mocked(fetch)).not.toHaveBeenCalled();
   } finally { await h.close(); }
@@ -756,7 +765,7 @@ it('browses mail rules and prepares Add/Edit forms in place without changing rul
     expect(rules.method).toBe('chat.update');
     expect(rules.body.text).toContain('Priority 0');
     expect(rules.body.text).not.toContain('Priority 6');
-    expect(blocks(rules).find((block: any) => block.type === 'data_table').rows).toHaveLength(7);
+    expect(wideTableRows(rules.body.blocks)).toHaveLength(6);
     const next = await h.click(rules, "Suivant");
     expect(next.ts).toBe(rules.ts);
     expect(next.body.text).toContain('Priority 6');
@@ -939,9 +948,8 @@ it('bounds long rule summaries while retaining every page and action', async () 
   try {
     let page = await h.click(await h.click(await h.dm('menu'), "Tri des e-mails"), "Gérer les règles");
     for (let n = 0; n < 7; n++) {
-      const table = blocks(page).find((block: any) => block.type === 'data_table');
-      expect(table.rows.length).toBeLessThanOrEqual(7);
-      const text = [renderedText(page), ...table.rows.flat().map((cell: any) => cell.text ?? '')].join('\n');
+      expect(wideTableRows(page.body.blocks).length).toBeLessThanOrEqual(6);
+      const text = renderedText(page);
       expect(text.length).toBeLessThan(20_000);
       expect(text).toContain(`Long rule ${n * 6}`);
       expect(text).not.toContain("…");

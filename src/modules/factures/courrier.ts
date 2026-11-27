@@ -59,7 +59,7 @@ export async function courrierMenu(source: CourrierSource, actor: Actor, sql: Sq
     return {
       ...personalPage(`Consulter les messages d’un libellé dans ${escapeCardValue(connection.mailbox)}. Choisir une ligne autorise la lecture de ce seul libellé dans votre DM.`),
       table: {
-        columns: ['Libellé Gmail', 'Actions'], literalText: true, rows: labels.map(label => [label.name, '']),
+        columns: ['Libellé Gmail'], literalText: true, rows: labels.map(label => [label.name]),
         rowButtonColumn: 'Actions',
         rowButtons: labels.map(label => ({ label: 'Choisir', action: 'use_mail_label',
           value: valueOf({ connection_id: connection.connectionId, label_id: label.id }), bound: true })),

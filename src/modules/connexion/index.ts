@@ -19,8 +19,8 @@ export function createConnexionModule(team: string, modules: () => readonly Assi
       kind: 'Connexion', text: 'Ouvrez une application pour gérer son accès.',
       buttons: [{ label: 'Actualiser', action: 'core:navigate', value: 'connexion:main', bound: true }],
       table: {
-        columns: ['Application', 'Accès', 'État enregistré', 'Compte', 'Actions'], literalText: true,
-        rows: entries.map(({ item }) => [item.name, item.scope === 'personal' ? 'Personnel' : 'Équipe', item.status, item.account ?? '', '']),
+        columns: ['Application', 'Accès', 'État enregistré', 'Compte'], literalText: true,
+        rows: entries.map(({ item }) => [item.name, item.scope === 'personal' ? 'Personnel' : 'Équipe', item.status, item.account ?? '']),
         rowButtonColumn: 'Actions',
         rowButtons: entries.map(({ destination }) => ({ label: 'Ouvrir', action: 'core:navigate', value: destination, bound: true })),
       },

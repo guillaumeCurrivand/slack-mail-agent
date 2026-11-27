@@ -1,4 +1,4 @@
-import { tableBlocks } from './slack-blocks.js';
+import { tableBlocks, wideTableRows } from './slack-blocks.js';
 import { createHmac, generateKeyPairSync, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, afterEach, beforeAll, beforeEach, expect, it, vi } from 'vitest';
@@ -32,13 +32,22 @@ function findButton(message: Posted, label: string) {
   const direct = buttons(message).find(item => item.text.text.replace(/^(?:🧭|\?) /, '') === label)
     ?? buttons(message).find(item => item.type === 'static_select' && item.text.text.replace(/^\d+\. /, '').split(' / ').includes(label));
   if (direct) return direct;
+  const generated = parts(message).filter(block => block.type === 'actions').flatMap(block => block.elements)
+    .find(item => logicalAction(item.action_id) === 'core:controls' && item.text.text.replace(/^🧭 /, '') === label);
+  if (generated) return generated;
   const table = parts(message).find(block => block.type === 'data_table');
   const row = table?.rows.slice(1).find((candidate: any[]) => rowName(table.rows[0].map(cellValue), candidate) === label);
   return row?.find((cell: any) => cell.type === 'action_cell')?.element;
 }
 function button(message: Posted, label: string) { const found = findButton(message, label); expect(found, `${label}; available: ${buttons(message).map(item => item.text.text).join(', ')}`).toBeTruthy(); return found; }
 function cellValue(cell: any): string { return typeof cell === 'string' ? cell : Array.isArray(cell) ? cell.map(part => part.text).join('') : cell.type === 'rich_text' ? cell.elements.flatMap((section: any) => section.elements.map((part: any) => part.text)).join('') : cell.type === 'action_cell' ? cell.fallback.text : cell.text; }
-function bodyText(message: Posted): string { return parts(message).map(block => block.type === 'rich_text' ? block.elements.flatMap((section: any) => section.elements.map((part: any) => part.text)).join('\n') : ['table', 'data_table'].includes(block.type) ? block.rows.slice(1).map((row: any[]) => row.length === 3 && cellValue(block.rows[0][1]) === "Avant" ? `${cellValue(row[0])}: ${cellValue(row[2])}\n${cellValue(row[0])} (before): ${cellValue(row[1])}` : row.filter(cell => cell.type !== 'action_cell').map(cellValue).join(': ')).join('\n') : '').filter(Boolean).join('\n'); }
+function bodyText(message: Posted): string {
+  const text = parts(message).filter(block => block.type === 'rich_text' && !wideTableRows([block]).length)
+    .map(block => block.elements.flatMap((section: any) => section.elements.map((part: any) => part.text)).join('\n'));
+  const rows = tableRows(message).map(row => row.Champ !== undefined && (row.Avant !== undefined || row.Après !== undefined)
+    ? `${row.Champ}: ${row.Après ?? ''}\n${row.Champ} (before): ${row.Avant ?? ''}` : Object.values(row).join(': '));
+  return [...text, ...rows].filter(Boolean).join('\n');
+}
 const fieldLabel = (value: string) => ({ notes: "Notes", type: "Type", environment: "Environnement", usage: "Utilisation", role: "Rôle", description: "Description", referent: "Référent" })[value] ?? value;
 function visibleLinks(message: Posted): string[] {
   const urls: string[] = [];
@@ -47,7 +56,8 @@ function visibleLinks(message: Posted): string[] {
 }
 function tableRows(message: Posted): Record<string, string>[] {
   const table = parts(message).find(block => ['table', 'data_table'].includes(block.type));
-  return table ? table.rows.slice(1).map((row: any[]) => Object.fromEntries(row.filter(cell => cell.type !== 'action_cell').map((cell, index) => [cellValue(table.rows[0][index]), cellValue(cell)]))) : [];
+  return table ? table.rows.slice(1).map((row: any[]) => Object.fromEntries(row.filter(cell => cell.type !== 'action_cell').map((cell, index) => [cellValue(table.rows[0][index]), cellValue(cell)])))
+    : wideTableRows(message.body.blocks).map(row => row.fields);
 }
 async function recordId(message: Posted): Promise<string> {
   const control = buttons(message).find(item => /:confirm_|:open_confirmation_record$/.test(logicalAction(item.action_id) ?? ''));
@@ -57,9 +67,7 @@ async function recordId(message: Posted): Promise<string> {
   return lifecycle.value.split('|')[1].split(':')[1];
 }
 function comparisonValues(message: Posted) {
-  const table = parts(message).find(block => ['table', 'data_table'].includes(block.type));
-  expect(table?.rows[0].map(cellValue)).toEqual(["Champ", "Avant", "Après"]);
-  return Object.fromEntries(table.rows.slice(1).map((row: any[]) => [cellValue(row[0]), [cellValue(row[1]), cellValue(row[2])]]));
+  return Object.fromEntries(tableRows(message).map(row => [row.Champ, [row.Avant, row.Après]]));
 }
 function kind(message: Posted): string { return message.body.blocks[0]?.title?.text; }
 
@@ -191,7 +199,8 @@ it('renders native top-level tables with private row buttons, clickable saved li
     expect(bodyText(proposal) + proposal.body.text).not.toContain(id);
     expect(visibleLinks(proposal)).toEqual(['https://example.com/alpha?branch=main', 'http://docs.example.com/alpha']);
     await h.click(proposal, "Confirmer la création");
-    const list = await h.dm('documentation projects');
+    const expanded = await h.dm('documentation projects');
+    const list = await h.click(expanded, 'Vue tableau');
     const table = tableBlocks(list.body.blocks).find((block: any) => block.type === 'data_table');
     expect(table.rows[0].map(cellValue)).toEqual(["Nom", "Description", "Liens", "Actions"]);
     expect(table.rows).toHaveLength(2);
@@ -243,7 +252,7 @@ it('labels current relationship names in saved comparisons without changing iden
   } finally { await h.app.close(); }
 });
 
-it('preserves all long relationship comparison values across native table pages within Slack limits', async () => {
+it('preserves all long relationship comparison values across pages within Slack limits', async () => {
   const h = await harness();
   try {
     const urls = Array.from({ length: 12 }, (_, i) => `https://example.com/${'a'.repeat(375)}${String(i).padStart(2, '0')}`);
@@ -262,12 +271,11 @@ it('preserves all long relationship comparison values across native table pages 
     const before = (await sql.query('SELECT created_at,applied_at FROM documentation_confirmations WHERE id=$1', [confirmation])).rows[0];
     let page = await h.click(proposal, "Examiner les valeurs"), original = '', replacement = '', pages = 0;
     while (true) {
-      const table = tableBlocks(page.body.blocks).find((block: any) => block.type === 'data_table');
-      expect(table).toBeTruthy();
-      const nativeSize = JSON.stringify(table.rows);
-      expect(nativeSize).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
-      expect(table.rows.flat().reduce((sum: number, cell: any) => sum + cellValue(cell).length, 0)).toBeLessThanOrEqual(20_000);
-      for (const row of table.rows.slice(1)) { original += cellValue(row[1]); replacement += cellValue(row[2]); }
+      const rows = tableRows(page);
+      expect(rows.length).toBeGreaterThan(0);
+      expect(JSON.stringify(rows)).not.toMatch(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/);
+      expect(rows.flatMap(row => Object.values(row)).reduce((sum, cell) => sum + cell.length, 0)).toBeLessThanOrEqual(20_000);
+      for (const row of rows) { original += row.Avant ?? ''; replacement += row.Après ?? ''; }
       pages++;
       if (!buttons(page).some(control => control.text.text === "Valeurs suivantes")) break;
       page = await h.click(page, "Valeurs suivantes");
@@ -562,10 +570,9 @@ it('pages complete list values while retaining the correct record action on ever
     let current = await h.dm('documentation projects');
     const seen: string[] = [];
     for (let page = 0; page < 4; page++) {
-      const table = parts(current).find(block => block.type === 'data_table');
-      for (const row of table.rows.slice(1)) {
-        const name = cellValue(row[0]); seen.push(name);
-        expect(cellValue(row[1])).toBe(name + 'D'.repeat(1400));
+      for (const row of tableRows(current)) {
+        const name = row.Nom!; seen.push(name);
+        expect(row.Description).toBe(name + 'D'.repeat(1400));
         const detail = await h.click(current, name);
         expect(bodyText(detail)).toContain(name + 'D'.repeat(1400));
       }
@@ -1826,6 +1833,20 @@ it('plans with headings and composes private Slack answers from only the matchin
     expect(access.body.text).toContain('private-access-note');
     expect(evidence).toHaveLength(beforeAccess);
     expect(JSON.stringify(evidence)).not.toContain('private-access-note');
+
+    const description = `Unicité ${'a'.repeat(1200)}\n${'b'.repeat(20_000)}🎉 dernière ligne`;
+    project.push(['Projet avec une description longue', '', description]);
+    const firstResultPage = await h.dm('documentation chercher Unicité');
+    const beforePaging = vi.mocked(fetch).mock.calls.length;
+    const nextResultPage = await h.click(firstResultPage, 'Tableau suivant');
+    expect(nextResultPage.ts).toBe(firstResultPage.ts);
+    expect(vi.mocked(fetch)).toHaveBeenCalledTimes(beforePaging);
+    const pieces = [firstResultPage, nextResultPage].flatMap(page => wideTableRows(page.body.blocks));
+    expect(pieces.map(piece => piece.fields.Valeur).join('')).toBe(description);
+    expect(pieces.every(piece => piece.fields.Ligne === 'Projet avec une description longue')).toBe(true);
+    expect(pieces[0]!.actions[0].value).toBe(pieces[1]!.actions[0].value);
+    expect(visibleLinks(firstResultPage)).toEqual(visibleLinks(nextResultPage));
+    expect(visibleLinks(nextResultPage)[0]).toContain('range=C');
   } finally { await h.app.close(); }
 });
 

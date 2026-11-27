@@ -82,9 +82,8 @@ function results(provider: Workbook) {
       const name = display(row.cells[nameColumn(source.sheet.headers, source.tab)]) || 'Ligne ' + (row.index + 1);
       const value = display(row.cells[column]);
       const rich = cellView(row.cells[column]!);
-      const excerpt = value.length > 1200 ? value.slice(0, 1200) + '… (voir la cellule)'
-        : Array.isArray(rich) && rich.some(part => part.url) ? rich : value || '(vide)';
-      rows.push([name, source.sheet.headers[column]!, excerpt, sourceCell(provider, source, letters(column) + (row.index + 1))]);
+      const content = Array.isArray(rich) && rich.some(part => part.url) ? rich : value || '(vide)';
+      rows.push([name, source.sheet.headers[column]!, content, sourceCell(provider, source, letters(column) + (row.index + 1))]);
       recordChoices.push({ label: 'Ouvrir', page: 'sheet_' + source.tab + '_' + row.key });
     },
     page(summary: string): MenuPage {
@@ -171,13 +170,18 @@ const citation = (source: TableCell) => Array.isArray(source) && source[0]?.url
   ? `[${source[0].text}](${source[0].url})` : cellText(source);
 
 const composed = z.strictObject({ answer: z.string(), sources: z.array(z.number().int()) });
+const mentionCellPreview = (value: TableCell) => {
+  const text = cellText(value);
+  return text.length > 1200 ? text.slice(0, 1200) + '… (voir la cellule)' : text;
+};
 
 /** Only a private mention can reach this paid step. The core job checkpoints its answer before delivery. */
 export async function workbookReply(page: MenuPage, question: string, config: QuestionAIConfig, actor: Actor, budget: Budget): Promise<string> {
   if (!page.table?.rows.length) return page.text.includes('0 ligne(s)') ? 'Je n’ai trouvé aucune ligne correspondant à votre question.' : page.text;
   const count = page.table.columns.includes('Nombre');
   const rows = page.table.rows;
-  const facts = rows.map(([name, field, value], i) => ({ id: i + 1, subject: cellText(name!), field: cellText(field!), value: cellText(value!) }));
+  // Keep single-reply previews bounded independently of the complete values in interactive lists.
+  const facts = rows.map(([name, field, value], i) => ({ id: i + 1, subject: cellText(name!), field: cellText(field!), value: mentionCellPreview(value!) }));
   const input = JSON.stringify({ question, kind: count ? 'row counts by filter' : 'field values', facts });
   if (config.key && input.length <= 16000 && !facts.some(f => /acces|vault|credential|identifiant|password|secret|token|mot de passe|cle privee|private key|api key|cle api/.test(fold(f.field)))) {
     try {
@@ -193,9 +197,9 @@ export async function workbookReply(page: MenuPage, question: string, config: Qu
       }
     } catch { /* Keep the verified cells available if generation fails or its allowance is spent. */ }
   }
-  const lines = rows.map(([name, field, value, source]) => {
+  const lines = rows.map(([name, field, , source], i) => {
       const link = citation(source!);
-      const subject = cellText(name!), heading = cellText(field!), fact = cellText(value!);
+      const subject = cellText(name!), heading = cellText(field!), fact = facts[i]!.value;
       if (count) return `Dans l’onglet ${subject}, ${fact} ${fact === '1' ? 'ligne correspond' : 'lignes correspondent'} au filtre « ${heading} ». ${link}`;
       if (heading.toLowerCase() === 'description' && fact !== '(vide)') return `${fact}\n${link}`;
       return `${subject} · ${heading} : ${fact === '(vide)' ? 'non renseigné' : fact}. ${link}`;

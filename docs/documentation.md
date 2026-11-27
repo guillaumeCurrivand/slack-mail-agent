@@ -290,7 +290,7 @@ Natural-language edits and structured edits enter the same saved confirmation wo
 
 Status: the User confirmed the complete design and authorized implementation. Native data tables, visible row controls, readable values and relationship names are implemented locally; live Slack rendering and production deployment remain unverified.
 
-- Use Slack-native tables for inventory lists and question results, Field/Value tables for record details, and Field/Before/After tables for edit confirmations and history. Present long descriptions as readable paragraphs.
+- Use the [shared list views](product-spec.md#interactive-message-presentation) for inventory, search, and workbook results. Preserve Field/Value headings in details and Field/Before/After headings in comparisons. Long fields wrap in the full-width view and continue across pages when necessary.
 - Hide stable record identifiers in ordinary screens, including confirmations and history. Show human-readable record names and relationship context, with named controls for opening related records. Distinguish duplicate names using parent/context labels. Identifiers remain available in explicit technical command instructions where necessary; internal identity and ownership checks remain unchanged.
 - Keep up to 40 records per list page. Use the record-kind columns below; simpler catalogs can use fewer columns. Complete saved information remains accessible in details.
 

@@ -1,4 +1,4 @@
-import { tableBlocks } from './slack-blocks.js';
+import { tableBlocks, wideTableRows } from './slack-blocks.js';
 import { createHash, createHmac, randomUUID } from 'node:crypto';
 import { PGlite } from '@electric-sql/pglite';
 import { afterAll, beforeAll, beforeEach, expect, it } from 'vitest';
@@ -93,11 +93,14 @@ async function harness() {
     expect(response.statusCode).toBe(200); await run(`slack:${id}`);
     return posts.filter(post => post.channel === actor.channel).at(-1)!;
   };
-  // Workflow tests identify compact table controls by their channel's row name.
-  const buttons = (post: (typeof posts)[number]) => tableBlocks(post.blocks).flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements
-    : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => ({ ...cell.element,
-      text: { ...cell.element.text, text: `${cell.element.text.text.replace(/^[☐☑] /, '')} ${row[0].text}` },
-    }))) : []);
+  // Workflow tests identify row controls by their channel in either presentation.
+  const named = (element: any, channel: string) => ({ ...element,
+    text: { ...element.text, text: `${element.text.text.replace(/^[☐☑] /, '')} ${channel}` } });
+  const buttons = (post: (typeof posts)[number]) => [
+    ...tableBlocks(post.blocks).flatMap(block => block.child_blocks ?? [block]).flatMap(block => block.type === 'actions' ? block.elements
+      : block.type === 'data_table' ? block.rows.slice(1).flatMap((row: any[]) => row.filter(cell => cell.type === 'action_cell').map(cell => named(cell.element, row[0].text))) : []),
+    ...wideTableRows(post.blocks).flatMap(row => row.actions.map(action => named(action, row.fields.Canal!))),
+  ];
   const click = async (post: (typeof posts)[number], label: string, actor = alice, timestamp = post.ts) => {
     let current = post;
     for (let page = 0; page < 30 && !buttons(current).some(button => button.text?.text.replace(/^(?:🧭|\?) /, '') === label); page++) {
@@ -312,7 +315,7 @@ it('does not repeat uncertain effects and requires exact actor/DM-bound confirma
   expect(attention.ts).toBe(status.ts);
   expect(JSON.stringify(attention.blocks)).toContain('signer.done');
   expect(JSON.stringify(attention.blocks)).not.toContain('signature_request.done');
-  expect(tableBlocks(attention.blocks).find(block => block.type === 'data_table').rows).toHaveLength(2);
+  expect(wideTableRows(attention.blocks)).toHaveLength(1);
   const proposal = await h.click(attention, 'Examiner #sales');
   expect(proposal.ts).toBe(status.ts);
   expect(proposal.text).toContain('Contrat'); expect(proposal.text).toContain('doublon');

@@ -8,13 +8,17 @@ export const mapRowActions = (row: RowActions, map: (button: Button) => Button):
   Array.isArray(row) ? row.map(map) : row && map(row);
 export type MessageTable = { columns: string[]; rows: TableCell[][]; literalText?: boolean; rowButtons?: RowActions[]; rowButtonColumn?: string | string[]; rowButtonFallback?: string };
 export type MessageSelect = { label: string; action: string; options: Array<{ label: string; value: string }> };
-export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; selects?: MessageSelect[] };
+export type AgentMessage = { kind?: string; text: string; buttons?: Button[]; buttonPaging?: boolean; resourceLinks?: Array<{ label: string; url: string }>; table?: MessageTable; tablePaging?: boolean; tableView?: 'wide' | 'compact'; selects?: MessageSelect[] };
 export const validResourceUrl = (value: string) => {
   try { const url = new URL(value); return ['http:', 'https:'].includes(url.protocol) && !url.username && !url.password && !/[\s<>\\]/.test(value); }
   catch { return false; }
 };
 export const cellSize = (cell: TableCell) => typeof cell === 'string' ? cell.length : cell.reduce((n, part) => n + part.text.length + (part.url?.length ?? 0), 0);
 export const cellText = (cell: TableCell) => typeof cell === 'string' ? cell : cell.map(part => part.text).join('');
+export const prefersWideTable = (table: MessageTable) => {
+  const long = (cell: TableCell) => { const text = cellText(cell); return text.length > 80 || /[\r\n]/.test(text); };
+  return table.columns.some(long) || table.rows.some(row => row.some(long));
+};
 export const navigationCue = '🧭';
 export const helpCue = '?';
 export const buttonGroup = (button: Button): 'action' | 'navigation' | 'help' => {
@@ -48,7 +52,7 @@ export interface Messenger {
 }
 export const menuButton: Button = { label: 'Menu', action: 'menu', value: '', scope: 'core' };
 // Slack accepts more elements per actions block but may hide extras behind "+N autres".
-const VISIBLE_ACTION_BUTTONS = 5;
+export const VISIBLE_ACTION_BUTTONS = 5;
 /** Slack explicitly rejected the message, so delivery can be retried. */
 export class SlackDeliveryRejected extends Error {
   constructor(message = 'Slack delivery was rejected.', readonly code?: string, readonly retryAfter?: number) { super(message); }
@@ -241,39 +245,68 @@ export class Slack implements Messenger {
       const selectors = cardBlocks.filter(block => block.type === 'actions' && block.elements.some((element: any) => element.type === 'static_select'));
       const controls = [...selectors, ...cardBlocks.filter(block => ['actions', 'divider'].includes(block.type) && !selectors.includes(block))];
       const body = cardBlocks.filter(block => !['actions', 'divider'].includes(block.type));
-      blocks.splice(0);
+      if (message.kind) blocks.splice(0);
       if (message.kind) blocks.push({ type: 'container', title: { type: 'plain_text', text: message.kind.slice(0, 150) }, width: 'full', has_header_divider: true, child_blocks: body });
+      const cellParts = (cell: TableCell): RichTextPart[] => typeof cell === 'string'
+        ? table.literalText ? [{ type: 'text', text: cell || ' ' }] : linkedParts(cell)
+        : cell.flatMap(part => part.url && validResourceUrl(part.url)
+          ? [{ type: 'link', text: part.text, url: part.url }] : linkedParts(part.text));
       const cellBlock = (cell: TableCell) => {
-        if (table.literalText && typeof cell === 'string') return { type: 'raw_text', text: cell || ' ' };
-        const parts = typeof cell === 'string' ? linkedParts(cell) : cell.flatMap(part => part.url && validResourceUrl(part.url)
-          ? [{ type: 'link' as const, text: part.text, url: part.url }] : linkedParts(part.text));
+        const parts = cellParts(cell);
         return parts.some(part => part.type === 'link') ? { type: 'rich_text', elements: [{ type: 'rich_text_section', elements: parts }] } : { type: 'raw_text', text: cellText(cell) || ' ' };
       };
-      const dataRows = table.rows.map((row, index) => {
-        const cells = row.map(cellBlock);
-        const actions = headings.map((_, column) => {
-          const button = controlsByRow?.[index]?.[column];
-          return button ? { type: 'action_cell', element: {
-            type: 'button', text: { type: 'plain_text', text: buttonDisplayLabel(button).slice(0, 75) },
-            action_id: `${button.action}~button-${buttons.length + index * headings.length + column}`, value: button.value,
-            ...(button.style ? { style: button.style } : {}),
-          }, fallback: { type: 'raw_text', text: rowButtonFallback } } : { type: 'raw_text', text: '—' };
+      const rowButton = (button: Button, row: number, column: number) => {
+        if (logicalAction(button.action) !== button.action) throw new SlackDeliveryRejected('Invalid logical button action.');
+        return {
+          type: 'button', text: { type: 'plain_text', text: buttonDisplayLabel(button).slice(0, 75) },
+          action_id: `${button.action}~button-${buttons.length + row * headings.length + column}`, value: button.value,
+          ...(button.style ? { style: button.style } : {}),
+        };
+      };
+      if (message.tableView === 'wide') {
+        const elements: Array<{ type: 'rich_text_section'; elements: RichTextPart[] }> = [];
+        const flushRows = () => {
+          if (elements.length) blocks.push({ type: 'rich_text', elements: elements.splice(0) });
+        };
+        for (const [index, row] of table.rows.entries()) {
+          const fields = row.flatMap<RichTextPart>((cell, column) => cellText(cell) ? [
+            { type: 'text', text: `${table.columns[column]} · `, style: { bold: true } },
+            ...cellParts(cell), { type: 'text', text: '\n' },
+          ] : []);
+          elements.push({ type: 'rich_text_section', elements: [...fields, { type: 'text', text: fields.length ? '\n' : '—\n\n' }] });
+          const actions = controlsByRow?.[index]?.map((button, column) => rowButton(button, index, column)) ?? [];
+          if (actions.length) {
+            flushRows();
+            for (let start = 0; start < actions.length; start += VISIBLE_ACTION_BUTTONS) {
+              blocks.push({ type: 'actions', elements: actions.slice(start, start + VISIBLE_ACTION_BUTTONS) });
+            }
+          }
+        }
+        flushRows();
+      } else {
+        const dataRows = table.rows.map((row, index) => {
+          const cells = row.map(cellBlock);
+          const actions = headings.map((_, column) => {
+            const button = controlsByRow?.[index]?.[column];
+            return button ? { type: 'action_cell', element: rowButton(button, index, column),
+              fallback: { type: 'raw_text', text: rowButtonFallback } } : { type: 'raw_text', text: '—' };
+          });
+          return [...cells, ...actions];
         });
-        return [...cells, ...actions];
-      });
-      const dataTable = { type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
-        rows: [[...table.columns, ...headings].map(column => ({ type: 'raw_text', text: column || ' ' })), ...dataRows] };
-      // A single, unaligned layout item fills the available row, even for short content.
-      // Layout fallbacks allow stable blocks only, not data_table or action_cell.
-      // Rich text retains all rows/links without the legacy table's smaller limits.
-      const fallback = { type: 'rich_text', elements: dataTable.rows.map(row => ({ type: 'rich_text_section',
-        elements: [...row.flatMap((cell: any, index: number) => [
-          ...(index ? [{ type: 'text', text: ' | ' }] : []),
-          ...(cell.type === 'rich_text' ? cell.elements[0].elements : [{ type: 'text', text: cell.type === 'action_cell' ? cell.fallback.text : cell.text }]),
-        ]), { type: 'text', text: '\n' }],
-      })) };
-      blocks.push({ type: 'layout', label: message.kind?.slice(0, 150) ?? 'Résultats',
-        rows: [{ items: [{ width: 'wide', block: dataTable }] }], fallback: [fallback] });
+        const dataTable = { type: 'data_table', caption: message.kind ?? 'Résultats', page_size: Math.min(100, table.rows.length),
+          rows: [[...table.columns, ...headings].map(column => ({ type: 'raw_text', text: column || ' ' })), ...dataRows] };
+        // A single, unaligned layout item fills the available row, even for short content.
+        // Layout fallbacks allow stable blocks only, not data_table or action_cell.
+        // Rich text retains all rows/links without the legacy table's smaller limits.
+        const fallback = { type: 'rich_text', elements: dataTable.rows.map(row => ({ type: 'rich_text_section',
+          elements: [...row.flatMap((cell: any, index: number) => [
+            ...(index ? [{ type: 'text', text: ' | ' }] : []),
+            ...(cell.type === 'rich_text' ? cell.elements[0].elements : [{ type: 'text', text: cell.type === 'action_cell' ? cell.fallback.text : cell.text }]),
+          ]), { type: 'text', text: '\n' }],
+        })) };
+        blocks.push({ type: 'layout', label: message.kind?.slice(0, 150) ?? 'Résultats',
+          rows: [{ items: [{ width: 'wide', block: dataTable }] }], fallback: [fallback] });
+      }
       for (let index = 0; index < controls.length; index += 10) blocks.push({ type: 'container', title: { type: 'plain_text', text: index ? 'Autres actions' : 'Actions' }, width: 'full', child_blocks: controls.slice(index, index + 10) });
     }
     if (blocks.length > 50) throw new SlackDeliveryRejected('Message has too many Slack blocks.');

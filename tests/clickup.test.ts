@@ -171,7 +171,7 @@ it('shows every status toggle in a table without paging the action buttons', asy
   expect(first.table?.columns).toEqual(['Statut', 'Inclus', 'Disponibilité']);
   expect(first.table?.rows).toHaveLength(4);
   expect(first.table?.rowButtons).toHaveLength(4);
-  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu']);
+  expect(first.buttons?.map(button => button.label)).toEqual(['Voir mes tâches', 'Actualiser les statuts', 'Réinitialiser le filtre', 'Fermer', 'Menu', 'Lire en pleine largeur']);
   const choice = first.table!.rowButtons![0]!;
   expect(choice.label).toBe('☐ Ajouter');
   expect(choice.action).toBe('clickup:status_add');
@@ -583,7 +583,8 @@ it('keeps more than 100 status choices reachable and preserves a saved filter af
   const seen = new Set<string>();
   const checkPage = () => {
     const picker = h.messages.at(-1)!;
-    expect(picker.buttons?.some(button => button.action === 'core:controls')).toBe(false);
+    expect(picker.buttons?.filter(button => button.action === 'core:controls').map(button => button.label))
+      .toEqual([picker.tableView === 'wide' ? 'Vue tableau' : 'Lire en pleine largeur']);
     expect(picker.table!.rows).toHaveLength(10);
     expect(picker.table!.rowButtons!.every(button => button?.label === '☑ Retirer')).toBe(true);
     for (const row of picker.table!.rows) seen.add(cellText(row[0]!));
