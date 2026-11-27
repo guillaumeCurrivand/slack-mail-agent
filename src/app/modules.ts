@@ -17,9 +17,13 @@ import { createYousignModule } from '../modules/yousign/index.js';
 import { readDevelopmentConfig } from '../modules/development/config.js';
 import { createDevelopmentModule } from '../modules/development/index.js';
 import { createFacturesModule, readArchiveConfig, readFacturesConfig } from '../modules/factures/index.js';
+import { createConnexionModule } from '../modules/connexion/index.js';
+import type { AssistantModule } from '../core/modules.js';
 
 export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv = process.env) {
+  const enabled: AssistantModule[] = [];
   const factories = {
+    connexion: () => createConnexionModule(config.SLACK_TEAM_ID, () => enabled),
     hyperdx: () => createHyperdxModule(readHyperdxConfig(env), config.SLACK_TEAM_ID, config.SLACK_BOT_TOKEN),
     factures: () => {
       const courrier = config.enabledModules.includes('mail') ? createMailFacturesSource(readMailConfig(env)) : undefined;
@@ -34,8 +38,10 @@ export function createModules(config: Config, sql: Sql, env: NodeJS.ProcessEnv =
     yousign: () => createYousignModule({ ...readYousignConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),
     development: () => createDevelopmentModule({ ...readDevelopmentConfig(env), SLACK_TEAM_ID: config.SLACK_TEAM_ID, SLACK_BOT_TOKEN: config.SLACK_BOT_TOKEN }, sql),
   };
-  return new ModuleRegistry(config.enabledModules.map(id => {
+  for (const id of config.enabledModules) {
     if (!Object.hasOwn(factories, id)) throw new Error(`Unknown enabled module: ${id}`);
-    return { ...factories[id as keyof typeof factories](), ...(id === 'mail' ? { aliases: ['courrier'] } : {}), normalizeText: (text: string) => frenchCommand(id, text) };
-  }), mentionAssistant(readQuestionConfig(env)));
+    enabled.push({ ...factories[id as keyof typeof factories](), ...(id === 'mail' ? { aliases: ['courrier'] } : {}),
+      normalizeText: (text: string) => frenchCommand(id, text) });
+  }
+  return new ModuleRegistry(enabled, mentionAssistant(readQuestionConfig(env)));
 }

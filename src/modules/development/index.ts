@@ -88,6 +88,9 @@ export function createDevelopmentModule(config: DevelopmentConfig, database: Dat
 
   return {
     id: 'development', name: 'Développement', description: 'Analyse et correction des tickets de maintenance avec un worker Cursor local',
+    async connections(actor) {
+      return actor.team === config.SLACK_TEAM_ID ? [{ name: 'ClickUp et Cursor · Développement', scope: 'workspace', status: 'Intégration configurée', page: 'main' }] : [];
+    },
     help: developmentHelp,
     async initialize(sql) {
       for (const statement of developmentSchema.split(';').map(value => value.trim()).filter(Boolean)) await sql.query(statement);

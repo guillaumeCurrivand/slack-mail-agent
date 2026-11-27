@@ -56,6 +56,9 @@ export function createYousignModule(config: YousignConfig, database: Database, d
 
   return {
     id: 'yousign', name: 'Yousign', description: 'Recevoir les notifications Yousign dans des canaux partagés',
+    async connections(actor) {
+      return actor.team === identity.team ? [{ name: 'Yousign', scope: 'workspace', status: 'Intégration configurée', page: 'main' }] : [];
+    },
     help: yousignHelp,
     menuActions: ['channel_add', 'channel_remove', 'channel_page', 'status_page', 'attention_page', 'review', 'retry', 'confirm', 'cancel'],
     async initialize(sql) { await store(sql).initialize(); },

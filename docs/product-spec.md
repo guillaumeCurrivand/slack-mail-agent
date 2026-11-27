@@ -12,6 +12,8 @@ The optional [Factures module](factures.md) pilots monthly Anthropic billing col
 
 In a private DM, a user can also authorize Factures to read one Gmail label through their existing Courrier connection. Courrier retains credential ownership and the personal report is visible only to that user. Scheduled deliveries and Drive archival use the dedicated mailbox. See [the Factures contract](factures.md#utiliser-ma-boîte-courrier).
 
+The optional [Connexion module](connexion.md) gives each user a private overview of their registered accounts and accessible team integrations. Its controls open the responsible module's management screen. Connection, replacement and disconnection retain the originating module's authorization and confirmation rules.
+
 This document owns shared routing, navigation, presentation, access and spending safeguards, plus the Mail Sorter contract. Start with the [module overview](../README.md#modules-and-project-structure) for setup and usage. Module-specific guides/contracts are [Mail Sorter](mail.md), [Documentation](documentation.md), [ClickUp](clickup.md), [Yousign](yousign.md) and [Development](development.md). Their implementation status does not establish successful production deployment.
 
 ## Questions addressed to Mayassistant

@@ -1,5 +1,11 @@
 # Updating production
 
+## Activation du module Connexion
+
+Déployez le commit qui contient [Connexion](connexion.md), puis ajoutez `connexion` à `ENABLED_MODULES` dans le `.env` privé en gardant les autres modules. Redémarrez l’app. Les autorisations existantes suffisent. Aucune autre variable et aucune migration manuelle ne sont nécessaires.
+
+Après le redémarrage, envoyez `connexion` en DM. Vérifiez les états pour votre compte et ouvrez Gmail ou ClickUp avec **Ouvrir**. Le module propriétaire doit afficher son écran de gestion et demander sa confirmation habituelle avant une déconnexion.
+
 ## Activation du module Factures
 
 Déployez la version qui contient le module avant d’ajouter `factures` à `ENABLED_MODULES`. Pour activer le pilote, configurez l’accès Gmail en lecture seule, le libellé et les utilisateurs autorisés dans le `.env` privé. Le [guide Factures](factures.md#configuration) décrit les variables et les contrôles de démarrage. Les tables sont créées automatiquement au démarrage. Les permissions Slack existantes couvrent les messages privés.

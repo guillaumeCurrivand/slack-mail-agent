@@ -24,6 +24,9 @@ export function createHyperdxModule(config: ReturnType<typeof readHyperdxConfig>
   const directory = new SlackChannels(token, fetcher);
   return {
     id: 'hyperdx', name: 'Bilan HyperDX', description: 'Recevoir le bilan quotidien des erreurs et avertissements', help: { text: guide },
+    async connections(actor) {
+      return actor.team === team ? [{ name: 'HyperDX', scope: 'workspace', status: 'Intégration configurée', page: 'main' }] : [];
+    },
     ...channelMenu(team, directory, guide),
     async initialize(sql) {
       await sql.query(`CREATE TABLE IF NOT EXISTS hyperdx_channels (

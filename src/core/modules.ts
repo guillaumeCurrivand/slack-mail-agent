@@ -11,6 +11,8 @@ export type JobPayload = Record<string, unknown>;
 export type RoutedJob = { module: string; payload: JobPayload };
 export type ModuleContext = { sql: Sql; budget: Budget; messenger: Messenger; requestedAt: Date };
 export type IntegrationContext = Pick<ModuleContext, 'sql' | 'messenger' | 'requestedAt'>;
+/** Private connection summary and an existing module page that manages it. */
+export type ConnectionItem = { name: string; scope: 'personal' | 'workspace'; status: string; account?: string; page: string };
 const namespaceMessage = (message: MenuPage, moduleId: string): MenuPage => {
   const button = (control: Button): Button => ({ ...control,
     action: control.action.includes(':') ? control.action : `${control.scope === 'core' ? 'core' : moduleId}:${control.action}`,
@@ -29,6 +31,7 @@ export interface AssistantModule {
   aliases?: readonly string[];
   normalizeText?(text: string): string;
   menu?(actor: Actor, page: string, context: Pick<ModuleContext, 'sql'>): Promise<MenuPage>;
+  connections?(actor: Actor, sql: Sql): Promise<ConnectionItem[]>;
   menuActions?: readonly string[];
   /** Explicit opt-in to signed channel commands/actions; access is checked again at dispatch. */
   channelActions?: readonly string[];

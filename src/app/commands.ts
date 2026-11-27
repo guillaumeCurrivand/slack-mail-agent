@@ -6,6 +6,7 @@ export function frenchCommand(module: string, text: string): string {
     yousign: { aide: 'help', canaux: 'channels', statut: 'status' },
     hyperdx: { aide: 'help', canaux: 'channels' },
     factures: { aide: 'help' },
+    connexion: { '': 'menu', aide: 'help', statut: 'menu', actualiser: 'menu' },
     development: { aide: 'help', projets: 'projects' },
     documentation: { aide: 'help', historique: 'history', archives: 'archived', archivés: 'archived' },
   };

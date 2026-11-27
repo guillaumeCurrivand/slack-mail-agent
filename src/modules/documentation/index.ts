@@ -143,6 +143,9 @@ export function createDocumentationModule(sql: Sql, aiConfig: QuestionAIConfig =
       return workbookReply(result, question, aiConfig, actor, context.budget);
     } } : {}),
     id: 'documentation', name: 'Documentation', description: "Créer, modifier et consulter l’inventaire partagé et son historique",
+    async connections(actor) {
+      return workbook?.allowed(actor) ? [{ name: 'Google Sheets · Documentation', scope: 'workspace', status: 'Classeur configuré', page: 'main' }] : [];
+    },
     help: workbook ? {
       text: workbookHelp + '\n\nInventaire structuré (PostgreSQL)\n' + documentationHelp.text,
       topics: [{ label: 'Classeur Google Sheets', text: workbookHelp }, ...documentationHelp.topics],

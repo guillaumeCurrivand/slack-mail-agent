@@ -36,6 +36,11 @@ export function createClickupModule(config: ClickupConfig, sql: Sql, dependencie
     async initialize(database) { for (const statement of (clickupSchema + statusSchema).split(';').filter(part => part.trim())) await database.query(statement); },
     registerRoutes(app) { registerClickupRoutes(app, config.PUBLIC_URL, oauth); },
     async menu(actor, _page, context) { return connectionPage(await new ClickupStore(context.sql).connection(actor)); },
+    async connections(actor, database) {
+      const connection = await new ClickupStore(database).connection(actor);
+      return [{ name: 'ClickUp', scope: 'personal', status: connection ? 'Connecté' : 'À connecter',
+        account: connection?.identity.email, page: 'main' }];
+    },
     async cleanup(pool) {
       const owners = await pool.query('SELECT DISTINCT owner FROM clickup_connections UNION SELECT DISTINCT owner FROM clickup_confirmations UNION SELECT DISTINCT owner FROM clickup_scans UNION SELECT DISTINCT owner FROM clickup_oauth_states UNION SELECT DISTINCT owner FROM clickup_limits UNION SELECT DISTINCT owner FROM clickup_status_editors UNION SELECT DISTINCT owner FROM clickup_status_events');
       for (const row of owners.rows) {

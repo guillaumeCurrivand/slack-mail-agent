@@ -27,6 +27,11 @@ export function createMailModule(config: MailConfig & { PUBLIC_URL: string }, sq
     workOperations: [{ key: SORT_OPERATION, label: "Trier la boîte de réception", commands: ['sort', 'sort my inbox', 'sort my mail'], action: 'sort_inbox' }],
     menuActions: ['sort_inbox', 'form_prepare', 'form_open'],
     forms: forms.forms,
+    async connections(actor, database) {
+      const { connection } = await new Store(database).load(actor);
+      return [{ name: 'Gmail · Courrier', scope: 'personal', status: connection ? 'Connecté' : 'À connecter',
+        account: connection?.email, page: 'connection' }];
+    },
     async menu(actor, page, context) {
       const state = await new Store(context.sql).load(actor);
       return mailMenu(state, page);

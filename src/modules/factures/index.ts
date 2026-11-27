@@ -1,5 +1,5 @@
 import type { Actor, IntegrationActor } from '../../core/identity.js';
-import type { AssistantModule } from '../../core/modules.js';
+import type { AssistantModule, ConnectionItem } from '../../core/modules.js';
 import type { MenuPage } from '../../core/navigation.js';
 import { escapeCardValue, SlackDeliveryRejected } from '../../core/slack.js';
 import { JobStore, type Sql } from '../../core/store.js';
@@ -83,6 +83,21 @@ export function createFacturesModule(config: ReturnType<typeof readFacturesConfi
   return {
     id: 'factures', name: 'Factures', description: 'Retrouver les e-mails de facturation et les PDF archivés', help: { text: guide },
     menuActions: sourceActions,
+    async connections(actor, sql) {
+      const entries: ConnectionItem[] = [];
+      if (!privateAccess(actor)) return entries;
+      if (courrier) {
+        const [source, connection] = await Promise.all([selectedSource(actor, sql), courrier(actor, sql)]);
+        const status = !connection ? 'Gmail à connecter dans Courrier' : source?.connection_id === connection.connectionId
+          ? 'Libellé autorisé' : 'Libellé à choisir';
+        entries.push({ name: 'Gmail · Factures', scope: 'personal', status, account: connection?.mailbox, page: 'personal' });
+      }
+      if (config && pilotAccess(actor)) {
+        entries.push({ name: 'Gmail · Factures de production', scope: 'workspace', status: 'Configuré par l’administrateur',
+          account: config.mailbox, page: 'main' });
+      }
+      return entries;
+    },
     async menu(actor, page, { sql }) {
       if (!privateAccess(actor) || (!courrier && !pilotAccess(actor))) return { kind: 'Factures', text: notAllowed };
       if (courrier && (page === 'personal' || page === 'personal_labels')) return courrierMenu(courrier, actor, sql, page === 'personal_labels');
