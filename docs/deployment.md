@@ -13,6 +13,8 @@ curl -fsS --retry 10 --retry-all-errors http://127.0.0.1:3001/ready
 
 Commencez par la [vérification en DM](factures.md#vérification-après-activation) avant d’activer le récapitulatif mensuel.
 
+La sélection d’un libellé dans une boîte connectée à Courrier utilise les réglages et permissions existants. Activez `mail` et `factures`. Au démarrage, l’app crée la table de sélection personnelle. Vérifiez **Factures → Utiliser ma boîte Courrier** et le retrait du libellé dans un DM. Voir [le parcours Courrier](factures.md#utiliser-ma-boîte-courrier).
+
 ## Mention replies
 
 Use the existing message.im, message.channels and message.groups subscriptions in the [Slack manifest](../slack-manifest.json). In a channel, invite the bot and select its Slack mention from autocomplete. No new scopes, database migration or environment variables are required. General AI questions use the existing OpenAI configuration. Private Documentation answers also need the workbook setup below.

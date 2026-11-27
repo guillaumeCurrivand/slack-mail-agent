@@ -28,6 +28,11 @@ export function readFacturesConfig(env: NodeJS.ProcessEnv) {
 export type FacturesConfig = ReturnType<typeof readFacturesConfig>;
 type PdfPart = { size: number; data?: string; attachmentId?: string };
 export type BillingEmail = { id: string; provider: string; date: Date; source: string; document: 'pdf' | 'portail' | 'à vérifier'; pdfs: PdfPart[] };
+export type LabelledMailReader = {
+  labelId: string;
+  listMessages(params: URLSearchParams): Promise<unknown>;
+  readMessage(id: string): Promise<unknown>;
+};
 
 type Part = {
   mimeType?: string;
@@ -78,20 +83,25 @@ export async function openBillingMailbox(config: FacturesConfig, fetcher: typeof
   const labels = z.object({ labels: z.array(z.object({ id: z.string(), name: z.string() })).default([]) }).parse(await get('labels'));
   const label = labels.labels.find(item => item.name === config.label);
   if (!label) throw new MissingInvoiceLabel('Factures Gmail label unavailable.');
-  return { get, labelId: label.id };
+  return {
+    get, labelId: label.id,
+    listMessages: (params: URLSearchParams) => get('messages?' + params),
+    readMessage: (id: string) => get(`messages/${id}?format=full`),
+  };
 }
 
-export async function findBillingEmails(config: FacturesConfig, period: string, { get, labelId }: Awaited<ReturnType<typeof openBillingMailbox>>): Promise<BillingEmail[]> {
+export async function findBillingEmails(config: { mailbox: string; providers?: FacturesConfig['providers'] },
+  period: string, { listMessages, readMessage, labelId }: LabelledMailReader): Promise<BillingEmail[]> {
   const start = parisTime(period).getTime(), end = parisTime(shiftMonth(period, 1)).getTime();
-  const addresses = [...new Set(config.providers.flatMap(provider => provider.senders))];
+  const addresses = [...new Set(config.providers?.flatMap(provider => provider.senders))];
   const ids = new Set<string>();
-  for (let i = 0; i < addresses.length; i += 20) {
+  for (let i = 0; i < Math.max(1, addresses.length); i += 20) {
     const from = addresses.slice(i, i + 20).map(sender => `from:${sender}`).join(' ');
-    const q = `{${from}} after:${start / 1000 - 1} before:${end / 1000}`;
+    const q = `${from ? `{${from}} ` : ''}after:${start / 1000 - 1} before:${end / 1000}`;
     const params = new URLSearchParams({ q, maxResults: '100', labelIds: labelId });
     const seenPages = new Set<string>();
     for (;;) {
-      const result = listed.parse(await get('messages?' + params));
+      const result = listed.parse(await listMessages(params));
       result.messages.forEach(entry => ids.add(entry.id));
       if (ids.size > 1000) throw new Error('Too many Factures Gmail results.');
       if (!result.nextPageToken) break;
@@ -104,22 +114,23 @@ export async function findBillingEmails(config: FacturesConfig, period: string, 
   const seen = new Set<string>();
   const emails: BillingEmail[] = [];
   for (let i = 0; i < messageIds.length; i += 8) {
-    const batch = await Promise.all(messageIds.slice(i, i + 8).map(id => get(`messages/${id}?format=full`) as Promise<Message>));
+    const batch = await Promise.all(messageIds.slice(i, i + 8).map(id => readMessage(id) as Promise<Message>));
     for (const message of batch) {
       const date = Number(message.internalDate);
       if (!Number.isFinite(date) || date < start || date >= end || !gmailId.safeParse(message.id).success || !message.labelIds?.includes(labelId)) continue;
       const header = (name: string) => message.payload.headers?.find(h => h.name.toLowerCase() === name)?.value.trim() ?? '';
       const address = header('from').replace(/^.*<([^<>]+)>$/, '$1').toLowerCase();
       const subject = header('subject').toLowerCase();
-      const matches = config.providers.filter(provider => provider.senders.includes(address) &&
+      const matches = config.providers?.filter(provider => provider.senders.includes(address) &&
         provider.subjectMatches.some(phrase => subject.includes(phrase.toLowerCase())));
-      if (matches.length !== 1) continue;
+      if (matches && matches.length !== 1) continue;
       const key = header('message-id') || message.id;
       if (seen.has(key)) continue;
       seen.add(key);
       const pdfs = pdfParts(message.payload);
       emails.push({
-        id: message.id, provider: matches[0]!.name, date: new Date(date), pdfs, document: pdfs.length ? 'pdf' : hasInvoiceLink(message.payload) ? 'portail' : 'à vérifier',
+        id: message.id, provider: matches?.[0]?.name ?? (mailboxAddress.safeParse(address).success ? address : 'Gmail'), date: new Date(date),
+        pdfs, document: pdfs.length ? 'pdf' : hasInvoiceLink(message.payload) ? 'portail' : 'à vérifier',
         source: 'https://mail.google.com/mail/u/?authuser=' + encodeURIComponent(config.mailbox) + '#all/' + message.id,
       });
     }

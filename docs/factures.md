@@ -8,7 +8,17 @@ Dans un DM avec Mayassistant, ouvrez **Menu → Factures** ou envoyez `factures 
 
 Le résultat identifie les e-mails qui contiennent un PDF, les liens Stripe reconnus et les documents à vérifier. Il indique aussi pour quels fournisseurs configurés aucun mail n’a été trouvé. Le rapprochement avec les prélèvements et la collecte depuis les espaces clients restent manuels.
 
+## Utiliser ma boîte Courrier
+
+Lorsque Courrier et Factures sont activés, ouvrez **Menu → Factures → Utiliser ma boîte Courrier → Choisir un libellé** dans votre DM. Choisissez un libellé de votre boîte Gmail déjà connectée à Courrier. Seuls les messages de ce libellé alimentent votre relevé Courrier, avec leur date, leur expéditeur et un lien au message d’origine. Placez uniquement les factures que vous voulez consulter dans ce libellé.
+
+Vous pouvez consulter le mois en cours ou le mois dernier, changer de libellé ou choisir **Retirer ma boîte** depuis le même écran. Un renommage conserve la sélection. Après suppression du libellé, déconnexion de Courrier ou remplacement de la connexion, choisissez à nouveau un libellé. Les commandes de période et les mentions telles que `@Mayassistant factures pour 2026-11 ?` privilégient votre boîte Courrier après la sélection d’un libellé. La boîte de production reste accessible par ses entrées propres dans le menu.
+
+Courrier renouvelle son accès avec le client OAuth déjà configuré. La sélection se fait entièrement dans Slack. La lecture des factures personnelles reste en DM et utilise des appels Gmail de lecture. Les récapitulatifs planifiés et l’archivage Drive concernent la boîte de production. Voir [la décision sur l’autorisation Courrier](adr/0014-factures-courrier.md).
+
 ## Configuration
+
+Pour utiliser uniquement les boîtes Courrier, activez `factures` et `mail` et gardez la configuration Courrier existante. Les variables OAuth Factures, les expéditeurs et les destinataires Slack du pilote ci-dessous servent à la boîte de production.
 
 1. Créez le libellé `Factures outils` dans la boîte existante. Filtrez les expéditeurs Anthropic vérifiés et les objets de facturation. Pour tester un mois passé, appliquez aussi le libellé aux messages existants qui correspondent.
 2. Autorisez un client Google OAuth à accéder à cette boîte avec la portée `https://www.googleapis.com/auth/gmail.readonly` et un jeton de renouvellement obtenu avec un consentement hors connexion (`access_type=offline`). Conservez les informations client et le jeton dans l’environnement privé du serveur. Le module compare l’identité renvoyée par Gmail à la boîte configurée avant de lister les messages. Le jeton permet la lecture de la boîte et le code limite chaque recherche au libellé. Les autorisations du module Courrier sont indépendantes. [Consentement OAuth hors connexion](https://developers.google.com/identity/protocols/oauth2/web-server#offline)

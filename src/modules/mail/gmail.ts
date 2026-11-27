@@ -38,7 +38,9 @@ export class Gmail implements Mailbox {
     const result = await this.request('messages?labelIds=INBOX&maxResults=100');
     return (result.messages ?? []).map((x: any) => String(x.id)).slice(0, 100);
   }
-  async read(id: string): Promise<Mail> { return parseMail(await this.request(`messages/${encodeURIComponent(id)}?format=full`)); }
+  async readMessage(id: string): Promise<unknown> { return this.request(`messages/${encodeURIComponent(id)}?format=full`); }
+  async listMessages(params: URLSearchParams): Promise<unknown> { return this.request('messages?' + params); }
+  async read(id: string): Promise<Mail> { return parseMail(await this.readMessage(id)); }
   async snapshot(id: string) { return asSnapshot(await this.request(`messages/${encodeURIComponent(id)}?format=minimal`)); }
   async labels(): Promise<{ id: string; name: string }[]> {
     const result = await this.request('labels');
